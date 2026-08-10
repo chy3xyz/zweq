@@ -1,0 +1,42 @@
+# Zig build artifacts
+.zig-cache/
+.zig-cache-global/
+.zig-global-cache/
+zig-out/
+zig-pkg/
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Frontend env (use web/.env.example as template)
+web/.env
+
+# macOS
+.DS_Store
+
+# IDE / local state
+.cursor/
+.claude/
+.remember/
+.omo/
+
+# Reference materials (read-only inputs, not part of this project)
+_ref/
+
+# Third-party reference source (license-restricted, not redistributable)
+_dev/
+
+# Internal working notes (reference WeEngine; not part of the public project)
+CLAUDE.md
+dev.md
+
+# Local database (dev data)
+zenaipa.db
+*.db
+
+# Uploaded files (runtime data)
+uploads/
+
+# Stray root package-lock (real lockfile lives in web/)
+package-lock.json

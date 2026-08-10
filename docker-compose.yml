@@ -1,0 +1,37 @@
+# zweq + PostgreSQL 生产编排
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: zweq
+      POSTGRES_USER: zweq
+      POSTGRES_PASSWORD: zweq_secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zweq"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  zweq:
+    build:
+      context: ../
+      dockerfile: zweq/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ZWEQ_DB_DRIVER: postgres
+      ZWEQ_PG_CONNINFO: host=db port=5432 dbname=zweq user=zweq password=zweq_secret
+      ZWEQ_HTTP_PORT: "8000"
+      ZWEQ_JWT_SECRET: change-me-in-prod
+      ZWEQ_AI_KEY_SECRET: change-me-in-prod
+    ports:
+      - "8000:8000"
+    volumes:
+      - zweqdata:/data
+
+volumes:
+  pgdata:
+  zweqdata:
