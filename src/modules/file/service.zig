@@ -35,10 +35,32 @@ pub const FileService = struct {
         };
     }
 
+    /// Reject mime types a browser may render as active content (XSS risk).
+    /// Only the base type (before `;`) is compared.
+    pub fn validMime(mime: []const u8) bool {
+        var base = mime;
+        if (std.mem.indexOfScalar(u8, mime, ';')) |i| base = mime[0..i];
+        base = std.mem.trim(u8, base, " \t");
+        const dangerous = [_][]const u8{
+            "text/html",
+            "image/svg+xml",
+            "application/xhtml+xml",
+            "application/xml",
+            "text/xml",
+            "application/javascript",
+            "text/javascript",
+        };
+        for (dangerous) |d| {
+            if (std.mem.eql(u8, base, d)) return false;
+        }
+        return true;
+    }
+
     /// Persist raw bytes to disk and record metadata. `filename` is the
     /// user-facing name; the on-disk name is a generated storage key.
     pub fn save(self: *FileService, uploader_id: i64, tenant_id: i64, filename: []const u8, mime: []const u8, data: []const u8) !FileRow {
         if (data.len > self.max_bytes) return error.FileTooLarge;
+        if (!validMime(mime)) return error.InvalidMime;
         try self.ensureDir();
 
         const key = try self.storageKey(filename);

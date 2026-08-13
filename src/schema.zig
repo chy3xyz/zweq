@@ -24,6 +24,9 @@ const app_module_model = @import("modules/module/model.zig");
 const payment_model = @import("modules/payment/model.zig");
 const cloud_model = @import("modules/cloud/model.zig");
 const material_model = @import("modules/material/model.zig");
+const checkin_model = @import("modules/checkin/model.zig");
+const menu_model = @import("modules/menu/model.zig");
+const points_model = @import("modules/points/model.zig");
 
 // zent's `buildGraph` comptime edge-resolution has a per-call branch quota;
 // keeping the graph small avoids it, so the app schema and each domain
@@ -61,7 +64,7 @@ const rule_graph = zent.codegen.graph.buildGraph(&.{
     rule_model.RuleKeyword,
     rule_model.RuleReply,
 });
-const member_graph = zent.codegen.graph.buildGraph(&.{member_model.Fan});
+const member_graph = zent.codegen.graph.buildGraph(&.{ member_model.Fan, member_model.FanTag });
 const message_graph = zent.codegen.graph.buildGraph(&.{message_model.MessageLog});
 const app_module_graph = zent.codegen.graph.buildGraph(&.{
     app_module_model.AppModule,
@@ -75,11 +78,15 @@ const payment_graph = zent.codegen.graph.buildGraph(&.{
 const cloud_graph = zent.codegen.graph.buildGraph(&.{
     cloud_model.License,
     cloud_model.MarketPackage,
+    cloud_model.DynamicTable,
 });
 const material_graph = zent.codegen.graph.buildGraph(&.{
     material_model.MaterialNews,
     material_model.MaterialFile,
 });
+const checkin_graph = zent.codegen.graph.buildGraph(&.{checkin_model.CheckinRecord});
+const menu_graph = zent.codegen.graph.buildGraph(&.{menu_model.WechatMenu});
+const points_graph = zent.codegen.graph.buildGraph(&.{ points_model.PointsProduct, points_model.PointsOrder });
 
 pub const infos = graph.types ++
     template_graph.types ++
@@ -93,5 +100,8 @@ pub const infos = graph.types ++
     app_module_graph.types ++
     payment_graph.types ++
     cloud_graph.types ++
-    material_graph.types;
+    material_graph.types ++
+    checkin_graph.types ++
+    menu_graph.types ++
+    points_graph.types;
 pub const Client = zent.codegen.client.Client(infos);

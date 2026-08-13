@@ -52,6 +52,9 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
             try g.get("/fans", list, @ptrCast(@alignCast(self)));
             try g.get("/fans/{id}", get, @ptrCast(@alignCast(self)));
+            try g.get("/accounts/{id}/fans/tags", listTags, @ptrCast(@alignCast(self)));
+            try g.post("/accounts/{id}/fans/tags", createTag, @ptrCast(@alignCast(self)));
+            try g.post("/fans/tag", tagFan, @ptrCast(@alignCast(self)));
         }
 
         fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
@@ -127,6 +130,85 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
             };
             defer row.free(self.svc.allocator);
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toFanDto(row) });
+        }
+
+        fn listTags(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = (try requireAdmin(ctx, self)) orelse return;
+            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const account_id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
+                return;
+            };
+            const rows = self.svc.listWxTags(tid, account_id) catch |err| {
+                const msg = switch (err) {
+                    error.TagStoreUnavailable => "标签服务未就绪",
+                    error.TokenCacheUnavailable => "access_token 缓存未就绪",
+                    error.NotFound => "账号不存在",
+                    error.WechatApiError => "微信接口调用失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            defer {
+                for (rows) |r| r.free(ctx.allocator);
+                ctx.allocator.free(rows);
+            }
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = rows } });
+        }
+
+        fn createTag(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const account_id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
+                return;
+            };
+            const req = ctx.bindJson(struct { name: []const u8 }) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer ctx.allocator.free(req.name);
+            const wx_tag_id = self.svc.createWxTag(tid, account_id, req.name) catch |err| {
+                const msg = switch (err) {
+                    error.InvalidName => "标签名不能为空",
+                    error.TagStoreUnavailable => "标签服务未就绪",
+                    error.TokenCacheUnavailable => "access_token 缓存未就绪",
+                    error.NotFound => "账号不存在",
+                    error.WechatApiError => "微信接口调用失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member.tag.create", "member", account_id, "创建粉丝标签", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .wx_tag_id = wx_tag_id } });
+        }
+
+        fn tagFan(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const req = ctx.bindJson(struct { account_id: i64, openid: []const u8, tag_id: i64 }) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer ctx.allocator.free(req.openid);
+            self.svc.tagFan(req.account_id, req.openid, req.tag_id) catch |err| {
+                const msg = switch (err) {
+                    error.InvalidOpenid => "openid 不能为空",
+                    error.TokenCacheUnavailable => "access_token 缓存未就绪",
+                    error.NotFound => "账号不存在",
+                    error.WechatApiError => "微信接口调用失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member.tag.fan", "member", req.account_id, "粉丝打标签", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已打标签", .data = null });
         }
     };
 }

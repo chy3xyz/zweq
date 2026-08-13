@@ -11,6 +11,7 @@ pub const MaterialNews = Schema("MaterialNews", .{
     .fields = &.{
         field.Int("tenant_id").Default(1),
         field.Int("account_id"),
+        field.String("media_id").Default(""),
         field.String("title").Default(""),
         field.String("author").Default(""),
         field.String("digest").Default(""),

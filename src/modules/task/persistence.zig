@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -97,32 +98,27 @@ pub const TaskStore = struct {
         available_at: i64,
         now: i64,
     ) !i64 {
-        var b = try self.client.task.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("name", name);
-        _ = try b.setFieldValue("payload", payload);
-        _ = try b.setFieldValue("status", status);
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("attempts", attempts);
-        _ = try b.setFieldValue("max_attempts", max_attempts);
-        _ = try b.setFieldValue("last_error", last_error);
-        _ = try b.setFieldValue("available_at", available_at);
-        _ = try b.setFieldValue("started_at", 0);
-        _ = try b.setFieldValue("finished_at", 0);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.task, .{
+            .name = name,
+            .payload = payload,
+            .status = status,
+            .tenant_id = tenant_id,
+            .attempts = attempts,
+            .max_attempts = max_attempts,
+            .last_error = last_error,
+            .available_at = available_at,
+            .started_at = @as(i64, 0),
+            .finished_at = @as(i64, 0),
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, TaskInfo, &row, self.allocator);
         return row.id;
     }
 
     pub fn getTaskById(self: *TaskStore, id: i64) !?TaskRow {
-        var q = self.client.task.Query();
-        defer q.deinit();
         const preds = self.client.task.predicates;
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.task, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, TaskInfo, &entity, self.allocator);
         return try self.dupTask(entity);
     }

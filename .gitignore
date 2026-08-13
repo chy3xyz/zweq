@@ -40,3 +40,6 @@ uploads/
 
 # Stray root package-lock (real lockfile lives in web/)
 package-lock.json
+
+# Agent working state (not project code)
+.reasonix/

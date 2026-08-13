@@ -64,10 +64,12 @@ pub fn UserApi(comptime Service: type) type {
             var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.svc.sec.module));
             g = try g.use(mw.tokenVersionGuard(self.svc.sec, self.svc.store));
             try g.get("/users", listUsers, @ptrCast(@alignCast(self)));
+            try g.get("/users/export", exportUsers, @ptrCast(@alignCast(self)));
             try g.get("/users/{id}", getUser, @ptrCast(@alignCast(self)));
             try g.post("/users", createUser, @ptrCast(@alignCast(self)));
             try g.put("/users/{id}", updateUser, @ptrCast(@alignCast(self)));
             try g.delete("/users/{id}", deleteUser, @ptrCast(@alignCast(self)));
+            try g.post("/users/{id}/revoke-sessions", revokeSessions, @ptrCast(@alignCast(self)));
         }
 
         /// Returns the authenticated admin user id, or null after responding.
@@ -93,6 +95,33 @@ pub fn UserApi(comptime Service: type) type {
             return uid;
         }
 
+        fn exportUsers(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = (try requireAdmin(ctx, self)) orelse return;
+
+            var result = self.svc.listUsers(1, 10000, null, null, null, false) catch |err| {
+                std.log.err("internal error: {s}", .{@errorName(err)});
+                try ctx.sendErrorResponse(500, 500, "服务器内部错误");
+                return;
+            };
+            defer result.free(ctx.allocator);
+
+            var csv = zigmodu.csv.Writer.init(ctx.allocator);
+            defer csv.deinit();
+            try csv.writeHeader(&.{ "id", "name", "email", "admin", "tenant_id", "created_at" });
+            for (result.items) |u| {
+                var buf: [64]u8 = undefined;
+                const id_s = try std.fmt.bufPrint(&buf, "{d}", .{u.id});
+                const tid_s = try std.fmt.bufPrint(&buf, "{d}", .{u.tenant_id});
+                const ts_s = try std.fmt.bufPrint(&buf, "{d}", .{u.created_at});
+                const admin_s = if (u.admin) "true" else "false";
+                try csv.writeRow(&.{ id_s, u.name, u.email, admin_s, tid_s, ts_s });
+            }
+            try ctx.setHeader("Content-Type", "text/csv; charset=utf-8");
+            try ctx.setHeader("Content-Disposition", "attachment; filename=users.csv");
+            try ctx.text(200, csv.buf.items);
+        }
+
         fn listUsers(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             _ = (try requireAdmin(ctx, self)) orelse return;
@@ -105,10 +134,9 @@ pub fn UserApi(comptime Service: type) type {
             const sort_col: ?[]const u8 = if (sort) |s| s.column else null;
             const sort_desc = if (sort) |s| s.desc else false;
 
-            // zigmodu percent-decodes query values at parse time, so the
-            // keyword arrives already decoded (CJK searches included).
             var result = self.svc.listUsers(params.page, params.page_size, keyword_raw, tenant_filter, sort_col, sort_desc) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                std.log.err("internal error: {s}", .{@errorName(err)});
+                try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
             defer self.svc.freeList(&result);
@@ -126,7 +154,8 @@ pub fn UserApi(comptime Service: type) type {
                 return;
             };
             const row_opt = self.svc.getUserById(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                std.log.err("internal error: {s}", .{@errorName(err)});
+                try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
             const row = row_opt orelse {
@@ -188,8 +217,6 @@ pub fn UserApi(comptime Service: type) type {
                 if (req.email) |e| ctx.allocator.free(e);
             }
 
-            // An admin cannot demote themselves or revoke their own verified
-            // flag — otherwise the last admin could lock everyone out.
             if (id == admin_id) {
                 if (req.admin) |a| if (!a) {
                     try ctx.sendErrorResponse(400, 400, "不能取消自己的管理员权限");
@@ -201,11 +228,10 @@ pub fn UserApi(comptime Service: type) type {
                 };
             }
 
-            // Name/email update is optional and independent: missing fields
-            // keep the current stored values.
             if (req.name != null or req.email != null) {
                 const cur_opt = self.svc.getUserById(id) catch |err| {
-                    try ctx.sendErrorResponse(500, 500, @errorName(err));
+                    std.log.err("internal error: {s}", .{@errorName(err)});
+                    try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                     return;
                 };
                 const cur = cur_opt orelse {
@@ -216,7 +242,7 @@ pub fn UserApi(comptime Service: type) type {
 
                 if (req.email) |new_email| {
                     const taken = self.svc.emailTakenByOther(ctx.allocator, id, new_email) catch {
-                        try ctx.sendErrorResponse(500, 500, "服务器错误");
+                        try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                         return;
                     };
                     if (taken) {
@@ -232,13 +258,15 @@ pub fn UserApi(comptime Service: type) type {
             }
             if (req.verified) |v| {
                 self.svc.setVerified(id, v) catch |err| {
-                    try ctx.sendErrorResponse(500, 500, @errorName(err));
+                    std.log.err("internal error: {s}", .{@errorName(err)});
+                    try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                     return;
                 };
             }
             if (req.admin) |a| {
                 self.svc.setAdmin(id, a) catch |err| {
-                    try ctx.sendErrorResponse(500, 500, @errorName(err));
+                    std.log.err("internal error: {s}", .{@errorName(err)});
+                    try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                     return;
                 };
             }
@@ -246,6 +274,34 @@ pub fn UserApi(comptime Service: type) type {
             const detail = try std.fmt.bufPrint(&detail_buf, "更新用户 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "user.update", "user", id, detail, zigmodu.http.RequestUtil.getRealIp(ctx), true, 0);
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+        }
+
+        /// 踢下线:递增用户凭证版本,该用户所有已签发 JWT 立即失效。
+        fn revokeSessions(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的用户 ID");
+                return;
+            };
+            if (id == admin_id) {
+                try ctx.sendErrorResponse(400, 400, "不能踢下线当前登录账号");
+                return;
+            }
+            const now = zigmodu.time.wallClockSeconds(self.svc.io);
+            self.svc.store.bumpTokenVersion(id, now) catch |err| switch (err) {
+                error.UserNotFound => {
+                    try ctx.sendErrorResponse(404, 404, "用户不存在");
+                    return;
+                },
+                else => {
+                    std.log.err("internal error: {s}", .{@errorName(err)});
+                    try ctx.sendErrorResponse(500, 500, "服务器内部错误");
+                    return;
+                },
+            };
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已踢下线", .data = null });
         }
 
         fn deleteUser(ctx: *http.Context) !void {
@@ -261,7 +317,8 @@ pub fn UserApi(comptime Service: type) type {
                 return;
             }
             self.svc.deleteUser(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                std.log.err("internal error: {s}", .{@errorName(err)});
+                try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
             var detail_buf: [160]u8 = undefined;
@@ -276,7 +333,10 @@ pub fn UserApi(comptime Service: type) type {
                 error.InvalidEmail => try ctx.sendErrorResponse(400, 400, "邮箱格式不正确"),
                 error.InvalidPassword => try ctx.sendErrorResponse(400, 400, "密码至少 8 位"),
                 error.EmailTaken => try ctx.sendErrorResponse(409, 409, "该邮箱已被注册"),
-                else => try ctx.sendErrorResponse(500, 500, @errorName(err)),
+                else => {
+                    std.log.err("internal error: {s}", .{@errorName(err)});
+                    try ctx.sendErrorResponse(500, 500, "服务器内部错误");
+                },
             }
         }
 
@@ -284,7 +344,10 @@ pub fn UserApi(comptime Service: type) type {
             switch (err) {
                 error.InvalidName => try ctx.sendErrorResponse(400, 400, "姓名不能为空"),
                 error.InvalidEmail => try ctx.sendErrorResponse(400, 400, "邮箱格式不正确"),
-                else => try ctx.sendErrorResponse(500, 500, @errorName(err)),
+                else => {
+                    std.log.err("internal error: {s}", .{@errorName(err)});
+                    try ctx.sendErrorResponse(500, 500, "服务器内部错误");
+                },
             }
         }
     };

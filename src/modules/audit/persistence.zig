@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -97,20 +98,19 @@ pub const AuditStore = struct {
         tenant_id: i64,
         now: i64,
     ) !i64 {
-        var b = try self.client.audit_log.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("actor_user_id", actor_user_id);
-        _ = try b.setFieldValue("actor_name", actor_name);
-        _ = try b.setFieldValue("action", action);
-        _ = try b.setFieldValue("target_type", target_type);
-        _ = try b.setFieldValue("target_id", target_id);
-        _ = try b.setFieldValue("detail", detail);
-        _ = try b.setFieldValue("ip", ip);
-        _ = try b.setFieldValue("success", success);
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.audit_log, .{
+            .actor_user_id = actor_user_id,
+            .actor_name = actor_name,
+            .action = action,
+            .target_type = target_type,
+            .target_id = target_id,
+            .detail = detail,
+            .ip = ip,
+            .success = success,
+            .tenant_id = tenant_id,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, AuditLogInfo, &row, self.allocator);
         return row.id;
     }
@@ -119,10 +119,7 @@ pub const AuditStore = struct {
     pub fn purgeOlderThan(self: *AuditStore, now: i64, max_age_seconds: i64) !usize {
         const preds = self.client.audit_log.predicates;
         const cutoff = now - max_age_seconds;
-        var d = self.client.audit_log.Delete();
-        defer d.deinit();
-        _ = try d.Where(.{preds.created_atLT(.{ .int = cutoff })});
-        return try d.Exec();
+        return crud.delete(self.client.audit_log, .{preds.created_atLT(.{ .int = cutoff })});
     }
 
     pub fn list(self: *AuditStore, page: usize, page_size: usize, filters: AuditFilters) !AuditListResult {

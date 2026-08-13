@@ -25,6 +25,7 @@ pub const ModuleBinding = Schema("ModuleBinding", .{
         field.Int("account_id"),
         field.String("module"),
         field.String("status").Default("active"),
+        field.String("config").Default(""),
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -46,12 +47,14 @@ pub const ModuleBindingRow = struct {
     account_id: i64,
     module: []const u8,
     status: []const u8,
+    config: []const u8,
     created_at: i64,
     updated_at: i64,
 
     pub fn free(self: ModuleBindingRow, allocator: std.mem.Allocator) void {
         allocator.free(self.module);
         allocator.free(self.status);
+        allocator.free(self.config);
     }
 };
 
@@ -89,12 +92,15 @@ pub const ModuleStore = struct {
         errdefer self.allocator.free(module);
         const status = try self.allocator.dupe(u8, e.status);
         errdefer self.allocator.free(status);
+        const config = try self.allocator.dupe(u8, e.config);
+        errdefer self.allocator.free(config);
         return .{
             .id = e.id,
             .tenant_id = e.tenant_id,
             .account_id = e.account_id,
             .module = module,
             .status = status,
+            .config = config,
             .created_at = e.created_at orelse 0,
             .updated_at = e.updated_at orelse 0,
         };
@@ -103,14 +109,8 @@ pub const ModuleStore = struct {
     // ── AppModule registry ───────────────────────────────────────
 
     pub fn getModuleByName(self: *ModuleStore, tenant_id: i64, name: []const u8) !?AppModuleRow {
-        var q = self.client.app_module.Query();
-        defer q.deinit();
         const preds = self.client.app_module.predicates;
-        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
-        _ = try q.Where(.{preds.nameEQ(.{ .string = name })});
-        _ = q.Limit(1);
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.app_module, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.nameEQ(.{ .string = name }) })) orelse return null;
         defer zent.codegen.deinitEntity(infos, AppModuleInfo, &entity, self.allocator);
         return try self.dupModule(entity);
     }
@@ -120,26 +120,23 @@ pub const ModuleStore = struct {
         if (try self.getModuleByName(tenant_id, name)) |row| {
             defer row.free(self.allocator);
             const preds = self.client.app_module.predicates;
-            var upd = self.client.app_module.Update();
-            defer upd.deinit();
-            _ = try upd.set("title", .{ .string = title });
-            _ = try upd.set("version", .{ .string = version });
-            _ = try upd.set("status", .{ .string = status });
-            _ = try upd.setFieldValue("updated_at", now);
-            _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
-            _ = try upd.Save();
+            _ = try crud.update(self.client.app_module, .{
+                .title = title,
+                .version = version,
+                .status = status,
+                .updated_at = now,
+            }, .{preds.idEQ(.{ .int = row.id })});
             return row.id;
         }
-        var b = try self.client.app_module.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("name", name);
-        _ = try b.setFieldValue("title", title);
-        _ = try b.setFieldValue("version", version);
-        _ = try b.setFieldValue("status", status);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.app_module, .{
+            .tenant_id = tenant_id,
+            .name = name,
+            .title = title,
+            .version = version,
+            .status = status,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, AppModuleInfo, &row, self.allocator);
         return row.id;
     }
@@ -170,15 +167,8 @@ pub const ModuleStore = struct {
     // ── ModuleBinding ─────────────────────────────────────────────
 
     pub fn getBinding(self: *ModuleStore, tenant_id: i64, account_id: i64, module: []const u8) !?ModuleBindingRow {
-        var q = self.client.module_binding.Query();
-        defer q.deinit();
         const preds = self.client.module_binding.predicates;
-        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
-        _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
-        _ = try q.Where(.{preds.moduleEQ(.{ .string = module })});
-        _ = q.Limit(1);
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.module_binding, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.account_idEQ(.{ .int = account_id }), preds.moduleEQ(.{ .string = module }) })) orelse return null;
         defer zent.codegen.deinitEntity(infos, ModuleBindingInfo, &entity, self.allocator);
         return try self.dupBinding(entity);
     }
@@ -188,35 +178,53 @@ pub const ModuleStore = struct {
         if (try self.getBinding(tenant_id, account_id, module)) |row| {
             defer row.free(self.allocator);
             const preds = self.client.module_binding.predicates;
-            var upd = self.client.module_binding.Update();
-            defer upd.deinit();
-            _ = try upd.set("status", .{ .string = status });
-            _ = try upd.setFieldValue("updated_at", now);
-            _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
-            _ = try upd.Save();
+            _ = try crud.update(self.client.module_binding, .{
+                .status = status,
+                .updated_at = now,
+            }, .{preds.idEQ(.{ .int = row.id })});
             return row.id;
         }
-        var b = try self.client.module_binding.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("account_id", account_id);
-        _ = try b.setFieldValue("module", module);
-        _ = try b.setFieldValue("status", status);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.module_binding, .{
+            .tenant_id = tenant_id,
+            .account_id = account_id,
+            .module = module,
+            .status = status,
+            .config = "",
+            .created_at = now,
+            .updated_at = now,
+        });
+        defer zent.codegen.deinitEntity(infos, ModuleBindingInfo, &row, self.allocator);
+        return row.id;
+    }
+
+    /// Update the per-account config blob for a bound module (upserts the
+    /// binding when it does not exist yet). Returns the binding id.
+    pub fn setBindingConfig(self: *ModuleStore, tenant_id: i64, account_id: i64, module: []const u8, config: []const u8, now: i64) !i64 {
+        if (try self.getBinding(tenant_id, account_id, module)) |row| {
+            defer row.free(self.allocator);
+            const preds = self.client.module_binding.predicates;
+            _ = try crud.update(self.client.module_binding, .{
+                .config = config,
+                .updated_at = now,
+            }, .{preds.idEQ(.{ .int = row.id })});
+            return row.id;
+        }
+        var row = try crud.create(self.client.module_binding, .{
+            .tenant_id = tenant_id,
+            .account_id = account_id,
+            .module = module,
+            .status = "active",
+            .config = config,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, ModuleBindingInfo, &row, self.allocator);
         return row.id;
     }
 
     pub fn unbind(self: *ModuleStore, tenant_id: i64, account_id: i64, module: []const u8) !void {
         const preds = self.client.module_binding.predicates;
-        var d = self.client.module_binding.Delete();
-        defer d.deinit();
-        _ = try d.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
-        _ = try d.Where(.{preds.account_idEQ(.{ .int = account_id })});
-        _ = try d.Where(.{preds.moduleEQ(.{ .string = module })});
-        _ = try d.Exec();
+        _ = try crud.delete(self.client.module_binding, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.account_idEQ(.{ .int = account_id }), preds.moduleEQ(.{ .string = module }) });
     }
 
     pub fn listBindings(self: *ModuleStore, tenant_id: i64, account_id: i64) ![]ModuleBindingRow {

@@ -63,10 +63,23 @@ const PublishPackageReq = struct {
     version: []const u8,
     description: []const u8,
     download_url: []const u8,
+    checksum: []const u8 = "",
 };
 
 const InstallPackageReq = struct {
     account_id: i64,
+};
+
+const RemoteVerifyReq = struct {
+    key: []const u8,
+};
+
+const DynamicTableDto = struct {
+    id: i64,
+    module: []const u8,
+    table_name: []const u8,
+    title: []const u8,
+    columns_json: []const u8,
 };
 
 pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
@@ -91,6 +104,12 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/cloud/market", listMarket, @ptrCast(@alignCast(self)));
             try g.post("/cloud/market", publishPackage, @ptrCast(@alignCast(self)));
             try g.post("/cloud/market/{name}/install", installPackage, @ptrCast(@alignCast(self)));
+            // 远端云服务（zweq-cloud）对接。
+            try g.post("/cloud/remote/verify", remoteVerify, @ptrCast(@alignCast(self)));
+            try g.post("/cloud/remote/sync-market", remoteSyncMarket, @ptrCast(@alignCast(self)));
+            // 动态表运行时访问（manifest 声明的表）。
+            try g.get("/cloud/tables", listDynamicTables, @ptrCast(@alignCast(self)));
+            try g.get("/cloud/tables/{table}/rows", queryDynamicTable, @ptrCast(@alignCast(self)));
         }
 
         fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
@@ -226,8 +245,9 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                 ctx.allocator.free(req.version);
                 ctx.allocator.free(req.description);
                 ctx.allocator.free(req.download_url);
+                if (req.checksum.len > 0) ctx.allocator.free(req.checksum);
             }
-            const id = self.svc.publishPackage(tid, req.name, req.title, req.version, req.description, req.download_url) catch |err| {
+            const id = self.svc.publishPackage(tid, req.name, req.title, req.version, req.description, req.download_url, req.checksum) catch |err| {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
@@ -254,6 +274,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.InvalidName => "包名不能为空",
                     error.NotFound => "市场包不存在",
+                    error.ChecksumMismatch => "产物校验失败（sha256 不匹配）",
+                    error.DownloadFailed => "产物下载失败",
                     else => @errorName(err),
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
@@ -263,6 +285,121 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             const det1 = try std.fmt.bufPrint(&d1, "安装市场包 {s} → 模块 #{d}", .{ name, module_id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.market.install", "cloud", module_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "已安装", .data = .{ .module_id = module_id } });
+        }
+
+        fn remoteVerify(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+
+            const req = ctx.bindJson(RemoteVerifyReq) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer ctx.allocator.free(req.key);
+            if (!self.svc.isRemote()) {
+                try ctx.sendErrorResponse(400, 400, "未配置远端云服务（ZWEQ_CLOUD_REMOTE_URL）");
+                return;
+            }
+            const valid = self.svc.verifyLicenseRemote(ctx.allocator, req.key) catch |err| {
+                const reason = switch (err) {
+                    error.InvalidLicense => "invalid",
+                    error.LicenseExpired => "expired",
+                    error.RemoteUnavailable => "remote_unavailable",
+                    else => "error",
+                };
+                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .valid = false, .reason = reason } });
+                return;
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.remote.verify", "cloud", 0, "远端校验授权码", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .valid = valid, .reason = "ok" } });
+        }
+
+        fn remoteSyncMarket(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = tenantScope(ctx, self);
+
+            if (!self.svc.isRemote()) {
+                try ctx.sendErrorResponse(400, 400, "未配置远端云服务（ZWEQ_CLOUD_REMOTE_URL）");
+                return;
+            }
+            const count = self.svc.syncMarketRemote(ctx.allocator, tid) catch |err| {
+                const msg = switch (err) {
+                    error.RemoteUnavailable => "远端云服务不可达",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(502, 502, msg);
+                return;
+            };
+            var d1: [96]u8 = undefined;
+            const det1 = try std.fmt.bufPrint(&d1, "同步云端市场 {d} 个包", .{count});
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.remote.sync", "cloud", 0, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已同步", .data = .{ .count = count } });
+        }
+
+        fn listDynamicTables(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = (try requireAdmin(ctx, self)) orelse return;
+            const tid = tenantScope(ctx, self);
+
+            const tables = self.svc.listDynamicTables(tid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
+                return;
+            };
+            defer {
+                for (tables) |t| t.free(self.svc.allocator);
+                self.svc.allocator.free(tables);
+            }
+            var dto_list = std.ArrayList(DynamicTableDto).empty;
+            defer dto_list.deinit(ctx.allocator);
+            for (tables) |t| {
+                dto_list.append(ctx.allocator, .{
+                    .id = t.id,
+                    .module = t.module,
+                    .table_name = t.table_name,
+                    .title = t.title,
+                    .columns_json = t.columns_json,
+                }) catch return error.UnexpectedError;
+            }
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dto_list.items });
+        }
+
+        fn queryDynamicTable(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = (try requireAdmin(ctx, self)) orelse return;
+            const tid = tenantScope(ctx, self);
+            const table = ctx.param("table") orelse {
+                try ctx.sendErrorResponse(400, 400, "缺少表名");
+                return;
+            };
+            const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
+            var rows = self.svc.queryDynamicTable(ctx.allocator, tid, table, params.page, params.page_size) catch |err| {
+                const msg = switch (err) {
+                    error.NotFound => "动态表未注册",
+                    error.InvalidName => "非法表名",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            defer rows.free(ctx.allocator);
+
+            // 把 cells 重排成 rows[row][col] 二维结构，便于 jsonStruct 序列化。
+            var rows_2d = std.ArrayList([]const []const u8).empty;
+            defer rows_2d.deinit(ctx.allocator);
+            var i: usize = 0;
+            while (i < rows.row_count) : (i += 1) {
+                rows_2d.append(ctx.allocator, rows.cells[i * rows.column_count .. (i + 1) * rows.column_count]) catch return error.UnexpectedError;
+            }
+            try ctx.jsonStruct(200, .{
+                .code = 0,
+                .msg = "ok",
+                .data = .{
+                    .columns = rows.columns,
+                    .rows = rows_2d.items,
+                    .total = rows.row_count,
+                },
+            });
         }
     };
 }

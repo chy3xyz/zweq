@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -57,14 +58,8 @@ pub const SettingStore = struct {
     }
 
     pub fn get(self: *SettingStore, tenant_id: i64, key: []const u8) !?SettingRow {
-        var q = self.client.site_setting.Query();
-        defer q.deinit();
         const preds = self.client.site_setting.predicates;
-        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
-        _ = try q.Where(.{preds.keyEQ(.{ .string = key })});
-        _ = q.Limit(1);
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.site_setting, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.keyEQ(.{ .string = key }) })) orelse return null;
         defer zent.codegen.deinitEntity(infos, SettingInfo, &entity, self.allocator);
         return try self.dup(entity);
     }
@@ -74,22 +69,19 @@ pub const SettingStore = struct {
         if (try self.get(tenant_id, key)) |row| {
             defer row.free(self.allocator);
             const preds = self.client.site_setting.predicates;
-            var upd = self.client.site_setting.Update();
-            defer upd.deinit();
-            _ = try upd.set("value", .{ .string = value });
-            _ = try upd.setFieldValue("updated_at", now);
-            _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
-            _ = try upd.Save();
+            _ = try crud.update(self.client.site_setting, .{
+                .value = value,
+                .updated_at = now,
+            }, .{preds.idEQ(.{ .int = row.id })});
             return row.id;
         }
-        var b = try self.client.site_setting.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("key", key);
-        _ = try b.setFieldValue("value", value);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.site_setting, .{
+            .tenant_id = tenant_id,
+            .key = key,
+            .value = value,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, SettingInfo, &row, self.allocator);
         return row.id;
     }

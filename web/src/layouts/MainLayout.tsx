@@ -224,6 +224,27 @@ function MainLayout(props: { children?: JSX.Element }) {
             >
               素材库
             </A>
+            <A
+              href={ROUTE_PATH.points}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              积分商城
+            </A>
+            <A
+              href={ROUTE_PATH.menu}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              公众号菜单
+            </A>
+            <A
+              href={ROUTE_PATH.checkin}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              签到记录
+            </A>
           </Show>
           <A
             href={ROUTE_PATH.aiChat}

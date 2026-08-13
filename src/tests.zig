@@ -27,11 +27,14 @@ const appmod = @import("modules/module/root.zig");
 const payment = @import("modules/payment/root.zig");
 const cloud = @import("modules/cloud/root.zig");
 const material = @import("modules/material/root.zig");
+const checkin = @import("modules/checkin/root.zig");
+const menu = @import("modules/menu/root.zig");
+const points = @import("modules/points/root.zig");
 const cache_svc = @import("services/cache.zig");
 const mail = @import("services/mail.zig");
 
-/// In-memory SQLite store with every schema group migrated.
-fn openMemory(allocator: std.mem.Allocator) !db_mod.StoreEnv(schema.infos, .{
+/// 全部 schema group（openMemory / openPostgres 共用）。
+const all_infos = .{
     tenant.persistence.infos,
     user.persistence.infos,
     task.persistence.infos,
@@ -54,37 +57,48 @@ fn openMemory(allocator: std.mem.Allocator) !db_mod.StoreEnv(schema.infos, .{
     payment.persistence.infos,
     cloud.persistence.infos,
     material.persistence.infos,
-}) {
-    return db_mod.StoreEnv(schema.infos, .{
-        tenant.persistence.infos,
-        user.persistence.infos,
-        task.persistence.infos,
-        file.persistence.infos,
-        notify.persistence.infos,
-        audit.persistence.infos,
-        mail_template.persistence.infos,
-        ai.persistence.provider_infos,
-        ai.persistence.session_infos,
-        ai.persistence.message_infos,
-        ai.persistence.approval_infos,
-        ai.persistence.run_infos,
-        account.persistence.infos,
-        permission.persistence.infos,
-        setting.persistence.infos,
-        rule.persistence.infos,
-        member.persistence.infos,
-        message.persistence.infos,
-        appmod.persistence.infos,
-        payment.persistence.infos,
-        cloud.persistence.infos,
-        material.persistence.infos,
-    }).open(allocator, .sqlite, ":memory:");
+    checkin.persistence.infos,
+    menu.persistence.infos,
+    points.persistence.infos,
+};
+
+/// In-memory SQLite store with every schema group migrated.
+fn openMemory(allocator: std.mem.Allocator) !db_mod.StoreEnv(schema.infos, all_infos) {
+    return db_mod.StoreEnv(schema.infos, all_infos).open(allocator, .sqlite, ":memory:");
+}
+
+/// Real Postgres store（测试用，需 `ZWEQ_TEST_PG_CONNINFO` 环境变量）。
+fn openPostgres(allocator: std.mem.Allocator, conninfo: []const u8) !db_mod.StoreEnv(schema.infos, all_infos) {
+    return db_mod.StoreEnv(schema.infos, all_infos).open(allocator, .postgres, conninfo);
 }
 
 test "health: zigmodu + zent importable together" {
     _ = zigmodu;
     _ = zent;
     try std.testing.expect(true);
+}
+
+test "postgres: real-DB migration + smoke (skip unless ZWEQ_TEST_PG_CONNINFO set)" {
+    const allocator = std.testing.allocator;
+    // 环境变量读取（Zig 0.17 用 libc getenv；测试链接 libc）。
+    const raw = std.c.getenv("ZWEQ_TEST_PG_CONNINFO") orelse return; // 未配置 → 跳过
+    const conninfo = std.mem.span(raw);
+    if (conninfo.len == 0) return;
+
+    // 首次打开：全量迁移（40+ 表，生产主路径）。
+    var env = try openPostgres(allocator, conninfo);
+    defer env.deinit();
+
+    // 冒烟 CRUD（module 表 upsert 幂等，可重复跑）。
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    _ = try module_store.upsertModule(1, "pg_smoke", "PG冒烟", "1.0.0", "active", 100);
+    const row = (try module_store.getModuleByName(1, "pg_smoke")).?;
+    defer row.free(allocator);
+    try std.testing.expectEqualStrings("pg_smoke", row.name);
+
+    // 第二次打开：迁移幂等快速跳过（advisory lock + zent_schema_migrations）。
+    var env2 = try openPostgres(allocator, conninfo);
+    defer env2.deinit();
 }
 
 test "AppSecurity signs and verifies a token" {
@@ -321,6 +335,20 @@ test "file store metadata CRUD" {
     try std.testing.expect((try file_store.getById(id)) == null);
 }
 
+test "file: upload mime validation rejects active content (XSS)" {
+    // 允许常见安全类型。
+    try std.testing.expect(file.service.FileService.validMime("image/png"));
+    try std.testing.expect(file.service.FileService.validMime("application/pdf"));
+    try std.testing.expect(file.service.FileService.validMime("text/plain"));
+    try std.testing.expect(file.service.FileService.validMime("application/octet-stream"));
+    // 拒绝浏览器可当活动内容渲染的类型（含带参数的形式）。
+    try std.testing.expect(!file.service.FileService.validMime("text/html"));
+    try std.testing.expect(!file.service.FileService.validMime("image/svg+xml"));
+    try std.testing.expect(!file.service.FileService.validMime("image/svg+xml; charset=utf-8"));
+    try std.testing.expect(!file.service.FileService.validMime("application/javascript"));
+    try std.testing.expect(!file.service.FileService.validMime("application/xhtml+xml"));
+}
+
 test "HTTP dispatch: public auth flow (register -> me) via Testkit" {
     const allocator = std.testing.allocator;
     var env = try openMemory(allocator);
@@ -328,8 +356,8 @@ test "HTTP dispatch: public auth flow (register -> me) via Testkit" {
     var store = user.persistence.UserStore.init(allocator, env.client);
     var sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = "testkit-secret" });
     var svc = user.service.UserService.init(&store, &sec, std.testing.io, 3600, 86400);
-    var limiter = try zigmodu.RateLimiter.init(allocator, "test", 100, 1);
-    defer limiter.deinit();
+    var auth_registry = zigmodu.RateLimiterRegistry.init(allocator, 100, 1);
+    defer auth_registry.deinit();
     var mailer = mail.Mailer.init(allocator, std.testing.io, "", 587, "", "", "test@localhost", true, false);
     var task_store = task.persistence.TaskStore.init(allocator, env.client);
     var task_svc = task.service.TaskService.init(&task_store, std.testing.io, 3);
@@ -339,7 +367,7 @@ test "HTTP dispatch: public auth flow (register -> me) via Testkit" {
     var audit_svc = audit.service.AuditService.init(allocator, std.testing.io, &audit_store);
     var template_store = mail_template.persistence.TemplateStore.init(allocator, env.client);
     var template_svc = mail_template.service.MailTemplateService.init(allocator, std.testing.io, &template_store);
-    var auth_api = auth.api.AuthApi(@TypeOf(svc)).init(&svc, "http://localhost:3001", &limiter, &mailer, &task_svc, &notify_svc, &audit_svc, &template_svc, 1);
+    var auth_api = auth.api.AuthApi(@TypeOf(svc)).init(&svc, "http://localhost:3001", &auth_registry, &mailer, &task_svc, &notify_svc, &audit_svc, &template_svc, 1);
 
     var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
     defer server.deinit();
@@ -350,6 +378,43 @@ test "HTTP dispatch: public auth flow (register -> me) via Testkit" {
     defer resp.deinit(allocator);
     try std.testing.expectEqual(@as(u16, 201), resp.status_code);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"code\":0") != null);
+}
+
+test "rate limit: per-IP isolation via realIp + perIpRateLimit" {
+    const allocator = std.testing.allocator;
+    const real_ip = @import("middleware/real_ip.zig");
+    const mw_rate = @import("middleware/rate_limit.zig");
+    var registry = zigmodu.RateLimiterRegistry.init(allocator, 2, 1);
+    defer registry.deinit();
+
+    const Probe = struct {
+        fn h(ctx: *zigmodu.http.Context) !void {
+            try ctx.json(200, "{\"code\":0}");
+        }
+    };
+
+    var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
+    defer server.deinit();
+    try server.addMiddleware(real_ip.realIp());
+    var g = server.group("/api/v1");
+    var limited = try g.use(mw_rate.perIpRateLimit(&registry, 2, 1));
+    try limited.get("/probe", Probe.h, null);
+
+    // IP A：前 2 次通过，第 3 次触发 429。
+    var r1 = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, "/api/v1/probe", .{ .headers = &.{.{ "X-Real-IP", "1.1.1.1" }} });
+    defer r1.deinit(allocator);
+    var r2 = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, "/api/v1/probe", .{ .headers = &.{.{ "X-Real-IP", "1.1.1.1" }} });
+    defer r2.deinit(allocator);
+    var r3 = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, "/api/v1/probe", .{ .headers = &.{.{ "X-Real-IP", "1.1.1.1" }} });
+    defer r3.deinit(allocator);
+    try std.testing.expectEqual(@as(u16, 200), r1.status_code);
+    try std.testing.expectEqual(@as(u16, 200), r2.status_code);
+    try std.testing.expectEqual(@as(u16, 429), r3.status_code);
+
+    // IP B：不受 IP A 限流影响。
+    var rb = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, "/api/v1/probe", .{ .headers = &.{.{ "X-Real-IP", "2.2.2.2" }} });
+    defer rb.deinit(allocator);
+    try std.testing.expectEqual(@as(u16, 200), rb.status_code);
 }
 
 test "tenant service: ensureDefault is idempotent, CRUD works" {
@@ -854,6 +919,84 @@ test "member: fan subscribe/unsubscribe lifecycle + tenant isolation" {
     try std.testing.expectEqual(@as(i64, 1), t2.total);
 }
 
+test "member: fan tag store upsert idempotent + list" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var tag_store = member.persistence.TagStore.init(allocator, env.client);
+
+    // 同 wx_tag_id 两次 upsert → 同 id，字段更新。
+    const t1 = try tag_store.upsert(1, 5, 100, "VIP", 100);
+    const t2 = try tag_store.upsert(1, 5, 100, "VIPv2", 101);
+    try std.testing.expectEqual(t1, t2);
+    const t3 = try tag_store.upsert(1, 5, 101, "新客", 102);
+    try std.testing.expect(t3 != t1);
+
+    // list 按 wx_tag_id 升序。
+    const rows = try tag_store.list(1, 5);
+    defer {
+        for (rows) |r| r.free(allocator);
+        allocator.free(rows);
+    }
+    try std.testing.expectEqual(@as(usize, 2), rows.len);
+    try std.testing.expectEqualStrings("VIPv2", rows[0].name);
+    try std.testing.expectEqualStrings("新客", rows[1].name);
+
+    // 另一租户隔离。
+    const other = try tag_store.list(2, 5);
+    defer {
+        for (other) |r| r.free(allocator);
+        allocator.free(other);
+    }
+    try std.testing.expectEqual(@as(usize, 0), other.len);
+}
+
+test "points: redeem deducts points + stock, rejects insufficient/out-of-stock" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var points_store = points.persistence.PointsStore.init(allocator, env.client);
+    var svc = points.service.PointsService.init(allocator, std.testing.io, &points_store, &fan_store);
+
+    // 粉丝 + 发 100 积分。
+    _ = try fan_store.upsert(1, 5, "o_p", "", "", "", true, 100, 100);
+    const newp = try fan_store.adjustPoints(1, 5, "o_p", 100, 101);
+    try std.testing.expectEqual(@as(i64, 100), newp);
+
+    // 商品（100 积分，库存 5）。
+    const pid = try svc.createProduct(1, 5, "马克杯", 100, 5);
+
+    // 兑换成功：积分 100→0，库存 5→4，订单 1 条。
+    const order_id = try svc.redeem(1, 5, "o_p", pid);
+    _ = order_id;
+    const fan = (try fan_store.getByOpenid(1, 5, "o_p")).?;
+    defer fan.free(allocator);
+    try std.testing.expectEqual(@as(i64, 0), fan.points);
+    const prod = (try svc.getProduct(pid)).?;
+    defer prod.free(allocator);
+    try std.testing.expectEqual(@as(i64, 4), prod.stock);
+    const orders = try svc.listOrders(1, 5, null);
+    defer {
+        for (orders) |o| o.free(allocator);
+        allocator.free(orders);
+    }
+    try std.testing.expectEqual(@as(usize, 1), orders.len);
+    try std.testing.expectEqual(@as(i64, 100), orders[0].points_spent);
+
+    // 积分不足 → 拒绝。
+    try std.testing.expectError(error.InsufficientPoints, svc.redeem(1, 5, "o_p", pid));
+
+    // 库存清空 → OutOfStock。
+    _ = try svc.adjustPoints(1, 5, "o_p", 100);
+    try svc.updateProduct(pid, "马克杯", 100, 0);
+    try std.testing.expectError(error.OutOfStock, svc.redeem(1, 5, "o_p", pid));
+
+    // 粉丝不存在 → FanNotFound（用有库存的商品）。
+    const pid2 = try svc.createProduct(1, 5, "新商品", 50, 1);
+    try std.testing.expectError(error.FanNotFound, svc.redeem(1, 5, "o_nobody", pid2));
+}
+
 test "message: WeChat callback — handshake, subscribe, keyword reply, bad sig" {
     const allocator = std.testing.allocator;
     var env = try openMemory(allocator);
@@ -881,7 +1024,8 @@ test "message: WeChat callback — handshake, subscribe, keyword reply, bad sig"
     _ = try rule_svc.addReply(1, account_id, rule_id, "text", "你好呀", "", "", "", "");
 
     const token = "tok";
-    const ts = "1700000000";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
     const nonce = "n1";
     const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
     defer allocator.free(sig);
@@ -919,6 +1063,105 @@ test "message: WeChat callback — handshake, subscribe, keyword reply, bad sig"
     try std.testing.expect(!fan2.subscribed);
 }
 
+test "message: replay guard rejects stale timestamp + duplicate nonce" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var cache = cache_svc.CacheService.init(allocator, 1024, 300);
+    defer cache.deinit();
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.cache = &cache;
+
+    const account_id = try account_svc.create(1, "测试公众号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokr", .encoding_aes_key = "", .verified = false });
+
+    const token = "tokr";
+    const nonce = "n-replay";
+    const now = zigmodu.time.wallClockSeconds(std.testing.io);
+    const text_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_r]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[你好]]></Content></xml>";
+
+    // 过期 timestamp（10 分钟前）→ 拒绝。
+    var stale_buf: [16]u8 = undefined;
+    const stale_ts = try std.fmt.bufPrint(&stale_buf, "{d}", .{now - 600});
+    const stale_sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, stale_ts, nonce });
+    defer allocator.free(stale_sig);
+    try std.testing.expectError(error.TimestampExpired, wechat_svc.handleCallback(allocator, token, .{ .signature = stale_sig, .timestamp = stale_ts, .nonce = nonce }, text_xml));
+
+    // 当前 timestamp + 相同 nonce：首次通过，重放被拒。
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{now});
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+    const first = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, text_xml);
+    defer allocator.free(first);
+    try std.testing.expectError(error.ReplayDetected, wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, text_xml));
+}
+
+test "message: menu CLICK event dispatches to module receiver" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.module_svc = &module_svc;
+
+    // 注册一个响应菜单点击的接收器（demo 模块）。
+    const Demo = struct {
+        fn handle(_: ?*anyopaque, al: std.mem.Allocator, msg: message.service.IncomingMessage) anyerror!?message.service.Reply {
+            if (!std.mem.eql(u8, msg.msg_type, "event")) return null;
+            if (!std.mem.eql(u8, msg.event, "CLICK")) return null;
+            if (!std.mem.eql(u8, msg.event_key, "VOTE_ENTRY")) return null;
+            return try message.service.Reply.text(al, "菜单点击：进入投票");
+        }
+    };
+    try wechat_svc.registerReceiver(.{ .module_name = "demo", .ctx = null, .handle = Demo.handle });
+
+    const account_id = try account_svc.create(1, "测试公众号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokm", .encoding_aes_key = "", .verified = false });
+    _ = try module_svc.bind(1, account_id, "demo", "active");
+
+    const token = "tokm";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "n-menu";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    // 菜单点击事件（CLICK + EventKey）→ receiver 响应。
+    const click_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_m]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[event]]></MsgType><Event><![CDATA[CLICK]]></Event><EventKey><![CDATA[VOTE_ENTRY]]></EventKey></xml>";
+    const reply = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, click_xml);
+    defer allocator.free(reply);
+    try std.testing.expect(std.mem.indexOf(u8, reply, "进入投票") != null);
+
+    // 未绑定 → 事件不触发 receiver（仅记录，返回 success）。
+    const other_id = try account_svc.create(1, "另一个号", "wechat");
+    _ = try account_svc.upsertWechat(1, other_id, .{ .appid = "wx2", .secret = "s", .token = "tokn", .encoding_aes_key = "", .verified = false });
+    var ts2: [16]u8 = undefined;
+    const ts2_s = try std.fmt.bufPrint(&ts2, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const sig2 = try zwechat.util.signature.signature(allocator, &[_][]const u8{ "tokn", ts2_s, nonce });
+    defer allocator.free(sig2);
+    const plain = try wechat_svc.handleCallback(allocator, "tokn", .{ .signature = sig2, .timestamp = ts2_s, .nonce = nonce }, click_xml);
+    defer allocator.free(plain);
+    try std.testing.expectEqualStrings("success", plain);
+}
+
 test "module: registry upsert idempotent + bind/unbind per account" {
     const allocator = std.testing.allocator;
     var env = try openMemory(allocator);
@@ -954,6 +1197,31 @@ test "module: registry upsert idempotent + bind/unbind per account" {
         allocator.free(after);
     }
     try std.testing.expectEqual(@as(usize, 1), after.len);
+}
+
+test "payment: PayConfig deinit frees only dupe'd fields (partial config safe)" {
+    const allocator = std.testing.allocator;
+    // 模拟 readPayConfig 部分配置：只 dupe mch_id，其余保持 "" 字面量。
+    // deinit 只应 free dupe 过的字段（free 字面量会崩，SafeAllocator 检测）。
+    var cfg = payment.service.PayConfig{
+        .mch_id = try allocator.dupe(u8, "mch-1"),
+        .app_id = "",
+        .serial_no = "",
+        .private_key_pem = "",
+        .notify_url = "",
+        .platform_cert = "",
+    };
+    cfg.deinit(allocator);
+
+    var cfg2 = payment.service.PayV2Config{
+        .mch_id = try allocator.dupe(u8, "mch-2"),
+        .key = try allocator.dupe(u8, "k"),
+        .app_id = "",
+        .notify_url = "",
+        .root_ca = "",
+    };
+    cfg2.deinit(allocator);
+    // 到达此处即通过：无泄漏（dupe 已释放）、无 free 字面量崩溃。
 }
 
 test "payment: recharge order → complete credits wallet, idempotent" {
@@ -1016,7 +1284,8 @@ test "message: default reply + AI-flag fallback without provider" {
     _ = try setting_store.set(1, "wechat_ai_auto_reply", "1", 101);
 
     const token = "tok2";
-    const ts = "1700000000";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
     const nonce = "n1";
     const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
     defer allocator.free(sig);
@@ -1035,13 +1304,18 @@ test "message: default reply + AI-flag fallback without provider" {
 }
 
 test "cloud: license lifecycle + marketplace install" {
+    // verifyChecksum：sha256 匹配/不匹配/空期望跳过。
+    try std.testing.expect(cloud.service.CloudService.verifyChecksum("hello", "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"));
+    try std.testing.expect(!cloud.service.CloudService.verifyChecksum("hello", "0000000000000000000000000000000000000000000000000000000000000000"));
+    try std.testing.expect(cloud.service.CloudService.verifyChecksum("hello", ""));
+
     const allocator = std.testing.allocator;
     var env = try openMemory(allocator);
     defer env.deinit();
     var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
     var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
     var cloud_store = cloud.persistence.CloudStore.init(allocator, env.client);
-    var cloud_svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc);
+    var cloud_svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "");
 
     // 授权码生命周期
     const lic = try cloud_svc.generateLicense(allocator, 1, 30);
@@ -1059,7 +1333,7 @@ test "cloud: license lifecycle + marketplace install" {
     try std.testing.expectError(error.InvalidLicense, cloud_svc.verifyLicense(1, lic.license_key));
 
     // 市场：发布 → 安装（注册模块 + 绑定账号）
-    _ = try cloud_svc.publishPackage(1, "shop", "商城", "1.0.0", "多商户商城", "https://cdn.example.com/shop.zip");
+    _ = try cloud_svc.publishPackage(1, "shop", "商城", "1.0.0", "多商户商城", "", "");
     const module_id = try cloud_svc.installPackage(1, "shop", 7);
     _ = module_id;
     const bound = try module_svc.accountModules(1, 7);
@@ -1075,6 +1349,215 @@ test "cloud: license lifecycle + marketplace install" {
 
     // 安装不存在的包 → NotFound
     try std.testing.expectError(error.NotFound, cloud_svc.installPackage(1, "nope", 7));
+}
+
+// ── 远端云服务（zweq-cloud）对接 mock ───────────────────────────────────
+const MockCloudCtx = struct {
+    verify_valid: bool = true,
+    verify_reason: []const u8 = "ok",
+};
+
+fn mockCloudTransport(ctx: *anyopaque, allocator: std.mem.Allocator, uri: []const u8, method: std.http.Method, payload: []const u8, content_type: ?[]const u8) anyerror![]u8 {
+    _ = payload;
+    _ = content_type;
+    const c: *MockCloudCtx = @ptrCast(@alignCast(ctx));
+    if (std.mem.indexOf(u8, uri, "/cloud/licenses/verify") != null) {
+        const valid = if (c.verify_valid) "true" else "false";
+        return std.fmt.allocPrint(allocator, "{{\"code\":0,\"msg\":\"ok\",\"data\":{{\"valid\":{s},\"reason\":\"{s}\"}}}}", .{ valid, c.verify_reason });
+    }
+    if (method == .GET and std.mem.indexOf(u8, uri, "/cloud/market") != null) {
+        return std.fmt.allocPrint(allocator, "{{\"code\":0,\"msg\":\"ok\",\"data\":{{\"list\":[{{\"id\":1,\"name\":\"shop\",\"title\":\"商城\",\"version\":\"1.0.0\",\"description\":\"多商户商城\",\"checksum\":\"abc123\"}}],\"total\":1,\"page\":1,\"pageSize\":20}}}}", .{});
+    }
+    return error.Unreachable;
+}
+
+test "cloud: remote verify + sync-market (zweq-cloud mock)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var cloud_store = cloud.persistence.CloudStore.init(allocator, env.client);
+
+    // 本地模式（remote_url 空）。
+    var local_svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "");
+    try std.testing.expect(!local_svc.isRemote());
+
+    // 远端模式 + mock transport。
+    var svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "http://cloud:8100/api/v1");
+    var ctx = MockCloudCtx{ .verify_valid = true };
+    svc.http_transport = mockCloudTransport;
+    svc.http_transport_ctx = &ctx;
+    try std.testing.expect(svc.isRemote());
+
+    // 校验：有效 → true。
+    try std.testing.expect(try svc.verifyLicenseRemote(allocator, "WEQ-abcdef"));
+    // 过期 → LicenseExpired。
+    ctx.verify_valid = false;
+    ctx.verify_reason = "expired";
+    try std.testing.expectError(error.LicenseExpired, svc.verifyLicenseRemote(allocator, "WEQ-abcdef"));
+    // 无效 → InvalidLicense。
+    ctx.verify_reason = "invalid";
+    try std.testing.expectError(error.InvalidLicense, svc.verifyLicenseRemote(allocator, "WEQ-abcdef"));
+
+    // 同步市场：云端 shop 包 upsert 到本地，download_url 指向云端。
+    const count = try svc.syncMarketRemote(allocator, 1);
+    try std.testing.expectEqual(@as(usize, 1), count);
+    const pkg = (try cloud_store.getPackageByName(1, "shop")).?;
+    defer pkg.free(allocator);
+    try std.testing.expectEqualStrings("商城", pkg.title);
+    try std.testing.expectEqualStrings("abc123", pkg.checksum);
+    try std.testing.expect(std.mem.indexOf(u8, pkg.download_url, "/cloud/market/shop/download") != null);
+}
+
+test "cloud: license state check (fail-closed)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var cloud_store = cloud.persistence.CloudStore.init(allocator, env.client);
+
+    // 本地模式：恒 licensed，无需授权码。
+    var local_svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "");
+    local_svc.checkSiteLicense();
+    try std.testing.expect(local_svc.isLicensed());
+
+    // 远端模式：未配置授权码 → fail-closed（licensed=false）。
+    var svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "http://cloud:8100/api/v1");
+    defer svc.deinit();
+    var ctx = MockCloudCtx{ .verify_valid = true };
+    svc.http_transport = mockCloudTransport;
+    svc.http_transport_ctx = &ctx;
+    svc.checkSiteLicense();
+    try std.testing.expect(!svc.isLicensed());
+
+    // 配置有效授权码 → licensed=true。
+    try svc.setSiteLicenseKey("WEQ-valid");
+    svc.checkSiteLicense();
+    try std.testing.expect(svc.isLicensed());
+
+    // 授权码失效（云端返回 invalid）→ 宽限期内仍 licensed（默认 grace=7 天）。
+    ctx.verify_valid = false;
+    ctx.verify_reason = "invalid";
+    svc.checkSiteLicense();
+    try std.testing.expect(svc.isLicensed()); // 宽限期内放行
+
+    // 宽限期归零 → 立即 fail-closed。
+    svc.setGraceDays(0);
+    try std.testing.expect(!svc.isLicensed());
+
+    // 过期 → licensed=false（宽限期 0）。
+    ctx.verify_reason = "expired";
+    svc.checkSiteLicense();
+    try std.testing.expect(!svc.isLicensed());
+
+    // 恢复宽限 + 授权码重新有效 → licensed=true。
+    svc.setGraceDays(7);
+    ctx.verify_valid = true;
+    ctx.verify_reason = "ok";
+    svc.checkSiteLicense();
+    try std.testing.expect(svc.isLicensed());
+}
+
+test "cloud: manifest migration SQL sandbox (whitelist)" {
+    const v = cloud.service.CloudService.validateMigrationSql;
+    // 合法 DDL。
+    try std.testing.expect(v("CREATE TABLE IF NOT EXISTS shop_order (id INTEGER PRIMARY KEY, tenant_id INTEGER)"));
+    try std.testing.expect(v("create table shop_order (id integer)"));
+    try std.testing.expect(v("CREATE INDEX idx_shop ON shop_order(tenant_id)"));
+    try std.testing.expect(v("CREATE UNIQUE INDEX uq ON shop_order(id)"));
+    try std.testing.expect(v("ALTER TABLE shop_order ADD COLUMN amount INTEGER"));
+    // 非法：非 DDL 前缀。
+    try std.testing.expect(!v("DROP TABLE shop_order"));
+    try std.testing.expect(!v("SELECT * FROM shop_order"));
+    // 非法：危险关键字。
+    try std.testing.expect(!v("CREATE TABLE x (id INTEGER); DELETE FROM y"));
+    // 非法：多语句。
+    try std.testing.expect(!v("CREATE TABLE a(id INTEGER); CREATE TABLE b(id INTEGER)"));
+    // 非法：空 / 超长。
+    try std.testing.expect(!v(""));
+    try std.testing.expect(!v("   "));
+}
+
+test "cloud: manifest install runs migrations (module + SQL)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var cloud_store = cloud.persistence.CloudStore.init(allocator, env.client);
+    var dyn_table_store = cloud.persistence.DynamicTableStore.init(allocator, env.client);
+    var cloud_svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "");
+    // 注入 sqlite in-memory driver（执行迁移 SQL）。
+    cloud_svc.setDriver(env.sqlite.?.asDriver());
+    cloud_svc.setDynamicTableStore(&dyn_table_store);
+
+    // 发布一个带 manifest 的市场包（download_url 为空时用 pkg 元数据注册）。
+    // 这里直接测 manifest 解析 + 迁移执行：先发布无 download_url 包验证 pkg 元数据路径，
+    // 再用 mock transport 注入 manifest 内容测迁移。
+    const manifest = "{\"name\":\"shop\",\"title\":\"商城\",\"version\":\"2.0.0\",\"description\":\"\",\"migrations\":[\"CREATE TABLE IF NOT EXISTS shop_order (id INTEGER PRIMARY KEY, tenant_id INTEGER, amount INTEGER)\"],\"tables\":[{\"name\":\"shop_order\",\"title\":\"订单\",\"columns\":[{\"name\":\"id\",\"title\":\"ID\",\"type\":\"integer\"},{\"name\":\"amount\",\"title\":\"金额\",\"type\":\"integer\"}]}]}";
+
+    // 发布包（download_url 指向一个假 URL，靠 mock transport 返回 manifest）。
+    _ = try cloud_svc.publishPackage(1, "shop", "商城", "1.0.0", "多商户商城", "http://mock/shop.json", "");
+    // 注入 mock transport 返回 manifest 内容。
+    var mctx = ManifestMockCtx{ .content = manifest };
+    cloud_svc.http_transport = manifestMockTransport;
+    cloud_svc.http_transport_ctx = &mctx;
+
+    const module_id = try cloud_svc.installPackage(1, "shop", 0);
+    _ = module_id;
+
+    // 迁移表已创建。
+    const d = env.sqlite.?.asDriver();
+    var rows = try d.query("SELECT name FROM sqlite_master WHERE type='table' AND name='shop_order'", &.{});
+    defer rows.deinit();
+    var row_count: usize = 0;
+    while (rows.next() != null) row_count += 1;
+    try std.testing.expectEqual(@as(usize, 1), row_count);
+
+    // 模块按 manifest 元数据注册（version 2.0.0）。
+    var mods = try module_svc.list(1, 100, 1);
+    defer mods.free(allocator);
+    var found_version: ?[]const u8 = null;
+    for (mods.items) |m| {
+        if (std.mem.eql(u8, m.name, "shop")) found_version = m.version;
+    }
+    try std.testing.expect(found_version != null);
+    try std.testing.expectEqualStrings("2.0.0", found_version.?);
+
+    // 动态表已注册（manifest tables 声明）。
+    const tables = try cloud_svc.listDynamicTables(1);
+    defer {
+        for (tables) |t| t.free(allocator);
+        allocator.free(tables);
+    }
+    try std.testing.expectEqual(@as(usize, 1), tables.len);
+    try std.testing.expectEqualStrings("shop_order", tables[0].table_name);
+    try std.testing.expectEqualStrings("订单", tables[0].title);
+
+    // 通用查询网关：空表 → 0 行 + 列名。
+    var q = try cloud_svc.queryDynamicTable(allocator, 1, "shop_order", 1, 20);
+    defer q.free(allocator);
+    try std.testing.expectEqual(@as(usize, 0), q.row_count);
+    try std.testing.expectEqual(@as(usize, 2), q.column_count); // 元数据声明的 id/amount 两列
+
+    // 未注册表 → NotFound；非法表名 → InvalidName。
+    try std.testing.expectError(error.NotFound, cloud_svc.queryDynamicTable(allocator, 1, "nope", 1, 20));
+    try std.testing.expectError(error.InvalidName, cloud_svc.queryDynamicTable(allocator, 1, "shop_order; DROP", 1, 20));
+}
+
+const ManifestMockCtx = struct {
+    content: []const u8,
+};
+
+fn manifestMockTransport(ctx: *anyopaque, allocator: std.mem.Allocator, uri: []const u8, method: std.http.Method, payload: []const u8, content_type: ?[]const u8) anyerror![]u8 {
+    _ = uri;
+    _ = method;
+    _ = payload;
+    _ = content_type;
+    const c: *ManifestMockCtx = @ptrCast(@alignCast(ctx));
+    return allocator.dupe(u8, c.content);
 }
 
 test "payment: WeChat Pay v3 notify decrypts and completes recharge" {
@@ -1132,7 +1615,12 @@ test "material: news + file CRUD, kind validation" {
     var env = try openMemory(allocator);
     defer env.deinit();
     var material_store = material.persistence.MaterialStore.init(allocator, env.client);
-    var material_svc = material.service.MaterialService.init(allocator, std.testing.io, &material_store);
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var token_cache = try zwechat.cache.Memory.create(allocator);
+    defer allocator.destroy(token_cache);
+    defer token_cache.deinit();
+    var material_svc = material.service.MaterialService.init(allocator, std.testing.io, &material_store, &account_svc, token_cache);
 
     // news CRUD
     const nid = try material_svc.createNews(1, 5, "今日头条", "小编", "摘要", "正文内容", "thumb_1", "http://t/x.png", "http://a/x");
@@ -1166,6 +1654,186 @@ test "material: news + file CRUD, kind validation" {
 
     try material_svc.deleteNews(nid);
     try std.testing.expect((try material_svc.getNews(nid)) == null);
+}
+
+test "material: sync upsert idempotent by media_id" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var material_store = material.persistence.MaterialStore.init(allocator, env.client);
+
+    // 图文：同 media_id 两次 upsert → 同 id，字段更新。
+    const n1 = try material_store.upsertNews(1, 5, "news_1", "标题A", "作者", "摘要", "正文", "thumb_1", "", "http://a/1", 100);
+    const n2 = try material_store.upsertNews(1, 5, "news_1", "标题B", "作者", "摘要", "正文", "thumb_1", "", "http://a/1", 101);
+    try std.testing.expectEqual(n1, n2);
+    const news = (try material_store.getNewsByMediaId(1, 5, "news_1")).?;
+    defer news.free(allocator);
+    try std.testing.expectEqualStrings("标题B", news.title);
+
+    // 不同 media_id → 新行。
+    const n3 = try material_store.upsertNews(1, 5, "news_2", "另一篇", "", "", "", "", "", "", 102);
+    try std.testing.expect(n3 != n1);
+
+    // 文件：同 media_id 幂等。
+    const f1 = try material_store.upsertFile(1, 5, "image", "img_1", "http://cdn/1.png", 100);
+    const f2 = try material_store.upsertFile(1, 5, "image", "img_1", "http://cdn/1.png", 101);
+    try std.testing.expectEqual(f1, f2);
+    const frow = (try material_store.getFileByMediaId(1, 5, "img_1")).?;
+    defer frow.free(allocator);
+    try std.testing.expectEqualStrings("image", frow.kind);
+    try std.testing.expectEqualStrings("http://cdn/1.png", frow.url);
+}
+
+test "checkin: module receiver handles 签到 + per-account config" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var checkin_store = checkin.persistence.CheckinStore.init(allocator, env.client);
+    var checkin_svc = checkin.service.CheckinService.init(allocator, std.testing.io, &checkin_store);
+
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.module_svc = &module_svc;
+    var checkin_ctx = checkin.service.ReceiverCtx{ .module_svc = &module_svc, .checkin_svc = &checkin_svc, .io = std.testing.io };
+    try wechat_svc.registerReceiver(.{ .module_name = "checkin", .ctx = &checkin_ctx, .handle = checkin.service.receiverHandle });
+
+    const account_id = try account_svc.create(1, "测试公众号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokc", .encoding_aes_key = "", .verified = false });
+
+    // 绑定 checkin 模块 + 配置每次签到奖励 5 积分。
+    _ = try module_svc.bind(1, account_id, "checkin", "active");
+    _ = try module_svc.setConfig(1, account_id, "checkin", "5");
+
+    const token = "tokc";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "n1";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    const text_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_9]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[签到]]></Content></xml>";
+
+    // 首次签到 → receiver 回复「签到成功」+ 积分。
+    const r1 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, text_xml);
+    defer allocator.free(r1);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "签到成功") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "5 积分") != null);
+
+    // 同一天重复签到 → 幂等回复「已经签到」。
+    const r2 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, text_xml);
+    defer allocator.free(r2);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "已经签到") != null);
+
+    // 记录落库：仅一条，积分为 5。
+    var list = try checkin_svc.list(1, 20, 1, account_id);
+    defer list.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), list.total);
+    try std.testing.expectEqual(@as(i64, 5), list.items[0].points);
+
+    // config 读写回环。
+    const cfg = (try module_svc.getConfig(allocator, 1, account_id, "checkin")).?;
+    defer allocator.free(cfg);
+    try std.testing.expectEqualStrings("5", cfg);
+}
+
+test "checkin: unbound module declines, falls through to default reply" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var checkin_store = checkin.persistence.CheckinStore.init(allocator, env.client);
+    var checkin_svc = checkin.service.CheckinService.init(allocator, std.testing.io, &checkin_store);
+
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.module_svc = &module_svc;
+    var checkin_ctx = checkin.service.ReceiverCtx{ .module_svc = &module_svc, .checkin_svc = &checkin_svc, .io = std.testing.io };
+    try wechat_svc.registerReceiver(.{ .module_name = "checkin", .ctx = &checkin_ctx, .handle = checkin.service.receiverHandle });
+
+    const account_id = try account_svc.create(1, "测试公众号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokd", .encoding_aes_key = "", .verified = false });
+    // 注意：不绑定 checkin 模块 → receiver 不应被分发。
+    _ = try setting_store.set(1, "wechat_default_reply", "默认回复", 100);
+
+    const token = "tokd";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "n1";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    const text_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_8]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[签到]]></Content></xml>";
+    const reply = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, text_xml);
+    defer allocator.free(reply);
+    try std.testing.expect(std.mem.indexOf(u8, reply, "默认回复") != null);
+    // 未绑定 → 无签到记录落库。
+    var list = try checkin_svc.list(1, 20, 1, account_id);
+    defer list.free(allocator);
+    try std.testing.expectEqual(@as(i64, 0), list.total);
+}
+
+test "menu: save/get + parseButtons JSON→Button conversion" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var menu_store = menu.persistence.MenuStore.init(allocator, env.client);
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var token_cache = try zwechat.cache.Memory.create(allocator);
+    defer allocator.destroy(token_cache);
+    defer token_cache.deinit();
+    var menu_svc = menu.service.MenuService.init(allocator, std.testing.io, &menu_store, &account_svc, token_cache);
+
+    // parseButtons: JSON → zwechat Button（含子菜单，字段深拷贝）。
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const json = "[{\"type\":\"click\",\"name\":\"按钮1\",\"key\":\"K1\"},{\"name\":\"菜单\",\"sub_button\":[{\"type\":\"view\",\"name\":\"子1\",\"url\":\"http://x\"}]}]";
+    const buttons = try menu.service.parseButtons(arena.allocator(), json);
+    try std.testing.expectEqual(@as(usize, 2), buttons.len);
+    try std.testing.expectEqualStrings("click", buttons[0].type_);
+    try std.testing.expectEqualStrings("K1", buttons[0].key);
+    try std.testing.expectEqual(@as(usize, 1), buttons[1].sub_button.len);
+    try std.testing.expectEqualStrings("view", buttons[1].sub_button[0].type_);
+    try std.testing.expectEqualStrings("http://x", buttons[1].sub_button[0].url);
+
+    // 非法 JSON 拒绝。
+    try std.testing.expectError(error.InvalidJson, menu.service.parseButtons(arena.allocator(), "not-json"));
+
+    // save（含 JSON 校验）+ get（DB）。
+    const id1 = try menu_svc.save(1, 7, json);
+    const row = (try menu_svc.get(1, 7)).?;
+    defer row.free(allocator);
+    try std.testing.expectEqual(id1, row.id);
+    try std.testing.expectEqualStrings(json, row.menu_json);
+
+    // 非法 JSON 保存被拒。
+    try std.testing.expectError(error.InvalidJson, menu_svc.save(1, 7, "oops"));
+
+    // upsert 幂等（同账号更新）。
+    const id2 = try menu_svc.save(1, 7, "[]");
+    try std.testing.expectEqual(id1, id2);
+    const row2 = (try menu_svc.get(1, 7)).?;
+    defer row2.free(allocator);
+    try std.testing.expectEqualStrings("[]", row2.menu_json);
 }
 
 test "payment: v3 prepay request build + notify signature verify" {
@@ -1248,6 +1916,42 @@ test "payment: v3 prepay request build + notify signature verify" {
     try std.testing.expect(!try payment_svc.verifyV3NotifySignature(allocator, test_pub, "1700000000", "nonce1", sig_b64, "{\"resource\":\"tampered\"}"));
 }
 
+test "payment: v3 refund + transfer request build (no network)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var payment_store = payment.persistence.PaymentStore.init(allocator, env.client);
+    var payment_svc = payment.service.PaymentService.init(allocator, std.testing.io, &payment_store);
+
+    const cfg = payment.service.PayConfig{
+        .mch_id = "1900000109",
+        .app_id = "wx_test",
+        .serial_no = "1DDE5578",
+        .private_key_pem = "",
+        .notify_url = "https://example.com/api/pay/v3/notify",
+    };
+
+    // 退款请求 build。
+    var refund = try payment_svc.buildRefundV3Request(allocator, cfg, "R1001", "RF2002", 50, 100);
+    defer refund.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, refund.auth, "WECHATPAY2-SHA256-RSA2048") != null);
+    try std.testing.expect(std.mem.indexOf(u8, refund.body, "\"out_trade_no\":\"R1001\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, refund.body, "\"out_refund_no\":\"RF2002\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, refund.body, "\"refund\":50") != null);
+    try std.testing.expect(std.mem.indexOf(u8, refund.body, "\"total\":100") != null);
+    try std.testing.expect(std.mem.endsWith(u8, refund.url, "/v3/refund/domestic/refunds"));
+
+    // 转账请求 build。
+    var transfer = try payment_svc.buildTransferV3Request(allocator, cfg, "o_openid", 200, "B3003", "D4004", "佣金");
+    defer transfer.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, transfer.auth, "WECHATPAY2-SHA256-RSA2048") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transfer.body, "\"out_batch_no\":\"B3003\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transfer.body, "\"out_detail_no\":\"D4004\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transfer.body, "\"total_amount\":200") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transfer.body, "\"openid\":\"o_openid\"") != null);
+    try std.testing.expect(std.mem.endsWith(u8, transfer.url, "/v3/transfer/batches"));
+}
+
 test "ai: run quota counts within rolling window + health workflow" {
     const allocator = std.testing.allocator;
     var env = try openMemory(allocator);
@@ -1270,9 +1974,9 @@ test "ai: run quota counts within rolling window + health workflow" {
     var svc = try ai.service.AiService.init(allocator, std.testing.io, &ai_store, .{ .key_secret = "master-secret" }, refs);
     defer svc.deinit();
 
-    _ = try ai_store.createRun(0, 7, 1, "chat", "hi", 0, 0, "ok", "", 100);
-    _ = try ai_store.createRun(0, 7, 1, "chat", "hi", 0, 0, "ok", "", 200);
-    _ = try ai_store.createRun(0, 8, 1, "chat", "hi", 0, 0, "ok", "", 300);
+    _ = try ai_store.createRun(0, 7, 1, "chat", "hi", "", 0, 0, 0, 0, 0, "ok", "", 100);
+    _ = try ai_store.createRun(0, 7, 1, "chat", "hi", "", 0, 0, 0, 0, 0, "ok", "", 200);
+    _ = try ai_store.createRun(0, 8, 1, "chat", "hi", "", 0, 0, 0, 0, 0, "ok", "", 300);
     try std.testing.expectEqual(@as(i64, 2), try ai_store.runCountForUser(7, 50));
 
     // 无 LLM 的健康工作流:两个只读技能按序执行。
@@ -1281,4 +1985,59 @@ test "ai: run quota counts within rolling window + health workflow" {
     try std.testing.expectEqual(@as(usize, 2), result.steps.items.len);
     try std.testing.expectEqualStrings("task_stats", result.steps.items[0].name);
     try std.testing.expectEqualStrings("tenant_list", result.steps.items[1].name);
+
+    const approval_id = try ai_store.createApproval(1, 7, "zweq.notify.send", "{\"user_id\":1,\"title\":\"t\",\"body\":\"b\",\"kind\":\"info\"}", 100);
+    _ = try user_store.createUser("Boss", "boss@x.com", "hash", false, true, 1, 100);
+    _ = try svc.approve(allocator, approval_id, 2, true);
+
+    // 审计日志应有 ai.approval 记录。
+    var logs = try audit_store.list(1, 10, .{ .action = "ai." });
+    defer logs.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), logs.total);
+    try std.testing.expectEqualStrings("ai.approval", logs.items[0].action);
+}
+
+test "session revocation: token_version bump invalidates old JWTs" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = user.persistence.UserStore.init(allocator, env.client);
+    var sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = "testkit-secret" });
+    const uid = try store.createUser("Alice", "a@x.com", "hash", false, false, 1, 100);
+
+    const Whoami = struct {
+        fn h(ctx: *zigmodu.http.Context) !void {
+            const mw_mod = @import("middleware/auth.zig");
+            const uid_ = mw_mod.authUserId(ctx) orelse {
+                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
+                return;
+            };
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = .{ .uid = uid_ } });
+        }
+    };
+
+    var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
+    defer server.deinit();
+    var g = server.group("/api/v1");
+    var guarded = try g.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&sec.module));
+    guarded = try guarded.use(@import("middleware/auth.zig").tokenVersionGuard(&sec, &store));
+    try guarded.get("/whoami", Whoami.h, null);
+
+    var uid_buf: [32]u8 = undefined;
+    const token = try sec.module.generateTokenWithTenantAndVersion(try std.fmt.bufPrint(&uid_buf, "{d}", .{uid}), &.{}, "1", 0);
+    defer allocator.free(token);
+    var hdr: [512]u8 = undefined;
+    const auth_header = try std.fmt.bufPrint(&hdr, "Bearer {s}", .{token});
+
+    // 版本未递增 → 正常访问。
+    var ok = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, "/api/v1/whoami", .{ .headers = &.{.{ "authorization", auth_header }} });
+    defer ok.deinit(allocator);
+    try std.testing.expectEqual(@as(u16, 200), ok.status_code);
+
+    // 改密/踢下线(版本 +1)→ 旧 token 立即失效。
+    const now = zigmodu.time.wallClockSeconds(std.testing.io);
+    try store.bumpTokenVersion(uid, now);
+    var denied = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, "/api/v1/whoami", .{ .headers = &.{.{ "authorization", auth_header }} });
+    defer denied.deinit(allocator);
+    try std.testing.expectEqual(@as(u16, 401), denied.status_code);
 }

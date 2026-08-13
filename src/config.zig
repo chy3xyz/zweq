@@ -57,6 +57,9 @@ pub const Config = struct {
     ai_key_secret: []const u8 = "",
     /// Max agent runs per user per rolling 24h.
     ai_daily_run_limit: i64 = 100,
+    /// 远端 zweq-cloud 服务 base url（如 `http://cloud:8100/api/v1`）。
+    /// 空 = 本地模式（授权码/市场走本地 DB）。
+    cloud_remote_url: []const u8 = "",
 
     pub fn fromEnv(environ: *const std.process.Environ.Map) Config {
         var cfg: Config = .{};
@@ -90,6 +93,7 @@ pub const Config = struct {
         cfg.task_retry_interval_seconds = parseInt64(environ.get("ZWEQ_TASK_RETRY_INTERVAL_SECONDS") orelse "60", 60);
         cfg.ai_key_secret = environ.get("ZWEQ_AI_KEY_SECRET") orelse "";
         cfg.ai_daily_run_limit = parseInt64(environ.get("ZWEQ_AI_DAILY_RUN_LIMIT") orelse "100", 100);
+        cfg.cloud_remote_url = environ.get("ZWEQ_CLOUD_REMOTE_URL") orelse "";
         return cfg;
     }
 };

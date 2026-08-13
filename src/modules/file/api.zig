@@ -87,6 +87,10 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                     try ctx.sendErrorResponse(413, 413, "文件超过大小限制");
                     return;
                 },
+                error.InvalidMime => {
+                    try ctx.sendErrorResponse(400, 400, "不允许的文件类型");
+                    return;
+                },
                 else => {
                     try ctx.sendErrorResponse(500, 500, @errorName(err));
                     return;
@@ -150,6 +154,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
 
             try ctx.text(200, loaded.bytes);
             try ctx.setHeader("Content-Type", loaded.row.mime);
+            try ctx.setHeader("X-Content-Type-Options", "nosniff");
             const disposition = try std.fmt.allocPrint(ctx.allocator, "attachment; filename=\"{s}\"", .{loaded.row.name});
             defer ctx.allocator.free(disposition);
             try ctx.setHeader("Content-Disposition", disposition);

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -67,39 +68,30 @@ pub const FileStore = struct {
     }
 
     pub fn create(self: *FileStore, name: []const u8, storage_key: []const u8, mime: []const u8, size_bytes: i64, uploader_id: i64, tenant_id: i64, now: i64) !i64 {
-        var b = try self.client.file.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("name", name);
-        _ = try b.setFieldValue("storage_key", storage_key);
-        _ = try b.setFieldValue("mime", mime);
-        _ = try b.setFieldValue("size_bytes", size_bytes);
-        _ = try b.setFieldValue("uploader_id", uploader_id);
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.file, .{
+            .name = name,
+            .storage_key = storage_key,
+            .mime = mime,
+            .size_bytes = size_bytes,
+            .uploader_id = uploader_id,
+            .tenant_id = tenant_id,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, FileInfo, &row, self.allocator);
         return row.id;
     }
 
     pub fn getById(self: *FileStore, id: i64) !?FileRow {
-        var q = self.client.file.Query();
-        defer q.deinit();
         const preds = self.client.file.predicates;
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.file, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, FileInfo, &entity, self.allocator);
         return try self.dup(entity);
     }
 
     pub fn getByStorageKey(self: *FileStore, storage_key: []const u8) !?FileRow {
-        var q = self.client.file.Query();
-        defer q.deinit();
         const preds = self.client.file.predicates;
-        _ = try q.Where(.{preds.storage_keyEQ(.{ .string = storage_key })});
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.file, .{preds.storage_keyEQ(.{ .string = storage_key })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, FileInfo, &entity, self.allocator);
         return try self.dup(entity);
     }
@@ -138,15 +130,11 @@ pub const FileStore = struct {
 
     pub fn delete(self: *FileStore, id: i64) !void {
         const preds = self.client.file.predicates;
-        var d = self.client.file.Delete();
-        defer d.deinit();
-        _ = try d.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try d.Exec();
+        _ = try crud.delete(self.client.file, .{preds.idEQ(.{ .int = id })});
     }
+
     /// Total file count (dashboard stats).
     pub fn countAll(self: *FileStore) !i64 {
-        var q = self.client.file.Query();
-        defer q.deinit();
-        return @intCast(try q.Count());
+        return crud.count(self.client.file, .{});
     }
 };

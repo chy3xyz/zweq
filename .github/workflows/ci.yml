@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: zweq_test
+          POSTGRES_USER: zweq
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zweq -d zweq_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.17.0-dev.1567+f0354179a
+
+      - name: Build
+        run: zig build
+
+      - name: Unit tests (SQLite)
+        run: zig build test
+
+      - name: Postgres real-DB tests (migration + smoke)
+        env:
+          ZWEQ_TEST_PG_CONNINFO: host=localhost port=5432 dbname=zweq_test user=zweq password=testpass
+        run: zig build test --summary all

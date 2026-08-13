@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -115,26 +116,21 @@ pub const RoleStore = struct {
     }
 
     pub fn createRole(self: *RoleStore, tenant_id: i64, name: []const u8, code: []const u8, description: []const u8, now: i64) !i64 {
-        var b = try self.client.role.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("name", name);
-        _ = try b.setFieldValue("code", code);
-        _ = try b.setFieldValue("description", description);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.role, .{
+            .tenant_id = tenant_id,
+            .name = name,
+            .code = code,
+            .description = description,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, RoleInfo, &row, self.allocator);
         return row.id;
     }
 
     pub fn getRoleById(self: *RoleStore, id: i64) !?RoleRow {
-        var q = self.client.role.Query();
-        defer q.deinit();
         const preds = self.client.role.predicates;
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.role, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, RoleInfo, &entity, self.allocator);
         return try self.dupRole(entity);
     }
@@ -164,37 +160,31 @@ pub const RoleStore = struct {
 
     pub fn updateRole(self: *RoleStore, id: i64, name: []const u8, code: []const u8, description: []const u8, now: i64) !bool {
         const preds = self.client.role.predicates;
-        var upd = self.client.role.Update();
-        defer upd.deinit();
-        _ = try upd.set("name", .{ .string = name });
-        _ = try upd.set("code", .{ .string = code });
-        _ = try upd.set("description", .{ .string = description });
-        _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try upd.Save();
-        return true;
+        const affected = try crud.update(self.client.role, .{
+            .name = name,
+            .code = code,
+            .description = description,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
+        return affected > 0;
     }
 
     pub fn deleteRole(self: *RoleStore, id: i64) !void {
         const preds = self.client.role.predicates;
-        var d = self.client.role.Delete();
-        defer d.deinit();
-        _ = try d.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try d.Exec();
+        _ = try crud.delete(self.client.role, .{preds.idEQ(.{ .int = id })});
     }
 
     // ── Permission ────────────────────────────────────────────────
 
     pub fn createPermission(self: *RoleStore, tenant_id: i64, account_id: i64, module: []const u8, action: []const u8, now: i64) !i64 {
-        var b = try self.client.permission.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("account_id", account_id);
-        _ = try b.setFieldValue("module", module);
-        _ = try b.setFieldValue("action", action);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.permission, .{
+            .tenant_id = tenant_id,
+            .account_id = account_id,
+            .module = module,
+            .action = action,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, PermissionInfo, &row, self.allocator);
         return row.id;
     }
@@ -225,10 +215,7 @@ pub const RoleStore = struct {
 
     pub fn deletePermission(self: *RoleStore, id: i64) !void {
         const preds = self.client.permission.predicates;
-        var d = self.client.permission.Delete();
-        defer d.deinit();
-        _ = try d.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try d.Exec();
+        _ = try crud.delete(self.client.permission, .{preds.idEQ(.{ .int = id })});
     }
 
     // ── UserRole ──────────────────────────────────────────────────
@@ -236,24 +223,19 @@ pub const RoleStore = struct {
     pub fn assignRole(self: *RoleStore, tenant_id: i64, user_id: i64, role_id: i64, now: i64) !i64 {
         // Idempotent: drop an existing binding first so reassign is an upsert.
         try self.removeRole(user_id, role_id);
-        var b = try self.client.user_role.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("user_id", user_id);
-        _ = try b.setFieldValue("role_id", role_id);
-        _ = try b.setFieldValue("created_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.user_role, .{
+            .tenant_id = tenant_id,
+            .user_id = user_id,
+            .role_id = role_id,
+            .created_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, UserRoleInfo, &row, self.allocator);
         return row.id;
     }
 
     pub fn removeRole(self: *RoleStore, user_id: i64, role_id: i64) !void {
         const preds = self.client.user_role.predicates;
-        var d = self.client.user_role.Delete();
-        defer d.deinit();
-        _ = try d.Where(.{preds.user_idEQ(.{ .int = user_id })});
-        _ = try d.Where(.{preds.role_idEQ(.{ .int = role_id })});
-        _ = try d.Exec();
+        _ = try crud.delete(self.client.user_role, .{ preds.user_idEQ(.{ .int = user_id }), preds.role_idEQ(.{ .int = role_id }) });
     }
 
     pub fn listRolesForUser(self: *RoleStore, user_id: i64) ![]UserRoleRow {

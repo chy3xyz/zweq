@@ -27,6 +27,21 @@ pub const MarketPackage = Schema("MarketPackage", .{
         field.String("version").Default("1.0.0"),
         field.String("description").Default(""),
         field.String("download_url").Default(""),
+        // 产物 sha256 hex（发布时可选；安装下载后校验，防止篡改）。
+        field.String("checksum").Default(""),
+    },
+    .mixins = &.{zent.core.mixin.TimeMixin},
+});
+
+/// 市场包安装时声明的动态表元数据（manifest 迁移建的表，运行时经通用
+/// 查询网关访问）。`columns_json` = `[{name,title,type}]`。
+pub const DynamicTable = Schema("DynamicTable", .{
+    .fields = &.{
+        field.Int("tenant_id").Default(1),
+        field.String("module").Default(""),
+        field.String("table_name"),
+        field.String("title").Default(""),
+        field.String("columns_json").Default("[]"),
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

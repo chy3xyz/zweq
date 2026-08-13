@@ -9,6 +9,10 @@ export function userDetail(id: number | string): string {
   return `${APP_CONFIG.apiPrefix}/users/${id}`;
 }
 
+export function userRevokeSessions(id: number | string): string {
+  return `${APP_CONFIG.apiPrefix}/users/${id}/revoke-sessions`;
+}
+
 export function userListQuery(page: number, pageSize: number, keyword?: string): string {
   const params = new URLSearchParams();
   params.set('page', String(page));

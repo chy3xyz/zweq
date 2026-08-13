@@ -1,7 +1,7 @@
 import { http } from '#ui/api/client';
 import { unwrapEnvelope } from '#ui/api/envelope';
 
-import { USER_PATH, userDetail, userListQuery } from './path';
+import { USER_PATH, userDetail, userListQuery, userRevokeSessions } from './path';
 import type {
   CreateUserRequest,
   UpdateUserRequest,
@@ -46,4 +46,8 @@ export async function updateUser(id: number, body: UpdateUserRequest): Promise<v
 
 export async function deleteUser(id: number): Promise<void> {
   await deleteEnvelope<null>(userDetail(id));
+}
+
+export async function revokeUserSessions(id: number): Promise<void> {
+  await postEnvelope<null>(userRevokeSessions(id), {});
 }

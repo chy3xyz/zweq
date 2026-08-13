@@ -1,6 +1,6 @@
 import { createSignal, Show } from 'solid-js';
 
-import { deleteUser, listUsers, toApiError, type AuthUser } from '#ui/api';
+import { deleteUser, listUsers, revokeUserSessions, toApiError, type AuthUser } from '#ui/api';
 import DataTable, { type Column } from '#ui/components/DataTable';
 import UserFormModal, { type UserFormTarget } from '#ui/components/UserFormModal';
 import { useAuth } from '#ui/hooks';
@@ -48,6 +48,16 @@ function Users() {
     }
   };
 
+  const onRevoke = async (user: AuthUser) => {
+    if (!window.confirm(`确定踢下线「${user.name}」？其所有登录将立即失效。`)) return;
+    try {
+      await revokeUserSessions(user.id);
+      window.alert('已踢下线');
+    } catch (err) {
+      window.alert(toApiError(err).message);
+    }
+  };
+
   const columns: Column<AuthUser>[] = [
     { key: 'id', title: 'ID', render: (u) => <span class="font-mono text-xs">{u.id}</span> },
     { key: 'name', title: '姓名', render: (u) => u.name },
@@ -89,9 +99,14 @@ function Users() {
           <h2 class="text-xl font-semibold">用户管理</h2>
           <p class="text-sm text-base-content/60">共 {paged.total()} 个用户</p>
         </div>
-        <button type="button" class="btn btn-primary btn-sm" onClick={openCreate}>
-          新建用户
-        </button>
+        <div class="flex items-center gap-2">
+          <a href="/api/v1/users/export" download="users.csv" class="btn btn-outline btn-sm">
+            导出 CSV
+          </a>
+          <button type="button" class="btn btn-primary btn-sm" onClick={openCreate}>
+            新建用户
+          </button>
+        </div>
       </div>
 
       <form onSubmit={onSearch} class="flex items-center gap-2">
@@ -148,6 +163,14 @@ function Users() {
               disabled={user.id === auth.user?.id}
             >
               删除
+            </button>
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs text-warning"
+              onClick={() => void onRevoke(user)}
+              disabled={user.id === auth.user?.id}
+            >
+              踢下线
             </button>
           </>
         )}

@@ -51,12 +51,40 @@ pub const SkillsRefs = struct {
 
 pub const ChatOutcome = struct {
     answer: []u8,
+    reasoning: []u8,
     budget_exhausted: bool,
 
     pub fn free(self: ChatOutcome, allocator: std.mem.Allocator) void {
         allocator.free(self.answer);
+        allocator.free(self.reasoning);
     }
 };
+
+/// 本次 run 的 Agent 用量增量(由前后两次 `AgentMetrics.toStats()` 快照相减)。
+pub const UsageDelta = struct {
+    runs: usize = 0,
+    steps: usize = 0,
+    tool_calls: usize = 0,
+    tool_errors: usize = 0,
+    tool_denied: usize = 0,
+    max_steps_hits: usize = 0,
+    budget_exhausted: usize = 0,
+    canceled: usize = 0,
+};
+
+/// 纯函数:本次 run 用量 = 运行后累计快照 − 运行前累计快照
+pub fn usageDelta(before: ai.AgentMetrics.Stats, after: ai.AgentMetrics.Stats) UsageDelta {
+    return .{
+        .runs = after.runs - before.runs,
+        .steps = after.steps - before.steps,
+        .tool_calls = after.tool_calls - before.tool_calls,
+        .tool_errors = after.tool_errors - before.tool_errors,
+        .tool_denied = after.tool_denied - before.tool_denied,
+        .max_steps_hits = after.max_steps_hits - before.max_steps_hits,
+        .budget_exhausted = after.budget_exhausted - before.budget_exhausted,
+        .canceled = after.canceled - before.canceled,
+    };
+}
 
 pub const AiService = struct {
     allocator: std.mem.Allocator,
@@ -66,7 +94,37 @@ pub const AiService = struct {
     http: zigmodu.http.HttpClient,
     registry: ai.SkillRegistry,
     agent_metrics: ai.AgentMetrics,
+    bulkhead: zigmodu.Bulkhead,
+    /// AI provider 熔断:连续失败达到阈值后快速失败,避免拖垮上游。
+    breaker: zigmodu.CircuitBreaker,
     refs: SkillsRefs,
+
+    /// 读取当前累计值组装 AgentMetrics 快照
+    pub fn currentAgentMetrics(self: *AiService) ai.AgentMetrics {
+        const s = self.agent_metrics.toStats();
+        return .{
+            .runs = .init(s.runs),
+            .steps = .init(s.steps),
+            .tool_calls = .init(s.tool_calls),
+            .tool_errors = .init(s.tool_errors),
+            .tool_denied = .init(s.tool_denied),
+            .max_steps_hits = .init(s.max_steps_hits),
+            .budget_exhausted = .init(s.budget_exhausted),
+            .canceled = .init(s.canceled),
+        };
+    }
+
+    /// 原子累加本次 run 的用量增量。
+    pub fn addAgentMetrics(self: *AiService, d: UsageDelta) void {
+        _ = self.agent_metrics.runs.fetchAdd(d.runs, .monotonic);
+        _ = self.agent_metrics.steps.fetchAdd(d.steps, .monotonic);
+        _ = self.agent_metrics.tool_calls.fetchAdd(d.tool_calls, .monotonic);
+        _ = self.agent_metrics.tool_errors.fetchAdd(d.tool_errors, .monotonic);
+        _ = self.agent_metrics.tool_denied.fetchAdd(d.tool_denied, .monotonic);
+        _ = self.agent_metrics.max_steps_hits.fetchAdd(d.max_steps_hits, .monotonic);
+        _ = self.agent_metrics.budget_exhausted.fetchAdd(d.budget_exhausted, .monotonic);
+        _ = self.agent_metrics.canceled.fetchAdd(d.canceled, .monotonic);
+    }
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -83,6 +141,13 @@ pub const AiService = struct {
             .http = zigmodu.http.HttpClient.init(allocator, io, 4, 30_000),
             .registry = ai.SkillRegistry.init(allocator, io),
             .agent_metrics = .{},
+            .bulkhead = try zigmodu.Bulkhead.init(allocator, "ai-chat", 4, 16),
+            .breaker = try zigmodu.CircuitBreaker.init(allocator, "ai-provider", .{
+                .failure_threshold = 5,
+                .success_threshold = 2,
+                .timeout_seconds = 60,
+                .half_open_max_calls = 2,
+            }),
             .refs = refs,
         };
         errdefer self.registry.deinit();
@@ -93,6 +158,8 @@ pub const AiService = struct {
     pub fn deinit(self: *AiService) void {
         self.registry.deinit();
         self.http.deinit();
+        self.bulkhead.deinit();
+        self.breaker.deinit();
     }
 
     // ── Key encryption ─────────────────────────────────────────────────────
@@ -184,8 +251,6 @@ pub const AiService = struct {
                 break;
             }
         }
-        // `.key` 必须复制:parseFromSlice 的字符串在含转义字符时由 arena
-        // 持有,`parsed.deinit()` 后即悬垂;始终 dupe 一份由调用方管理。
         const key = try allocator.dupe(u8, keys_arr[0].string);
         errdefer allocator.free(key);
         return .{
@@ -254,8 +319,6 @@ pub const AiService = struct {
         return @ptrCast(@alignCast(ctx.userdata orelse return error.MissingSkillContext));
     }
 
-    /// 安全读取对象字段:存在但类型不符返回 error.InvalidArgs
-    /// (LLM 经 prompt 注入可能传任意 JSON 类型,禁止直接访问 tag)。
     fn objString(args: std.json.Value, key: []const u8) ?[]const u8 {
         const v = args.object.get(key) orelse return null;
         return if (v == .string) v.string else null;
@@ -264,11 +327,6 @@ pub const AiService = struct {
     fn objInt(args: std.json.Value, key: []const u8) ?i64 {
         const v = args.object.get(key) orelse return null;
         return if (v == .integer) v.integer else null;
-    }
-
-    fn jsonOk(allocator: std.mem.Allocator, obj: std.json.ObjectMap) anyerror!std.json.Value {
-        try obj.put(allocator, try allocator.dupe(u8, "ok"), .{ .boolean = true });
-        return .{ .object = obj };
     }
 
     fn skillUserSearch(ctx: *ai.SkillContext, args: std.json.Value) anyerror!std.json.Value {
@@ -353,21 +411,17 @@ pub const AiService = struct {
         return .{ .object = obj };
     }
 
-    /// Write skill: enqueue a human approval instead of executing directly.
-    /// The admin approve endpoint performs the actual send.
     fn skillNotifySend(ctx: *ai.SkillContext, args: std.json.Value) anyerror!std.json.Value {
         try ctx.checkDeadline();
         const refs = try refsOf(ctx);
         if (objInt(args, "user_id") == null) return error.InvalidArgs;
         if (objString(args, "title") == null) return error.InvalidArgs;
         if (objString(args, "body") == null) return error.InvalidArgs;
-        _ = objString(args, "kind"); // 可选,类型错也拒绝
         const kind = objString(args, "kind");
         if (kind) |k| {
             if (!std.mem.eql(u8, k, "info") and !std.mem.eql(u8, k, "success") and !std.mem.eql(u8, k, "warning") and !std.mem.eql(u8, k, "error")) return error.InvalidArgs;
         }
 
-        // Serialize the args back to JSON for the approval record.
         const args_json = try std.json.Stringify.valueAlloc(ctx.allocator, args, .{});
         errdefer ctx.allocator.free(args_json);
         const session_id = ctx.run_id orelse "0";
@@ -384,12 +438,20 @@ pub const AiService = struct {
 
     // ── Chat ───────────────────────────────────────────────────────────────
 
-    /// Run one agent turn: quota check → provider resolve → Agent run →
-    /// persist run audit. Returns the assistant answer (caller-owned).
-    pub fn chat(self: *AiService, allocator: std.mem.Allocator, session_id: i64, user_id: i64, tenant_id: i64, prompt: []const u8) !ChatOutcome {
+    pub fn chat(
+        self: *AiService,
+        allocator: std.mem.Allocator,
+        session_id: i64,
+        user_id: i64,
+        tenant_id: i64,
+        prompt: []const u8,
+    ) !ChatOutcome {
         const now = zigmodu.time.wallClockSeconds(self.io);
         const used = try self.store.runCountForUser(user_id, now - 24 * 3600);
         if (used >= self.cfg.daily_run_limit) return error.QuotaExceeded;
+
+        if (!self.bulkhead.tryAcquire()) return error.AiBusy;
+        defer self.bulkhead.release();
 
         var permissions: []const []const u8 = &.{};
         if (try self.refs.user_store.getUserById(user_id)) |row| {
@@ -423,26 +485,62 @@ pub const AiService = struct {
         };
         defer allocator.free(skill_ctx.run_id.?);
 
+        const start_metrics = self.currentAgentMetrics();
+        const agent_stats_before = start_metrics.toStats();
+
         var agent = ai.Agent{
             .provider = &provider,
             .registry = &self.registry,
             .allowlist = &.{ "zweq.user.search", "zweq.task.stats", "zweq.audit.search", "zweq.tenant.list", "zweq.notify.send" },
             .tool_timeout_ms = self.cfg.tool_timeout_ms,
             .budget = &budget,
-            .metrics = self.agent_metrics,
+            .metrics = start_metrics,
         };
 
-        var result = agent.run(allocator, prompt, &skill_ctx, self.cfg.default_max_steps) catch |err| {
-            _ = self.store.createRun(session_id, user_id, tenant_id, "chat", prompt, 0, 0, "error", @errorName(err), now) catch {};
-            return err;
+        const RunCtx = struct {
+            agent: *ai.Agent,
+            allocator: std.mem.Allocator,
+            prompt: []const u8,
+            skill_ctx: *ai.SkillContext,
+            max_steps: usize,
+            result: ?ai.AgentResult = null,
         };
+        var run_ctx = RunCtx{
+            .agent = &agent,
+            .allocator = allocator,
+            .prompt = prompt,
+            .skill_ctx = &skill_ctx,
+            .max_steps = self.cfg.default_max_steps,
+        };
+        const br = self.breaker.callWithContext(&run_ctx, struct {
+            fn op(c: ?*anyopaque) anyerror!void {
+                const r: *RunCtx = @ptrCast(@alignCast(c.?));
+                r.result = r.agent.run(r.allocator, r.prompt, r.skill_ctx, r.max_steps) catch return;
+            }
+        }.op);
+        var result: ai.AgentResult = undefined;
+        switch (br) {
+            .circuit_open => return error.AiCircuitOpen,
+            .failure => |e| {
+                const f_stats = agent.metrics.toStats();
+                const f_prov = provider.metrics.toStats();
+                const fd = usageDelta(agent_stats_before, f_stats);
+                self.addAgentMetrics(fd);
+                _ = self.store.createRun(session_id, user_id, tenant_id, "chat", prompt, "", @intCast(f_prov.total_prompt_tokens), @intCast(f_prov.total_completion_tokens), @intCast(fd.steps), @intCast(fd.tool_calls), @intCast(fd.tool_errors), "error", @errorName(e), now) catch {};
+                return e;
+            },
+            .success => result = run_ctx.result orelse return error.AiRunFailed,
+        }
         defer result.deinit(allocator);
-        self.agent_metrics = agent.metrics;
 
+        const d = usageDelta(agent_stats_before, agent.metrics.toStats());
+        self.addAgentMetrics(d);
+        const provider_stats = provider.metrics.toStats();
         const status: []const u8 = if (result.budget_exhausted) "budget" else "ok";
-        _ = try self.store.createRun(session_id, user_id, tenant_id, "chat", prompt, 0, 0, status, "", now);
+        _ = try self.store.createRun(session_id, user_id, tenant_id, "chat", prompt, result.model, @intCast(provider_stats.total_prompt_tokens), @intCast(provider_stats.total_completion_tokens), @intCast(d.steps), @intCast(d.tool_calls), @intCast(d.tool_errors), status, "", now);
         const answer = try allocator.dupe(u8, result.answer);
-        return .{ .answer = answer, .budget_exhausted = result.budget_exhausted };
+        const reasoning = try allocator.dupe(u8, result.reasoning);
+        return .{ .answer = answer, .reasoning = reasoning, .budget_exhausted = result.budget_exhausted };
     }
 
     // ── Workflow ───────────────────────────────────────────────────────────
@@ -463,6 +561,45 @@ pub const AiService = struct {
         return workflow.run(allocator, &skill_ctx);
     }
 
+    // ── Provider health check ──────────────────────────────────────────────
+
+    /// 向 Provider 发送一次最小 chat 请求(max_tokens=1)验证连通性。
+    /// 返回 "ok" 或 error(调用方转成 502 + 错误信息)。
+    pub fn checkProvider(self: *AiService, allocator: std.mem.Allocator, id: i64) ![]const u8 {
+        const row_opt = try self.store.getProvider(id);
+        const row = row_opt orelse return error.ProviderNotFound;
+        defer row.free(allocator);
+        if (!row.enabled) return error.ProviderDisabled;
+        if (row.api_keys_encrypted.len == 0) return error.EmptyApiKeys;
+
+        const keys_json = try self.decryptKeys(allocator, row.api_keys_encrypted);
+        defer allocator.free(keys_json);
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, keys_json, .{});
+        defer parsed.deinit();
+        if (parsed.value.array.items.len == 0) return error.EmptyApiKeys;
+
+        var model: []const u8 = "";
+        var it = std.mem.splitScalar(u8, row.models, ',');
+        while (it.next()) |m| {
+            if (m.len > 0) {
+                model = m;
+                break;
+            }
+        }
+        if (model.len == 0) return error.EmptyModel;
+
+        var provider = ai.AiProvider{
+            .allocator = allocator,
+            .http = &self.http,
+            .endpoint = row.endpoint,
+            .api_key = parsed.value.array.items[0].string,
+            .model = model,
+        };
+        var resp = provider.chat(&.{.{ .role = "user", .content = "ping" }}) catch |err| return err;
+        defer provider.freeResponse(&resp);
+        return "ok";
+    }
+
     // ── Quota / approvals ──────────────────────────────────────────────────
 
     pub fn runCountToday(self: *AiService, user_id: i64) !i64 {
@@ -481,7 +618,13 @@ pub const AiService = struct {
         const now = zigmodu.time.wallClockSeconds(self.io);
         const new_status: []const u8 = if (do_approve) "approved" else "rejected";
         const affected = try self.store.resolveApproval(id, new_status, approved_by, now);
-        if (affected == 0) return false; // 并发下已被他人处理
+        if (affected == 0) return false;
+
+        // 审批处置写入平台审计日志(合规)。
+        const now_s = zigmodu.time.wallClockSeconds(self.io);
+        var detail_buf: [160]u8 = undefined;
+        const detail = try std.fmt.bufPrint(&detail_buf, "AI 审批 {s}: {s} #{d}", .{ if (do_approve) "批准" else "拒绝", row.skill_name, id });
+        _ = self.refs.audit_store.create(approved_by, "", "ai.approval", "ai_approval", id, detail, "", true, 0, now_s) catch {};
 
         if (do_approve and std.mem.eql(u8, row.skill_name, "zweq.notify.send")) {
             const parsed = try std.json.parseFromSlice(std.json.Value, allocator, row.args, .{});
@@ -492,7 +635,6 @@ pub const AiService = struct {
             const body = objString(parsed.value, "body") orelse return error.InvalidArgs;
             const kind = objString(parsed.value, "kind") orelse "info";
             _ = o;
-            // 目标用户必须存在,避免 uid=0 幽灵通知。
             const target = (try self.refs.user_store.getUserById(uid)) orelse return error.UserNotFound;
             defer target.free(allocator);
             _ = try self.refs.notify_svc.notify(uid, title, body, kind);
@@ -501,12 +643,9 @@ pub const AiService = struct {
     }
 };
 
-/// ChaCha20-based CSPRNG bytes (std.crypto.random is gone in Zig 0.17;
-/// seeded from timestamps + addresses like zigmodu's SecurityModule).
 fn fillRandom(io: std.Io, buf: []u8) void {
     var seed: [32]u8 = undefined;
     @memset(&seed, 0);
-    // 系统熵(尽力而为;失败时仅用下方时间戳/指针种子)。
     if (std.Io.Dir.openFileAbsolute(io, "/dev/urandom", .{})) |f| {
         defer f.close(io);
         var ent: [24]u8 = undefined;

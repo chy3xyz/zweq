@@ -36,6 +36,7 @@ const BindingDto = struct {
     account_id: i64,
     module: []const u8,
     status: []const u8,
+    config: []const u8,
 };
 
 const RegisterModuleReq = struct {
@@ -69,6 +70,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/accounts/{id}/modules", listBindings, @ptrCast(@alignCast(self)));
             try g.put("/accounts/{id}/modules", bind, @ptrCast(@alignCast(self)));
             try g.delete("/accounts/{id}/modules/{module}", unbind, @ptrCast(@alignCast(self)));
+            try g.get("/accounts/{id}/modules/{module}/config", getConfig, @ptrCast(@alignCast(self)));
+            try g.put("/accounts/{id}/modules/{module}/config", setConfig, @ptrCast(@alignCast(self)));
         }
 
         fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
@@ -156,7 +159,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             }
             const dtos = try ctx.allocator.alloc(BindingDto, rows.len);
             for (rows, 0..) |r, i| {
-                dtos[i] = .{ .id = r.id, .account_id = r.account_id, .module = r.module, .status = r.status };
+                dtos[i] = .{ .id = r.id, .account_id = r.account_id, .module = r.module, .status = r.status, .config = r.config };
             }
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos } });
         }
@@ -208,6 +211,55 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.unbind", "module", account_id, "解绑模块", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+        }
+
+        fn getConfig(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = (try requireAdmin(ctx, self)) orelse return;
+            const tid = tenantScope(ctx, self);
+
+            const account_id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
+                return;
+            };
+            const module = ctx.param("module") orelse {
+                try ctx.sendErrorResponse(400, 400, "缺少模块名");
+                return;
+            };
+            const cfg = self.svc.getConfig(ctx.allocator, tid, account_id, module) catch |err| {
+                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                return;
+            };
+            defer if (cfg) |c| ctx.allocator.free(c);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .config = cfg orelse "" } });
+        }
+
+        fn setConfig(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = tenantScope(ctx, self);
+
+            const account_id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
+                return;
+            };
+            const module = ctx.param("module") orelse {
+                try ctx.sendErrorResponse(400, 400, "缺少模块名");
+                return;
+            };
+            const req = ctx.bindJson(struct { config: []const u8 }) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer ctx.allocator.free(req.config);
+            const id = self.svc.setConfig(tid, account_id, module, req.config) catch |err| {
+                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                return;
+            };
+            var d1: [128]u8 = undefined;
+            const det1 = try std.fmt.bufPrint(&d1, "账号 #{d} 模块 {s} 更新配置", .{ account_id, module });
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.config", "module", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
         }
     };
 }

@@ -16,6 +16,7 @@ pub const MaterialNewsRow = struct {
     id: i64,
     tenant_id: i64,
     account_id: i64,
+    media_id: []const u8,
     title: []const u8,
     author: []const u8,
     digest: []const u8,
@@ -27,6 +28,7 @@ pub const MaterialNewsRow = struct {
     updated_at: i64,
 
     pub fn free(self: MaterialNewsRow, allocator: std.mem.Allocator) void {
+        allocator.free(self.media_id);
         allocator.free(self.title);
         allocator.free(self.author);
         allocator.free(self.digest);
@@ -83,6 +85,8 @@ pub const MaterialStore = struct {
     }
 
     fn dupNews(self: *MaterialStore, e: anytype) !MaterialNewsRow {
+        const media_id = try self.allocator.dupe(u8, e.media_id);
+        errdefer self.allocator.free(media_id);
         const title = try self.allocator.dupe(u8, e.title);
         errdefer self.allocator.free(title);
         const author = try self.allocator.dupe(u8, e.author);
@@ -101,6 +105,7 @@ pub const MaterialStore = struct {
             .id = e.id,
             .tenant_id = e.tenant_id,
             .account_id = e.account_id,
+            .media_id = media_id,
             .title = title,
             .author = author,
             .digest = digest,
@@ -212,6 +217,57 @@ pub const MaterialStore = struct {
         _ = try d.Exec();
     }
 
+    /// 按微信 media_id 查图文素材。
+    pub fn getNewsByMediaId(self: *MaterialStore, tenant_id: i64, account_id: i64, media_id: []const u8) !?MaterialNewsRow {
+        var q = self.client.material_news.Query();
+        defer q.deinit();
+        const preds = self.client.material_news.predicates;
+        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
+        _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        _ = try q.Where(.{preds.media_idEQ(.{ .string = media_id })});
+        var entity = (try q.First()) orelse return null;
+        defer zent.codegen.deinitEntity(infos, MaterialNewsInfo, &entity, self.allocator);
+        return try self.dupNews(entity);
+    }
+
+    /// 按 media_id upsert 图文素材（同步微信素材用）。返回行 id。
+    pub fn upsertNews(self: *MaterialStore, tenant_id: i64, account_id: i64, media_id: []const u8, title: []const u8, author: []const u8, digest: []const u8, content: []const u8, thumb_media_id: []const u8, thumb_url: []const u8, url: []const u8, now: i64) !i64 {
+        if (try self.getNewsByMediaId(tenant_id, account_id, media_id)) |row| {
+            defer row.free(self.allocator);
+            const preds = self.client.material_news.predicates;
+            var upd = self.client.material_news.Update();
+            defer upd.deinit();
+            _ = try upd.set("title", .{ .string = title });
+            _ = try upd.set("author", .{ .string = author });
+            _ = try upd.set("digest", .{ .string = digest });
+            _ = try upd.set("content", .{ .string = content });
+            _ = try upd.set("thumb_media_id", .{ .string = thumb_media_id });
+            _ = try upd.set("thumb_url", .{ .string = thumb_url });
+            _ = try upd.set("url", .{ .string = url });
+            _ = try upd.setFieldValue("updated_at", now);
+            _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
+            _ = try upd.Save();
+            return row.id;
+        }
+        var b = try self.client.material_news.Create();
+        defer b.deinit();
+        _ = try b.setFieldValue("tenant_id", tenant_id);
+        _ = try b.setFieldValue("account_id", account_id);
+        _ = try b.setFieldValue("media_id", media_id);
+        _ = try b.setFieldValue("title", title);
+        _ = try b.setFieldValue("author", author);
+        _ = try b.setFieldValue("digest", digest);
+        _ = try b.setFieldValue("content", content);
+        _ = try b.setFieldValue("thumb_media_id", thumb_media_id);
+        _ = try b.setFieldValue("thumb_url", thumb_url);
+        _ = try b.setFieldValue("url", url);
+        _ = try b.setFieldValue("created_at", now);
+        _ = try b.setFieldValue("updated_at", now);
+        var nrow = try b.Save();
+        defer zent.codegen.deinitEntity(infos, MaterialNewsInfo, &nrow, self.allocator);
+        return nrow.id;
+    }
+
     // ── MaterialFile ──────────────────────────────────────────────
 
     pub fn createFile(self: *MaterialStore, tenant_id: i64, account_id: i64, kind: []const u8, media_id: []const u8, url: []const u8, now: i64) !i64 {
@@ -262,5 +318,46 @@ pub const MaterialStore = struct {
         defer d.deinit();
         _ = try d.Where(.{preds.idEQ(.{ .int = id })});
         _ = try d.Exec();
+    }
+
+    /// 按微信 media_id 查素材文件。
+    pub fn getFileByMediaId(self: *MaterialStore, tenant_id: i64, account_id: i64, media_id: []const u8) !?MaterialFileRow {
+        var q = self.client.material_file.Query();
+        defer q.deinit();
+        const preds = self.client.material_file.predicates;
+        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
+        _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        _ = try q.Where(.{preds.media_idEQ(.{ .string = media_id })});
+        var entity = (try q.First()) orelse return null;
+        defer zent.codegen.deinitEntity(infos, MaterialFileInfo, &entity, self.allocator);
+        return try self.dupFile(entity);
+    }
+
+    /// 按 media_id upsert 素材文件（同步微信素材用）。返回行 id。
+    pub fn upsertFile(self: *MaterialStore, tenant_id: i64, account_id: i64, kind: []const u8, media_id: []const u8, url: []const u8, now: i64) !i64 {
+        if (try self.getFileByMediaId(tenant_id, account_id, media_id)) |row| {
+            defer row.free(self.allocator);
+            const preds = self.client.material_file.predicates;
+            var upd = self.client.material_file.Update();
+            defer upd.deinit();
+            _ = try upd.set("kind", .{ .string = kind });
+            _ = try upd.set("url", .{ .string = url });
+            _ = try upd.setFieldValue("updated_at", now);
+            _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
+            _ = try upd.Save();
+            return row.id;
+        }
+        var b = try self.client.material_file.Create();
+        defer b.deinit();
+        _ = try b.setFieldValue("tenant_id", tenant_id);
+        _ = try b.setFieldValue("account_id", account_id);
+        _ = try b.setFieldValue("kind", kind);
+        _ = try b.setFieldValue("media_id", media_id);
+        _ = try b.setFieldValue("url", url);
+        _ = try b.setFieldValue("created_at", now);
+        _ = try b.setFieldValue("updated_at", now);
+        var nrow = try b.Save();
+        defer zent.codegen.deinitEntity(infos, MaterialFileInfo, &nrow, self.allocator);
+        return nrow.id;
     }
 };

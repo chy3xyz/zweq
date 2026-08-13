@@ -5,12 +5,13 @@ const zent = @import("zent");
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
-const graph = zent.codegen.graph.buildGraph(&.{ model.License, model.MarketPackage });
+const graph = zent.codegen.graph.buildGraph(&.{ model.License, model.MarketPackage, model.DynamicTable });
 pub const infos = graph.types;
 /// Shared, application-wide typed client (all schemas registered in schema.zig).
 pub const Client = schema.Client;
 pub const LicenseInfo = infos[0];
 pub const MarketPackageInfo = infos[1];
+pub const DynamicTableInfo = infos[2];
 
 pub const LicenseRow = struct {
     id: i64,
@@ -45,6 +46,7 @@ pub const MarketPackageRow = struct {
     version: []const u8,
     description: []const u8,
     download_url: []const u8,
+    checksum: []const u8,
     created_at: i64,
     updated_at: i64,
 
@@ -54,6 +56,7 @@ pub const MarketPackageRow = struct {
         allocator.free(self.version);
         allocator.free(self.description);
         allocator.free(self.download_url);
+        allocator.free(self.checksum);
     }
 };
 
@@ -102,6 +105,8 @@ pub const CloudStore = struct {
         errdefer self.allocator.free(description);
         const download_url = try self.allocator.dupe(u8, e.download_url);
         errdefer self.allocator.free(download_url);
+        const checksum = try self.allocator.dupe(u8, e.checksum);
+        errdefer self.allocator.free(checksum);
         return .{
             .id = e.id,
             .tenant_id = e.tenant_id,
@@ -110,6 +115,7 @@ pub const CloudStore = struct {
             .version = version,
             .description = description,
             .download_url = download_url,
+            .checksum = checksum,
             .created_at = e.created_at orelse 0,
             .updated_at = e.updated_at orelse 0,
         };
@@ -204,7 +210,7 @@ pub const CloudStore = struct {
     }
 
     /// Upsert a market package by (tenant_id, name). Returns the package id.
-    pub fn upsertPackage(self: *CloudStore, tenant_id: i64, name: []const u8, title: []const u8, version: []const u8, description: []const u8, download_url: []const u8, now: i64) !i64 {
+    pub fn upsertPackage(self: *CloudStore, tenant_id: i64, name: []const u8, title: []const u8, version: []const u8, description: []const u8, download_url: []const u8, checksum: []const u8, now: i64) !i64 {
         if (try self.getPackageByName(tenant_id, name)) |row| {
             defer row.free(self.allocator);
             const preds = self.client.market_package.predicates;
@@ -214,6 +220,7 @@ pub const CloudStore = struct {
             _ = try upd.set("version", .{ .string = version });
             _ = try upd.set("description", .{ .string = description });
             _ = try upd.set("download_url", .{ .string = download_url });
+            _ = try upd.set("checksum", .{ .string = checksum });
             _ = try upd.setFieldValue("updated_at", now);
             _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
             _ = try upd.Save();
@@ -227,6 +234,7 @@ pub const CloudStore = struct {
         _ = try b.setFieldValue("version", version);
         _ = try b.setFieldValue("description", description);
         _ = try b.setFieldValue("download_url", download_url);
+        _ = try b.setFieldValue("checksum", checksum);
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
@@ -255,5 +263,111 @@ pub const CloudStore = struct {
             n += 1;
         }
         return .{ .items = out, .total = paged.total };
+    }
+};
+
+/// 动态表元数据存储（market manifest 声明的运行时表）。
+pub const DynamicTableStore = struct {
+    allocator: std.mem.Allocator,
+    client: Client,
+
+    pub fn init(allocator: std.mem.Allocator, client: Client) DynamicTableStore {
+        return .{ .allocator = allocator, .client = client };
+    }
+
+    pub const DynamicTableRow = struct {
+        id: i64,
+        module: []const u8,
+        table_name: []const u8,
+        title: []const u8,
+        columns_json: []const u8,
+
+        pub fn free(self: DynamicTableRow, allocator: std.mem.Allocator) void {
+            allocator.free(self.module);
+            allocator.free(self.table_name);
+            allocator.free(self.title);
+            allocator.free(self.columns_json);
+        }
+    };
+
+    fn dup(self: *DynamicTableStore, e: anytype) !DynamicTableRow {
+        const module = try self.allocator.dupe(u8, e.module);
+        errdefer self.allocator.free(module);
+        const table_name = try self.allocator.dupe(u8, e.table_name);
+        errdefer self.allocator.free(table_name);
+        const title = try self.allocator.dupe(u8, e.title);
+        errdefer self.allocator.free(title);
+        const columns_json = try self.allocator.dupe(u8, e.columns_json);
+        errdefer self.allocator.free(columns_json);
+        return .{ .id = e.id, .module = module, .table_name = table_name, .title = title, .columns_json = columns_json };
+    }
+
+    pub fn register(self: *DynamicTableStore, tenant_id: i64, module: []const u8, table_name: []const u8, title: []const u8, columns_json: []const u8, now: i64) !i64 {
+        const preds = self.client.dynamic_table.predicates;
+        var q = self.client.dynamic_table.Query();
+        defer q.deinit();
+        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
+        _ = try q.Where(.{preds.table_nameEQ(.{ .string = table_name })});
+        _ = q.Limit(1);
+        if (try q.First()) |e_const| {
+            var e = e_const;
+            defer zent.codegen.deinitEntity(infos, DynamicTableInfo, &e, self.allocator);
+            var upd = self.client.dynamic_table.Update();
+            defer upd.deinit();
+            _ = try upd.set("module", .{ .string = module });
+            _ = try upd.set("title", .{ .string = title });
+            _ = try upd.set("columns_json", .{ .string = columns_json });
+            _ = try upd.setFieldValue("updated_at", now);
+            _ = try upd.Where(.{preds.idEQ(.{ .int = e.id })});
+            _ = try upd.Save();
+            return e.id;
+        }
+        var b = try self.client.dynamic_table.Create();
+        defer b.deinit();
+        _ = try b.setFieldValue("tenant_id", tenant_id);
+        _ = try b.setFieldValue("module", module);
+        _ = try b.setFieldValue("table_name", table_name);
+        _ = try b.setFieldValue("title", title);
+        _ = try b.setFieldValue("columns_json", columns_json);
+        _ = try b.setFieldValue("created_at", now);
+        _ = try b.setFieldValue("updated_at", now);
+        var row = try b.Save();
+        defer zent.codegen.deinitEntity(infos, DynamicTableInfo, &row, self.allocator);
+        return row.id;
+    }
+
+    pub fn list(self: *DynamicTableStore, tenant_id: i64) ![]DynamicTableRow {
+        var q = self.client.dynamic_table.Query();
+        defer q.deinit();
+        const preds = self.client.dynamic_table.predicates;
+        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
+        _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("table_name")});
+        var rows = try q.All();
+        defer {
+            for (rows.items) |*e| zent.codegen.deinitEntity(infos, DynamicTableInfo, e, self.allocator);
+            rows.deinit();
+        }
+        var out = try self.allocator.alloc(DynamicTableRow, rows.items.len);
+        errdefer self.allocator.free(out);
+        var n: usize = 0;
+        errdefer for (out[0..n]) |r| r.free(self.allocator);
+        for (rows.items) |e| {
+            out[n] = try self.dup(e);
+            n += 1;
+        }
+        return out;
+    }
+
+    pub fn getByTable(self: *DynamicTableStore, tenant_id: i64, table_name: []const u8) !?DynamicTableRow {
+        const preds = self.client.dynamic_table.predicates;
+        var q = self.client.dynamic_table.Query();
+        defer q.deinit();
+        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
+        _ = try q.Where(.{preds.table_nameEQ(.{ .string = table_name })});
+        _ = q.Limit(1);
+        const e_opt = try q.First();
+        var e = e_opt orelse return null;
+        defer zent.codegen.deinitEntity(infos, DynamicTableInfo, &e, self.allocator);
+        return try self.dup(e);
     }
 };

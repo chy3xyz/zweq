@@ -70,6 +70,17 @@ const CreateNewsReq = struct {
     url: ?[]const u8 = null,
 };
 
+/// 上传图文到微信（add_news）。
+const UploadNewsReq = struct {
+    account_id: i64,
+    title: []const u8,
+    author: []const u8 = "",
+    digest: []const u8 = "",
+    content: []const u8,
+    thumb_media_id: []const u8,
+    content_source_url: []const u8 = "",
+};
+
 const UpdateNewsReq = struct {
     title: ?[]const u8 = null,
     author: ?[]const u8 = null,
@@ -110,6 +121,10 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/materials/files", listFiles, @ptrCast(@alignCast(self)));
             try g.post("/materials/files", createFile, @ptrCast(@alignCast(self)));
             try g.delete("/materials/files/{id}", deleteFile, @ptrCast(@alignCast(self)));
+            try g.post("/materials/sync-news", syncNews, @ptrCast(@alignCast(self)));
+            try g.post("/materials/sync-files", syncFiles, @ptrCast(@alignCast(self)));
+            try g.get("/materials/count", syncCount, @ptrCast(@alignCast(self)));
+            try g.post("/materials/news/upload", uploadNews, @ptrCast(@alignCast(self)));
         }
 
         fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
@@ -325,6 +340,104 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.file.delete", "material", id, "删除素材", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+        }
+
+        fn syncNews(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = tenantScope(ctx, self);
+            const account_id = parseAccount(ctx) orelse {
+                try ctx.sendErrorResponse(400, 400, "缺少 account_id");
+                return;
+            };
+            self.svc.syncNews(tid, account_id) catch |err| {
+                const msg = switch (err) {
+                    error.NotFound => "账号不存在",
+                    error.WechatApiError => "微信接口调用失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.sync.news", "material", account_id, "同步微信图文素材", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已同步", .data = null });
+        }
+
+        fn syncFiles(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = tenantScope(ctx, self);
+            const account_id = parseAccount(ctx) orelse {
+                try ctx.sendErrorResponse(400, 400, "缺少 account_id");
+                return;
+            };
+            const kind = ctx.queryParam("kind") orelse {
+                try ctx.sendErrorResponse(400, 400, "缺少 kind（image/voice/video）");
+                return;
+            };
+            self.svc.syncFiles(tid, account_id, kind) catch |err| {
+                const msg = switch (err) {
+                    error.NotFound => "账号不存在",
+                    error.InvalidKind => "kind 须为 image/voice/video",
+                    error.WechatApiError => "微信接口调用失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.sync.files", "material", account_id, "同步微信素材文件", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已同步", .data = null });
+        }
+
+        fn syncCount(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = (try requireAdmin(ctx, self)) orelse return;
+            const account_id = parseAccount(ctx) orelse {
+                try ctx.sendErrorResponse(400, 400, "缺少 account_id");
+                return;
+            };
+            const c = self.svc.syncCount(account_id) catch |err| {
+                const msg = switch (err) {
+                    error.NotFound => "账号不存在",
+                    error.WechatApiError => "微信接口调用失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .voice = c.voice, .video = c.video, .image = c.image, .news = c.news } });
+        }
+
+        fn uploadNews(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = tenantScope(ctx, self);
+
+            const req = ctx.bindJson(UploadNewsReq) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer {
+                ctx.allocator.free(req.title);
+                if (req.author.len > 0) ctx.allocator.free(req.author);
+                if (req.digest.len > 0) ctx.allocator.free(req.digest);
+                ctx.allocator.free(req.content);
+                ctx.allocator.free(req.thumb_media_id);
+                if (req.content_source_url.len > 0) ctx.allocator.free(req.content_source_url);
+            }
+            const media_id = self.svc.uploadNews(tid, req.account_id, req.title, req.author, req.digest, req.content, req.thumb_media_id, req.content_source_url) catch |err| {
+                const msg = switch (err) {
+                    error.NotFound => "账号不存在",
+                    error.WechatApiError => "微信接口调用失败",
+                    error.OutOfMemory => "内存不足",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            defer ctx.allocator.free(media_id);
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.news.upload", "material", req.account_id, "上传图文到微信", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已上传", .data = .{ .media_id = media_id } });
         }
     };
 }

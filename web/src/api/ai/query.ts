@@ -87,6 +87,10 @@ export async function deleteAiProvider(id: number): Promise<void> {
   await http.delete(aiProviderDetail(id));
 }
 
+export async function checkAiProvider(id: number): Promise<{ status: string }> {
+  return postEnvelope<{ status: string }>(`${AI_PATH.providers}/${id}/check`);
+}
+
 export async function listAiApprovals(page: number, pageSize: number, status?: string): Promise<AiApprovalListResult> {
   return getEnvelope<AiApprovalListResult>(aiApprovalsQuery(page, pageSize, status));
 }

@@ -14,12 +14,16 @@
 
 const std = @import("std");
 const zigmodu = @import("zigmodu");
+const zwechat = @import("zwechat");
 const config_mod = @import("config.zig");
 const db_mod = @import("db.zig");
 const schema = @import("schema.zig");
 const access_log_mod = @import("middleware/access_log.zig");
 const sec_headers = @import("middleware/security_headers.zig");
 const metrics_mod = @import("middleware/metrics.zig");
+const real_ip_mod = @import("middleware/real_ip.zig");
+const request_log_mod = @import("middleware/request_log.zig");
+const license_mw = @import("middleware/license.zig");
 const mail = @import("services/mail.zig");
 const cache_svc = @import("services/cache.zig");
 const jobs = @import("jobs.zig");
@@ -45,6 +49,9 @@ const payment = @import("modules/payment/root.zig");
 const app_bff = @import("modules/app_bff/root.zig");
 const cloud = @import("modules/cloud/root.zig");
 const material = @import("modules/material/root.zig");
+const checkin = @import("modules/checkin/root.zig");
+const menu = @import("modules/menu/root.zig");
+const points = @import("modules/points/root.zig");
 
 /// Set by SIGINT/SIGTERM so the main thread can stop the server gracefully.
 const ShutdownFlag = struct {
@@ -125,6 +132,9 @@ pub fn main(init: std.process.Init) !void {
         payment.persistence.infos,
         cloud.persistence.infos,
         material.persistence.infos,
+        checkin.persistence.infos,
+        menu.persistence.infos,
+        points.persistence.infos,
     }).open(allocator, kind, dsn);
     defer store_env.deinit();
     std.log.info("[zent] migrated schema via {s} ({s})", .{ @tagName(kind), dsn });
@@ -179,18 +189,64 @@ pub fn main(init: std.process.Init) !void {
     var rule_svc = rule.service.RuleService.init(allocator, io, &rule_store);
     var fan_store = member.persistence.FanStore.init(allocator, store_env.client);
     var member_svc = member.service.MemberService.init(allocator, io, &fan_store);
+    var tag_store = member.persistence.TagStore.init(allocator, store_env.client);
+    member_svc.tag_store = &tag_store;
+    member_svc.account_svc = &account_svc;
     var message_store = message.persistence.MessageStore.init(allocator, store_env.client);
     var wechat_svc = message.service.WechatService.init(allocator, io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
     var app_module_store = appmod.persistence.ModuleStore.init(allocator, store_env.client);
     var module_svc = appmod.service.ModuleService.init(allocator, io, &app_module_store);
     try module_svc.seedBuiltins(default_tenant_id);
     std.log.info("[module] built-in modules seeded", .{});
+    // Wire the module registry into the callback engine so bound modules'
+    // receivers can be dispatched.
+    wechat_svc.module_svc = &module_svc;
+    // Wire the cache into the callback engine for nonce replay detection.
+    wechat_svc.cache = &cache;
     var payment_store = payment.persistence.PaymentStore.init(allocator, store_env.client);
     var payment_svc = payment.service.PaymentService.init(allocator, io, &payment_store);
     var cloud_store = cloud.persistence.CloudStore.init(allocator, store_env.client);
-    var cloud_svc = cloud.service.CloudService.init(allocator, io, &cloud_store, &module_svc);
+    var cloud_svc = cloud.service.CloudService.init(allocator, io, &cloud_store, &module_svc, cfg.cloud_remote_url);
+    // 注入原始 SQL 执行器（市场包 manifest 迁移 SQL 用）。
+    cloud_svc.setDriver(if (kind == .postgres) store_env.pg.?.asDriver() else store_env.sqlite.?.asDriver());
+    // 动态表元数据存储（manifest tables 注册 + 通用查询网关）。
+    var dyn_table_store = cloud.persistence.DynamicTableStore.init(allocator, store_env.client);
+    cloud_svc.setDynamicTableStore(&dyn_table_store);
+    // 站点授权码注入 + 启动即校验（远端模式 fail-closed + 宽限期）。
+    if (setting_svc.get(default_tenant_id, "cloud_license_key") catch null) |row| {
+        defer row.free(allocator);
+        try cloud_svc.setSiteLicenseKey(row.value);
+    }
+    if (setting_svc.get(default_tenant_id, "cloud_license_grace_days") catch null) |grow| {
+        defer grow.free(allocator);
+        cloud_svc.setGraceDays(std.fmt.parseInt(i64, grow.value, 10) catch 7);
+    }
+    cloud_svc.checkSiteLicense();
+    std.log.info("[cloud] license check: licensed={} (remote={s})", .{ cloud_svc.isLicensed(), cfg.cloud_remote_url });
+    // Shared access_token cache（主动微信能力的地基：菜单 + 素材同步共用）.
+    var token_cache = try zwechat.cache.Memory.create(allocator);
+    defer allocator.destroy(token_cache);
+    defer token_cache.deinit();
+    wechat_svc.token_cache = token_cache;
+    member_svc.token_cache = token_cache;
     var material_store = material.persistence.MaterialStore.init(allocator, store_env.client);
-    var material_svc = material.service.MaterialService.init(allocator, io, &material_store);
+    var material_svc = material.service.MaterialService.init(allocator, io, &material_store, &account_svc, token_cache);
+    var checkin_store = checkin.persistence.CheckinStore.init(allocator, store_env.client);
+    var checkin_svc = checkin.service.CheckinService.init(allocator, io, &checkin_store);
+    var checkin_ctx = checkin.service.ReceiverCtx{
+        .module_svc = &module_svc,
+        .checkin_svc = &checkin_svc,
+        .io = io,
+    };
+    try wechat_svc.registerReceiver(.{
+        .module_name = "checkin",
+        .ctx = &checkin_ctx,
+        .handle = checkin.service.receiverHandle,
+    });
+    var menu_store = menu.persistence.MenuStore.init(allocator, store_env.client);
+    var menu_svc = menu.service.MenuService.init(allocator, io, &menu_store, &account_svc, token_cache);
+    var points_store = points.persistence.PointsStore.init(allocator, store_env.client);
+    var points_svc = points.service.PointsService.init(allocator, io, &points_store, &fan_store);
 
     var audit_store = audit.persistence.AuditStore.init(allocator, store_env.client);
     var audit_svc = audit.service.AuditService.init(allocator, io, &audit_store);
@@ -237,6 +293,9 @@ pub fn main(init: std.process.Init) !void {
         app_bff.module,
         cloud.module,
         material.module,
+        checkin.module,
+        menu.module,
+        points.module,
     }, .{});
     defer app.deinit();
     try app.start();
@@ -291,11 +350,15 @@ pub fn main(init: std.process.Init) !void {
     std.log.info("[task] dispatcher started ({d} handlers, {d} workers)", .{ handler_registry.len, cfg.task_workers });
 
     // ── HTTP API ──
-    var login_limiter = try zigmodu.RateLimiter.init(allocator, "auth-public", 20, 1);
-    defer login_limiter.deinit();
+    var auth_registry = zigmodu.RateLimiterRegistry.init(allocator, 20, 1);
+    defer auth_registry.deinit();
+    // WeChat callback flood guard (global token bucket — WeChat pushes from a
+    // shared server pool, so per-IP limiting would misfire on bursts).
+    var wx_limiter = try zigmodu.RateLimiter.init(allocator, "wx-callback", 1000, 20);
+    defer wx_limiter.deinit();
 
     var user_api = user.api.UserApi(@TypeOf(user_svc)).init(&user_svc, default_tenant_id, &audit_svc);
-    var auth_api = auth.api.AuthApi(@TypeOf(user_svc)).init(&user_svc, cfg.app_host, &login_limiter, &mailer, &task_svc, &notify_svc, &audit_svc, &template_svc, default_tenant_id);
+    var auth_api = auth.api.AuthApi(@TypeOf(user_svc)).init(&user_svc, cfg.app_host, &auth_registry, &mailer, &task_svc, &notify_svc, &audit_svc, &template_svc, default_tenant_id);
     var task_api = task.api.TaskApi(@TypeOf(task_svc), @TypeOf(user_svc)).init(&task_svc, &user_svc, &audit_svc);
     var file_api = file.api.FileApi(@TypeOf(file_svc), @TypeOf(user_svc)).init(&file_svc, &user_svc, &audit_svc, default_tenant_id);
     var notify_api = notify.api.NotificationApi(@TypeOf(notify_svc), @TypeOf(user_svc)).init(&notify_svc, &user_svc);
@@ -311,6 +374,9 @@ pub fn main(init: std.process.Init) !void {
     var app_bff_api = app_bff.api.AppBffApi(@TypeOf(account_svc), @TypeOf(module_svc), @TypeOf(user_svc)).init(&account_svc, &module_svc, &user_svc, default_tenant_id);
     var cloud_api = cloud.api.CloudApi(@TypeOf(cloud_svc), @TypeOf(user_svc)).init(&cloud_svc, &user_svc, &audit_svc, default_tenant_id);
     var material_api = material.api.MaterialApi(@TypeOf(material_svc), @TypeOf(user_svc)).init(&material_svc, &user_svc, &audit_svc, default_tenant_id);
+    var checkin_api = checkin.api.CheckinApi(@TypeOf(checkin_svc), @TypeOf(user_svc)).init(&checkin_svc, &user_svc, &audit_svc, default_tenant_id);
+    var menu_api = menu.api.MenuApi(@TypeOf(menu_svc), @TypeOf(user_svc)).init(&menu_svc, &user_svc, &audit_svc, default_tenant_id);
+    var points_api = points.api.PointsApi(@TypeOf(points_svc), @TypeOf(user_svc)).init(&points_svc, &user_svc, &audit_svc, default_tenant_id);
     var audit_api = audit.api.AuditApi(@TypeOf(audit_svc), @TypeOf(user_svc)).init(&audit_svc, &user_svc);
     var mail_template_api = mail_template.api.MailTemplateApi(@TypeOf(template_svc), @TypeOf(user_svc)).init(&template_svc, &user_svc);
     var ai_api = ai.api.AiApi(@TypeOf(ai_svc), @TypeOf(user_svc)).init(&ai_svc, &user_svc);
@@ -343,11 +409,13 @@ pub fn main(init: std.process.Init) !void {
     var access_log = access_log_mod.AccessLog.init(allocator, 4096);
     defer access_log.deinit();
     var metrics = metrics_mod.Metrics.init(io);
-    try server.addMiddleware(zigmodu.http.tracingMiddleware());
+    try server.addMiddleware(real_ip_mod.realIp());
+    try server.addMiddleware(request_log_mod.requestLog());
     try server.addMiddleware(metrics.middleware());
     try server.addMiddleware(sec_headers.securityHeaders());
     try server.addMiddleware(access_log.middleware());
     try server.addMiddleware(zigmodu.http.http_middleware.cors(.{ .allow_origins = origins }));
+    try server.addMiddleware(license_mw.licenseGate(&cloud_svc));
 
     var v1 = server.group("/api/v1");
     try auth_api.registerRoutes(&v1);
@@ -367,6 +435,9 @@ pub fn main(init: std.process.Init) !void {
     try app_bff_api.registerRoutes(&v1);
     try cloud_api.registerRoutes(&v1);
     try material_api.registerRoutes(&v1);
+    try checkin_api.registerRoutes(&v1);
+    try menu_api.registerRoutes(&v1);
+    try points_api.registerRoutes(&v1);
     try audit_api.registerRoutes(&v1);
     try mail_template_api.registerRoutes(&v1);
     try ai_api.registerRoutes(&v1);
@@ -496,7 +567,8 @@ pub fn main(init: std.process.Init) !void {
 
     // WeChat server callback (public, signature-verified inside the service).
     var wx = server.group("/wx");
-    try message_api.registerPublicRoutes(&wx);
+    var wx_limited = try wx.use(zigmodu.http.rateLimitMiddleware(&wx_limiter));
+    try message_api.registerPublicRoutes(&wx_limited);
 
     // Static hosting: serve the built SPA from web/dist (single binary full stack).
     // A server-level middleware short-circuits routing for non-API GET paths.
@@ -526,8 +598,18 @@ pub fn main(init: std.process.Init) !void {
     defer server_handle.join();
 
     const poll = std.posix.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_ms };
+    var last_license_check = zigmodu.time.wallClockSeconds(io);
     while (!ShutdownFlag.requested.load(.acquire)) {
         _ = std.c.nanosleep(&poll, null);
+        // 远端模式下每 24h 重新校验站点授权码（fail-closed）。
+        if (cfg.cloud_remote_url.len > 0) {
+            const now = zigmodu.time.wallClockSeconds(io);
+            if (now - last_license_check >= 24 * 3600) {
+                cloud_svc.checkSiteLicense();
+                last_license_check = now;
+                std.log.info("[cloud] periodic license check: licensed={}", .{cloud_svc.isLicensed()});
+            }
+        }
     }
     std.log.info("shutdown signal received, draining in-flight requests...", .{});
     server.stop();

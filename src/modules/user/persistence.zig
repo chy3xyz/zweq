@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -91,68 +92,54 @@ pub const UserStore = struct {
         tenant_id: i64,
         now: i64,
     ) !i64 {
-        var b = try self.client.user.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("name", name);
-        _ = try b.setFieldValue("email", email);
-        _ = try b.setFieldValue("password", password_hash);
-        _ = try b.setFieldValue("verified", verified);
-        _ = try b.setFieldValue("admin", admin);
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("token_version", @as(i64, 0));
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.user, .{
+            .name = name,
+            .email = email,
+            .password = password_hash,
+            .verified = verified,
+            .admin = admin,
+            .tenant_id = tenant_id,
+            .token_version = @as(i64, 0),
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, UserInfo, &row, self.allocator);
         return row.id;
     }
 
-    /// Bump a user's credential version — invalidates all previously issued
-    /// JWTs (the tokenVersionGuard compares the JWT `ver` claim).
-    pub fn incrementTokenVersion(self: *UserStore, id: i64, now: i64) !void {
+    /// 递增凭证版本(改密/踢下线),使之前签发的 JWT 全部失效。
+    pub fn bumpTokenVersion(self: *UserStore, id: i64, now: i64) !void {
+        const cur = (try self.getUserById(id)) orelse return error.UserNotFound;
+        defer cur.free(self.allocator);
         const preds = self.client.user.predicates;
-        var upd = self.client.user.Update();
-        defer upd.deinit();
-        // 读当前值再 +1(简单场景;并发安全由口令变更的低频性兜底)
-        const row_opt = try self.getUserById(id);
-        const row = row_opt orelse return;
-        defer row.free(self.allocator);
-        _ = try upd.set("token_version", .{ .int = row.token_version + 1 });
-        _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try upd.Save();
+        _ = try crud.update(self.client.user, .{
+            .token_version = cur.token_version + 1,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
+    }
+
+    pub fn incrementTokenVersion(self: *UserStore, id: i64, now: i64) !void {
+        return self.bumpTokenVersion(id, now) catch {};
     }
 
     pub fn getUserById(self: *UserStore, id: i64) !?UserRow {
-        var q = self.client.user.Query();
-        defer q.deinit();
         const preds = self.client.user.predicates;
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.user, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, UserInfo, &entity, self.allocator);
         return try self.dupUser(entity);
     }
 
     pub fn getUserByEmail(self: *UserStore, email: []const u8) !?UserRow {
-        var q = self.client.user.Query();
-        defer q.deinit();
         const preds = self.client.user.predicates;
-        _ = try q.Where(.{preds.emailEQ(.{ .string = email })});
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.user, .{preds.emailEQ(.{ .string = email })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, UserInfo, &entity, self.allocator);
         return try self.dupUser(entity);
     }
 
     /// Fetch the stored password hash for a user (sensitive field is not in UserRow).
     pub fn getPasswordHashById(self: *UserStore, id: i64) !?[]const u8 {
-        var q = self.client.user.Query();
-        defer q.deinit();
         const preds = self.client.user.predicates;
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.user, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, UserInfo, &entity, self.allocator);
         return try self.allocator.dupe(u8, entity.password);
     }

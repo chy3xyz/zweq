@@ -7,6 +7,7 @@ const std = @import("std");
 const zigmodu = @import("zigmodu");
 const http = zigmodu.http;
 const mw = @import("../../middleware/auth.zig");
+const mw_rate = @import("../../middleware/rate_limit.zig");
 const user_service = @import("../user/service.zig");
 const task_service = @import("../task/service.zig");
 const notify_service = @import("../notify/service.zig");
@@ -81,7 +82,7 @@ pub fn AuthApi(comptime Service: type) type {
         const Self = @This();
         svc: *Service,
         app_host: []const u8,
-        limiter: *zigmodu.RateLimiter,
+        registry: *zigmodu.RateLimiterRegistry,
         mailer: *const mail.Mailer,
         task_svc: *task_service.TaskService,
         notify_svc: *notify_service.NotificationService,
@@ -92,7 +93,7 @@ pub fn AuthApi(comptime Service: type) type {
         pub fn init(
             svc: *Service,
             app_host: []const u8,
-            limiter: *zigmodu.RateLimiter,
+            registry: *zigmodu.RateLimiterRegistry,
             mailer: *const mail.Mailer,
             task_svc: *task_service.TaskService,
             notify_svc: *notify_service.NotificationService,
@@ -103,7 +104,7 @@ pub fn AuthApi(comptime Service: type) type {
             return .{
                 .svc = svc,
                 .app_host = app_host,
-                .limiter = limiter,
+                .registry = registry,
                 .mailer = mailer,
                 .task_svc = task_svc,
                 .notify_svc = notify_svc,
@@ -114,9 +115,9 @@ pub fn AuthApi(comptime Service: type) type {
         }
 
         pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            // Public routes are rate-limited to blunt credential stuffing /
-            // reset-token brute force.
-            var limited = try group.use(zigmodu.http.rateLimitMiddleware(self.limiter));
+            // Public routes are per-IP rate-limited to blunt credential
+            // stuffing / reset-token brute force without starving other users.
+            var limited = try group.use(mw_rate.perIpRateLimit(self.registry, 20, 1));
             try limited.post("/auth/register", register, @ptrCast(@alignCast(self)));
             try limited.post("/auth/login", login, @ptrCast(@alignCast(self)));
             try limited.post("/auth/logout", logout, @ptrCast(@alignCast(self)));

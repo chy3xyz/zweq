@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -68,11 +69,13 @@ pub const MessageRow = struct {
     session_id: i64,
     role: []const u8,
     content: []const u8,
+    reasoning_content: []const u8,
     created_at: i64,
 
     pub fn free(self: MessageRow, allocator: std.mem.Allocator) void {
         allocator.free(self.role);
         allocator.free(self.content);
+        allocator.free(self.reasoning_content);
     }
 };
 
@@ -101,8 +104,12 @@ pub const RunRow = struct {
     tenant_id: i64,
     kind: []const u8,
     prompt: []const u8,
+    model: []const u8,
     tokens_in: i64,
     tokens_out: i64,
+    steps: i64,
+    tool_calls: i64,
+    tool_errors: i64,
     status: []const u8,
     err: []const u8,
     created_at: i64,
@@ -110,6 +117,7 @@ pub const RunRow = struct {
     pub fn free(self: RunRow, allocator: std.mem.Allocator) void {
         allocator.free(self.kind);
         allocator.free(self.prompt);
+        allocator.free(self.model);
         allocator.free(self.status);
         allocator.free(self.err);
     }
@@ -220,11 +228,14 @@ pub const AiStore = struct {
         errdefer self.allocator.free(role);
         const content = try self.allocator.dupe(u8, e.content);
         errdefer self.allocator.free(content);
+        const reasoning = try self.allocator.dupe(u8, e.reasoning_content);
+        errdefer self.allocator.free(reasoning);
         return .{
             .id = e.id,
             .session_id = e.session_id,
             .role = role,
             .content = content,
+            .reasoning_content = reasoning,
             .created_at = e.created_at orelse 0,
         };
     }
@@ -254,6 +265,8 @@ pub const AiStore = struct {
         errdefer self.allocator.free(kind);
         const prompt = try self.allocator.dupe(u8, e.prompt);
         errdefer self.allocator.free(prompt);
+        const model_name = try self.allocator.dupe(u8, e.model);
+        errdefer self.allocator.free(model_name);
         const status = try self.allocator.dupe(u8, e.status);
         errdefer self.allocator.free(status);
         const err = try self.allocator.dupe(u8, e.err_msg);
@@ -265,8 +278,12 @@ pub const AiStore = struct {
             .tenant_id = e.tenant_id,
             .kind = kind,
             .prompt = prompt,
+            .model = model_name,
             .tokens_in = e.tokens_in,
             .tokens_out = e.tokens_out,
+            .steps = e.steps,
+            .tool_calls = e.tool_calls,
+            .tool_errors = e.tool_errors,
             .status = status,
             .err = err,
             .created_at = e.created_at orelse 0,
@@ -276,34 +293,31 @@ pub const AiStore = struct {
     // ── Providers ──
 
     pub fn createProvider(self: *AiStore, name: []const u8, endpoint: []const u8, api_keys_encrypted: []const u8, models: []const u8, fallback_providers: []const u8, enabled: bool, now: i64) !i64 {
-        var b = try self.client.ai_provider.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("name", name);
-        _ = try b.setFieldValue("endpoint", endpoint);
-        _ = try b.setFieldValue("api_keys_encrypted", api_keys_encrypted);
-        _ = try b.setFieldValue("models", models);
-        _ = try b.setFieldValue("fallback_providers", fallback_providers);
-        _ = try b.setFieldValue("enabled", enabled);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.ai_provider, .{
+            .name = name,
+            .endpoint = endpoint,
+            .api_keys_encrypted = api_keys_encrypted,
+            .models = models,
+            .fallback_providers = fallback_providers,
+            .enabled = enabled,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, ProviderInfo, &row, self.allocator);
         return row.id;
     }
 
     pub fn updateProvider(self: *AiStore, id: i64, name: []const u8, endpoint: []const u8, api_keys_encrypted: []const u8, models: []const u8, fallback_providers: []const u8, enabled: bool, now: i64) !void {
         const preds = self.client.ai_provider.predicates;
-        var upd = self.client.ai_provider.Update();
-        defer upd.deinit();
-        _ = try upd.setFieldValue("name", name);
-        _ = try upd.setFieldValue("endpoint", endpoint);
-        _ = try upd.setFieldValue("api_keys_encrypted", api_keys_encrypted);
-        _ = try upd.setFieldValue("models", models);
-        _ = try upd.setFieldValue("fallback_providers", fallback_providers);
-        _ = try upd.setFieldValue("enabled", enabled);
-        _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try upd.Save();
+        _ = try crud.update(self.client.ai_provider, .{
+            .name = name,
+            .endpoint = endpoint,
+            .api_keys_encrypted = api_keys_encrypted,
+            .models = models,
+            .fallback_providers = fallback_providers,
+            .enabled = enabled,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
     }
 
     pub fn listProviders(self: *AiStore, page: usize, page_size: usize) !ProviderListResult {
@@ -327,53 +341,33 @@ pub const AiStore = struct {
 
     pub fn getProvider(self: *AiStore, id: i64) !?ProviderRow {
         const preds = self.client.ai_provider.predicates;
-        var q = self.client.ai_provider.Query();
-        defer q.deinit();
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
-        _ = q.Limit(1);
-        var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ProviderInfo, e, self.allocator);
-            rows.deinit();
-        }
-        if (rows.items.len == 0) return null;
-        return try self.dupProvider(rows.items[0]);
+        var entity = (try crud.first(self.client.ai_provider, .{preds.idEQ(.{ .int = id })})) orelse return null;
+        defer zent.codegen.deinitEntity(infos, ProviderInfo, &entity, self.allocator);
+        return try self.dupProvider(entity);
     }
 
     pub fn getProviderByName(self: *AiStore, name: []const u8) !?ProviderRow {
         const preds = self.client.ai_provider.predicates;
-        var q = self.client.ai_provider.Query();
-        defer q.deinit();
-        _ = try q.Where(.{preds.nameEQ(.{ .string = name })});
-        _ = q.Limit(1);
-        var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ProviderInfo, e, self.allocator);
-            rows.deinit();
-        }
-        if (rows.items.len == 0) return null;
-        return try self.dupProvider(rows.items[0]);
+        var entity = (try crud.first(self.client.ai_provider, .{preds.nameEQ(.{ .string = name })})) orelse return null;
+        defer zent.codegen.deinitEntity(infos, ProviderInfo, &entity, self.allocator);
+        return try self.dupProvider(entity);
     }
 
     pub fn deleteProvider(self: *AiStore, id: i64) !void {
         const preds = self.client.ai_provider.predicates;
-        var d = self.client.ai_provider.Delete();
-        defer d.deinit();
-        _ = try d.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try d.Exec();
+        _ = try crud.delete(self.client.ai_provider, .{preds.idEQ(.{ .int = id })});
     }
 
     // ── Sessions ──
 
     pub fn createSession(self: *AiStore, user_id: i64, tenant_id: i64, title: []const u8, now: i64) !i64 {
-        var b = try self.client.ai_session.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("user_id", user_id);
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("title", title);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.ai_session, .{
+            .user_id = user_id,
+            .tenant_id = tenant_id,
+            .title = title,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, SessionInfo, &row, self.allocator);
         return row.id;
     }
@@ -401,49 +395,32 @@ pub const AiStore = struct {
 
     pub fn getSession(self: *AiStore, id: i64, user_id: i64) !?SessionRow {
         const preds = self.client.ai_session.predicates;
-        var q = self.client.ai_session.Query();
-        defer q.deinit();
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try q.Where(.{preds.user_idEQ(.{ .int = user_id })});
-        _ = q.Limit(1);
-        var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, SessionInfo, e, self.allocator);
-            rows.deinit();
-        }
-        if (rows.items.len == 0) return null;
-        return try self.dupSession(rows.items[0]);
+        var entity = (try crud.first(self.client.ai_session, .{ preds.idEQ(.{ .int = id }), preds.user_idEQ(.{ .int = user_id }) })) orelse return null;
+        defer zent.codegen.deinitEntity(infos, SessionInfo, &entity, self.allocator);
+        return try self.dupSession(entity);
     }
 
     pub fn touchSession(self: *AiStore, id: i64, now: i64) !void {
         const preds = self.client.ai_session.predicates;
-        var upd = self.client.ai_session.Update();
-        defer upd.deinit();
-        _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try upd.Save();
+        _ = try crud.update(self.client.ai_session, .{ .updated_at = now }, .{preds.idEQ(.{ .int = id })});
     }
 
     pub fn deleteSession(self: *AiStore, id: i64, user_id: i64) !bool {
         const preds = self.client.ai_session.predicates;
-        var d = self.client.ai_session.Delete();
-        defer d.deinit();
-        _ = try d.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try d.Where(.{preds.user_idEQ(.{ .int = user_id })});
-        _ = try d.Exec();
+        _ = try crud.delete(self.client.ai_session, .{ preds.idEQ(.{ .int = id }), preds.user_idEQ(.{ .int = user_id }) });
         return true;
     }
 
     // ── Messages ──
 
-    pub fn addMessage(self: *AiStore, session_id: i64, role: []const u8, content: []const u8, now: i64) !i64 {
-        var b = try self.client.ai_message.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("session_id", session_id);
-        _ = try b.setFieldValue("role", role);
-        _ = try b.setFieldValue("content", content);
-        _ = try b.setFieldValue("created_at", now);
-        var row = try b.Save();
+    pub fn addMessage(self: *AiStore, session_id: i64, role: []const u8, content: []const u8, reasoning_content: []const u8, now: i64) !i64 {
+        var row = try crud.create(self.client.ai_message, .{
+            .session_id = session_id,
+            .role = role,
+            .content = content,
+            .reasoning_content = reasoning_content,
+            .created_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, MessageInfo, &row, self.allocator);
         return row.id;
     }
@@ -472,17 +449,16 @@ pub const AiStore = struct {
     // ── Approvals ──
 
     pub fn createApproval(self: *AiStore, session_id: i64, requested_by: i64, skill_name: []const u8, args: []const u8, now: i64) !i64 {
-        var b = try self.client.ai_approval.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("session_id", session_id);
-        _ = try b.setFieldValue("requested_by", requested_by);
-        _ = try b.setFieldValue("skill_name", skill_name);
-        _ = try b.setFieldValue("args", args);
-        _ = try b.setFieldValue("status", "pending");
-        _ = try b.setFieldValue("approved_by", 0);
-        _ = try b.setFieldValue("approved_at", 0);
-        _ = try b.setFieldValue("created_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.ai_approval, .{
+            .session_id = session_id,
+            .requested_by = requested_by,
+            .skill_name = skill_name,
+            .args = args,
+            .status = "pending",
+            .approved_by = @as(i64, 0),
+            .approved_at = @as(i64, 0),
+            .created_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, ApprovalInfo, &row, self.allocator);
         return row.id;
     }
@@ -514,48 +490,40 @@ pub const AiStore = struct {
 
     pub fn getApproval(self: *AiStore, id: i64) !?ApprovalRow {
         const preds = self.client.ai_approval.predicates;
-        var q = self.client.ai_approval.Query();
-        defer q.deinit();
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
-        _ = q.Limit(1);
-        var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ApprovalInfo, e, self.allocator);
-            rows.deinit();
-        }
-        if (rows.items.len == 0) return null;
-        return try self.dupApproval(rows.items[0]);
+        var entity = (try crud.first(self.client.ai_approval, .{preds.idEQ(.{ .int = id })})) orelse return null;
+        defer zent.codegen.deinitEntity(infos, ApprovalInfo, &entity, self.allocator);
+        return try self.dupApproval(entity);
     }
 
     /// 乐观锁:仅当仍为 pending 时更新,返回受影响行数(0 = 已被并发处理)。
     pub fn resolveApproval(self: *AiStore, id: i64, status: []const u8, approved_by: i64, now: i64) !usize {
         const preds = self.client.ai_approval.predicates;
-        var upd = self.client.ai_approval.Update();
-        defer upd.deinit();
-        _ = try upd.setFieldValue("status", status);
-        _ = try upd.setFieldValue("approved_by", approved_by);
-        _ = try upd.setFieldValue("approved_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try upd.Where(.{preds.statusEQ(.{ .string = "pending" })});
-        return try upd.Save();
+        return crud.update(self.client.ai_approval, .{
+            .status = status,
+            .approved_by = approved_by,
+            .approved_at = now,
+        }, .{ preds.idEQ(.{ .int = id }), preds.statusEQ(.{ .string = "pending" }) });
     }
 
     // ── Runs (audit / metrics / quota) ──
 
-    pub fn createRun(self: *AiStore, session_id: i64, user_id: i64, tenant_id: i64, kind: []const u8, prompt: []const u8, tokens_in: i64, tokens_out: i64, status: []const u8, err: []const u8, now: i64) !i64 {
-        var b = try self.client.ai_run.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("session_id", session_id);
-        _ = try b.setFieldValue("user_id", user_id);
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("kind", kind);
-        _ = try b.setFieldValue("prompt", prompt);
-        _ = try b.setFieldValue("tokens_in", tokens_in);
-        _ = try b.setFieldValue("tokens_out", tokens_out);
-        _ = try b.setFieldValue("status", status);
-        _ = try b.setFieldValue("err_msg", err);
-        _ = try b.setFieldValue("created_at", now);
-        var row = try b.Save();
+    pub fn createRun(self: *AiStore, session_id: i64, user_id: i64, tenant_id: i64, kind: []const u8, prompt: []const u8, model_name: []const u8, tokens_in: i64, tokens_out: i64, steps: i64, tool_calls: i64, tool_errors: i64, status: []const u8, err: []const u8, now: i64) !i64 {
+        var row = try crud.create(self.client.ai_run, .{
+            .session_id = session_id,
+            .user_id = user_id,
+            .tenant_id = tenant_id,
+            .kind = kind,
+            .prompt = prompt,
+            .model = model_name,
+            .tokens_in = tokens_in,
+            .tokens_out = tokens_out,
+            .steps = steps,
+            .tool_calls = tool_calls,
+            .tool_errors = tool_errors,
+            .status = status,
+            .err_msg = err,
+            .created_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, RunInfo, &row, self.allocator);
         return row.id;
     }

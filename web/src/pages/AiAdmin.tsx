@@ -1,6 +1,7 @@
 import { createSignal, For, Show } from 'solid-js';
 
 import {
+  checkAiProvider,
   createAiProvider,
   deleteAiProvider,
   listAiApprovals,
@@ -37,6 +38,8 @@ function AiAdmin() {
 
   const [workflow, setWorkflow] = createSignal<AiWorkflowResult | null>(null);
   const [wfBusy, setWfBusy] = createSignal(false);
+  const [checkingId, setCheckingId] = createSignal<number | null>(null);
+  const [checkResult, setCheckResult] = createSignal<{ id: number; ok: boolean; msg: string } | null>(null);
 
   const loadProviders = async () => {
     try {
@@ -134,6 +137,19 @@ function AiAdmin() {
     }
   };
 
+  const onCheckProvider = async (p: AiProviderItem) => {
+    setCheckingId(p.id);
+    setCheckResult(null);
+    try {
+      await checkAiProvider(p.id);
+      setCheckResult({ id: p.id, ok: true, msg: '连接正常' });
+    } catch (err) {
+      setCheckResult({ id: p.id, ok: false, msg: toApiError(err).message });
+    } finally {
+      setCheckingId(null);
+    }
+  };
+
   const onResolve = async (a: AiApprovalItem, action: 'approve' | 'reject') => {
     try {
       await resolveAiApproval(a.id, action);
@@ -155,31 +171,48 @@ function AiAdmin() {
     }
   };
 
+  // 初始加载
+  void loadProviders();
+
   return (
     <div class="space-y-4">
       <div class="flex items-center justify-between">
         <div>
-          <h2 class="text-xl font-semibold">AI 管理</h2>
-          <p class="text-sm text-base-content/60">Provider、审批、运行记录与工作流</p>
-        </div>
-        <div class="tabs tabs-boxed">
-          <button type="button" class={`tab tab-sm ${tab() === 'providers' ? 'tab-active' : ''}`} onClick={() => switchTab('providers')}>
-            Provider
-          </button>
-          <button type="button" class={`tab tab-sm ${tab() === 'approvals' ? 'tab-active' : ''}`} onClick={() => switchTab('approvals')}>
-            审批
-          </button>
-          <button type="button" class={`tab tab-sm ${tab() === 'runs' ? 'tab-active' : ''}`} onClick={() => switchTab('runs')}>
-            运行记录
-          </button>
-          <button type="button" class={`tab tab-sm ${tab() === 'workflow' ? 'tab-active' : ''}`} onClick={() => switchTab('workflow')}>
-            工作流
-          </button>
+          <h2 class="text-xl font-semibold">AI 助手管理</h2>
+          <p class="text-sm text-base-content/60">AI Provider 配置、人工审批队列与运行记录</p>
         </div>
       </div>
 
+      {/* Tabs */}
+      <div class="tabs tabs-lift">
+        <button
+          type="button"
+          class={`tab ${tab() === 'providers' ? 'tab-active' : ''}`}
+          onClick={() => switchTab('providers')}
+        >
+          Providers
+        </button>
+        <button
+          type="button"
+          class={`tab ${tab() === 'approvals' ? 'tab-active' : ''}`}
+          onClick={() => switchTab('approvals')}
+        >
+          待审批 ({approvals().length})
+        </button>
+        <button type="button" class={`tab ${tab() === 'runs' ? 'tab-active' : ''}`} onClick={() => switchTab('runs')}>
+          运行日志
+        </button>
+        <button
+          type="button"
+          class={`tab ${tab() === 'workflow' ? 'tab-active' : ''}`}
+          onClick={() => switchTab('workflow')}
+        >
+          演示工作流
+        </button>
+      </div>
+
       <Show when={error()}>
-        <div role="alert" class="alert alert-error py-2 text-sm">
+        <div role="alert" class="alert alert-error text-sm">
           {error()}
         </div>
       </Show>
@@ -188,9 +221,10 @@ function AiAdmin() {
         <div class="space-y-3">
           <div class="flex justify-end">
             <button type="button" class="btn btn-primary btn-sm" onClick={openCreate}>
-              新建 Provider
+              新增 Provider
             </button>
           </div>
+
           <div class="overflow-x-auto rounded-lg border border-base-300">
             <table class="table">
               <thead>
@@ -222,6 +256,9 @@ function AiAdmin() {
                       </td>
                       <td class="text-right">
                         <div class="flex justify-end gap-1">
+                          <button type="button" class="btn btn-outline btn-xs" disabled={checkingId() === p.id} onClick={() => onCheckProvider(p)}>
+                            {checkingId() === p.id ? '测试中…' : '测试'}
+                          </button>
                           <button type="button" class="btn btn-outline btn-xs" onClick={() => openEdit(p)}>
                             编辑
                           </button>
@@ -244,6 +281,13 @@ function AiAdmin() {
             </table>
           </div>
         </div>
+        <Show when={checkResult()}>
+          {(r) => (
+            <div role="alert" class={`alert py-2 text-sm ${r().ok ? 'alert-success' : 'alert-error'}`}>
+              Provider #{r().id}: {r().msg}
+            </div>
+          )}
+        </Show>
       </Show>
 
       <Show when={tab() === 'approvals'}>
@@ -307,7 +351,9 @@ function AiAdmin() {
                 <th>ID</th>
                 <th>用户</th>
                 <th>类型</th>
+                <th>模型</th>
                 <th>提示词</th>
+                <th>用量</th>
                 <th>状态</th>
                 <th>时间</th>
               </tr>
@@ -319,7 +365,12 @@ function AiAdmin() {
                     <td class="font-mono text-xs">{r.id}</td>
                     <td class="font-mono text-xs">{r.user_id}</td>
                     <td class="text-sm">{r.kind}</td>
+                    <td class="font-mono text-xs text-base-content/70">{r.model || '-'}</td>
                     <td class="max-w-xs truncate text-sm text-base-content/70">{r.prompt}</td>
+                    <td class="text-xs text-base-content/70">
+                      {(r.tokens_in || 0) > 0 || (r.tokens_out || 0) > 0 ? `${r.tokens_in || 0}→${r.tokens_out || 0} tok` : '—'}
+                      {(r.steps || 0) > 0 || (r.tool_calls || 0) > 0 ? ` · ${r.steps || 0}步/${r.tool_calls || 0}工具${(r.tool_errors || 0) > 0 ? `/${r.tool_errors}错` : ''}` : ''}
+                    </td>
                     <td>
                       <span class={`badge badge-sm ${r.status === 'ok' ? 'badge-success' : 'badge-warning'}`}>{r.status}</span>
                     </td>
@@ -329,7 +380,7 @@ function AiAdmin() {
               </For>
               <Show when={runs().length === 0}>
                 <tr>
-                  <td colspan={6} class="py-8 text-center text-base-content/50">
+                  <td colspan={8} class="py-8 text-center text-base-content/50">
                     暂无运行记录
                   </td>
                 </tr>
@@ -350,62 +401,81 @@ function AiAdmin() {
             </button>
           </div>
           <Show when={workflow()}>
-            {(wf) => (
-              <div class="space-y-2">
-                <div>
-                  状态:
-                  <span class="badge badge-sm badge-ghost ml-2">{wf().status}</span>
-                </div>
-                <For each={wf().steps}>
-                  {(s) => (
-                    <div class="rounded-lg border border-base-300 p-3">
-                      <div class="flex items-center justify-between">
-                        <span class="font-mono text-sm">{s.name}</span>
-                        <span class="badge badge-sm badge-ghost">{s.status}</span>
-                      </div>
-                      <pre class="mt-2 overflow-x-auto rounded bg-base-200 p-2 text-xs whitespace-pre-wrap">
-                        {s.output}
-                      </pre>
-                    </div>
-                  )}
-                </For>
-              </div>
-            )}
+            <div class="rounded-lg border border-base-300 p-4 space-y-2">
+              <p class="text-sm font-semibold">执行状态: {workflow()!.status}</p>
+              <For each={workflow()!.steps}>
+                {(s) => (
+                  <div class="text-xs font-mono bg-base-200 p-2 rounded">
+                    <div>步骤: {s.name} ({s.status})</div>
+                    <pre class="mt-1 whitespace-pre-wrap">{s.output}</pre>
+                  </div>
+                )}
+              </For>
+            </div>
           </Show>
         </div>
       </Show>
 
+      {/* Modal */}
       <Show when={formOpen()}>
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div class="w-full max-w-lg rounded-lg border border-base-300 bg-base-100 p-5 shadow-xl">
-            <div class="mb-4 flex items-center justify-between">
-              <h3 class="text-lg font-semibold">{editing() ? '编辑 Provider' : '新建 Provider'}</h3>
-              <button type="button" class="btn btn-ghost btn-sm" onClick={() => setFormOpen(false)} aria-label="关闭">
-                ✕
-              </button>
+        <div class="modal modal-open">
+          <div class="modal-box">
+            <h3 class="font-bold text-lg">{editing() ? '编辑 Provider' : '新增 Provider'}</h3>
+            <div class="py-4 space-y-3">
+              <div>
+                <label class="label text-sm">名称</label>
+                <input
+                  type="text"
+                  class="input input-bordered input-sm w-full"
+                  placeholder="例如: OpenAI Main"
+                  value={name()}
+                  onInput={(e) => setName(e.currentTarget.value)}
+                />
+              </div>
+              <div>
+                <label class="label text-sm">Base URL 端点</label>
+                <input
+                  type="text"
+                  class="input input-bordered input-sm w-full font-mono text-xs"
+                  placeholder="例如: https://api.openai.com/v1"
+                  value={endpoint()}
+                  onInput={(e) => setEndpoint(e.currentTarget.value)}
+                />
+              </div>
+              <div>
+                <label class="label text-sm">API 密钥 ({editing() ? '留空表示保持原密钥' : '必填'})</label>
+                <input
+                  type="password"
+                  class="input input-bordered input-sm w-full font-mono text-xs"
+                  placeholder="sk-..."
+                  value={apiKeys()}
+                  onInput={(e) => setApiKeys(e.currentTarget.value)}
+                />
+              </div>
+              <div>
+                <label class="label text-sm">可用模型 (逗号分隔)</label>
+                <input
+                  type="text"
+                  class="input input-bordered input-sm w-full font-mono text-xs"
+                  placeholder="gpt-4o,gpt-4o-mini"
+                  value={models()}
+                  onInput={(e) => setModels(e.currentTarget.value)}
+                />
+              </div>
+              <div class="form-control">
+                <label class="label cursor-pointer justify-start gap-2">
+                  <input
+                    type="checkbox"
+                    class="checkbox checkbox-sm"
+                    checked={enabled()}
+                    onChange={(e) => setEnabled(e.currentTarget.checked)}
+                  />
+                  <span class="label-text">启用该 Provider</span>
+                </label>
+              </div>
             </div>
-
-            <label class="block text-sm font-medium text-base-content/70">名称(唯一)</label>
-            <input type="text" class="input input-bordered input-sm mt-1 w-full" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
-
-            <label class="mt-3 block text-sm font-medium text-base-content/70">端点(OpenAI 兼容)</label>
-            <input type="text" class="input input-bordered input-sm mt-1 w-full font-mono" placeholder="https://api.openai.com/v1/chat/completions" value={endpoint()} onInput={(e) => setEndpoint(e.currentTarget.value)} />
-
-            <label class="mt-3 block text-sm font-medium text-base-content/70">
-              API 密钥(JSON 数组,如 [{'"'}sk-abc{'"'}]);编辑留空则保持原密钥
-            </label>
-            <input type="password" class="input input-bordered input-sm mt-1 w-full font-mono" value={apiKeys()} onInput={(e) => setApiKeys(e.currentTarget.value)} />
-
-            <label class="mt-3 block text-sm font-medium text-base-content/70">模型(逗号分隔)</label>
-            <input type="text" class="input input-bordered input-sm mt-1 w-full" placeholder="gpt-4o-mini,deepseek-v4-flash" value={models()} onInput={(e) => setModels(e.currentTarget.value)} />
-
-            <label class="mt-3 flex items-center gap-2 text-sm">
-              <input type="checkbox" class="checkbox checkbox-sm" checked={enabled()} onChange={(e) => setEnabled(e.currentTarget.checked)} />
-              启用
-            </label>
-
-            <div class="mt-5 flex justify-end gap-2">
-              <button type="button" class="btn btn-ghost btn-sm" onClick={() => setFormOpen(false)}>
+            <div class="modal-action">
+              <button type="button" class="btn btn-sm" onClick={() => setFormOpen(false)}>
                 取消
               </button>
               <button type="button" class="btn btn-primary btn-sm" onClick={() => void onSaveProvider()}>

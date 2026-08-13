@@ -20,6 +20,8 @@ pub const PaymentError = error{
     WithdrawInsufficient,
     InvalidPayConfig,
     PrepayFailed,
+    RefundFailed,
+    TransferFailed,
     Unexpected,
 };
 
@@ -33,17 +35,42 @@ pub const PayConfig = struct {
     platform_cert: []const u8 = "",
 
     pub fn deinit(self: PayConfig, allocator: std.mem.Allocator) void {
-        allocator.free(self.mch_id);
-        allocator.free(self.app_id);
-        allocator.free(self.serial_no);
-        allocator.free(self.private_key_pem);
-        allocator.free(self.notify_url);
-        allocator.free(self.platform_cert);
+        // 仅 free 实际 dupe 过的字段（readPayConfig 只 dupe 非空值；
+        // 未配置字段保持 "" 字面量，free 会崩溃）。
+        if (self.mch_id.len > 0) allocator.free(self.mch_id);
+        if (self.app_id.len > 0) allocator.free(self.app_id);
+        if (self.serial_no.len > 0) allocator.free(self.serial_no);
+        if (self.private_key_pem.len > 0) allocator.free(self.private_key_pem);
+        if (self.notify_url.len > 0) allocator.free(self.notify_url);
+        if (self.platform_cert.len > 0) allocator.free(self.platform_cert);
+    }
+};
+
+/// V2 商户配置（退款 / 企业付款等 mTLS 接口用，从站点设置读）。
+pub const PayV2Config = struct {
+    app_id: []const u8 = "",
+    mch_id: []const u8 = "",
+    key: []const u8 = "",
+    notify_url: []const u8 = "",
+    /// 商户证书 P12 文件路径（mTLS 双向认证；密码 = mch_id）。
+    root_ca: []const u8 = "",
+
+    pub fn deinit(self: PayV2Config, allocator: std.mem.Allocator) void {
+        // 仅 free 实际 dupe 过的字段（readPayV2Config 只 dupe 非空值）。
+        if (self.app_id.len > 0) allocator.free(self.app_id);
+        if (self.mch_id.len > 0) allocator.free(self.mch_id);
+        if (self.key.len > 0) allocator.free(self.key);
+        if (self.notify_url.len > 0) allocator.free(self.notify_url);
+        if (self.root_ca.len > 0) allocator.free(self.root_ca);
     }
 };
 
 const JSAPI_ORDER_URL = "https://api.mch.weixin.qq.com/v3/pay/transactions/jsapi";
 const JSAPI_ORDER_PATH = "/v3/pay/transactions/jsapi";
+const REFUND_URL = "https://api.mch.weixin.qq.com/v3/refund/domestic/refunds";
+const REFUND_PATH = "/v3/refund/domestic/refunds";
+const TRANSFER_URL = "https://api.mch.weixin.qq.com/v3/transfer/batches";
+const TRANSFER_PATH = "/v3/transfer/batches";
 
 /// A prepared JSAPI unified-order request (caller frees).
 pub const PrepayRequest = struct {
@@ -196,6 +223,134 @@ pub const PaymentService = struct {
         const row = row_opt orelse return error.OrderNotFound;
         allocator.free(order_no);
         return row;
+    }
+
+    /// 构造 v3 退款请求（url/body/auth，无网络）。可单测。
+    pub fn buildRefundV3Request(self: *PaymentService, allocator: std.mem.Allocator, cfg: PayConfig, out_trade_no: []const u8, out_refund_no: []const u8, refund_amount: i64, total_amount: i64) PaymentError!PrepayRequest {
+        _ = self;
+        const body = std.fmt.allocPrint(
+            allocator,
+            "{{\"out_trade_no\":\"{s}\",\"out_refund_no\":\"{s}\",\"amount\":{{\"refund\":{d},\"total\":{d},\"currency\":\"CNY\"}}}}",
+            .{ out_trade_no, out_refund_no, refund_amount, total_amount },
+        ) catch return error.PrepayFailed;
+        errdefer allocator.free(body);
+        const v3cfg = zwechat.pay.v3.Config{
+            .app_id = cfg.app_id,
+            .mch_id = cfg.mch_id,
+            .serial_no = cfg.serial_no,
+            .private_key_pem = cfg.private_key_pem,
+            .notify_url = cfg.notify_url,
+        };
+        var sig = zwechat.pay.v3.signer.buildAuthorizationHeader(allocator, v3cfg, "POST", REFUND_PATH, body) catch return error.PrepayFailed;
+        defer sig.deinit(allocator);
+        const auth = allocator.dupe(u8, sig.authorization) catch return error.PrepayFailed;
+        errdefer allocator.free(auth);
+        const url = allocator.dupe(u8, REFUND_URL) catch return error.PrepayFailed;
+        return .{ .url = url, .body = body, .auth = auth };
+    }
+
+    /// v3 退款（refund/domestic/refunds）。需商户证书配置。
+    pub fn refundV3(self: *PaymentService, allocator: std.mem.Allocator, cfg: PayConfig, out_trade_no: []const u8, out_refund_no: []const u8, refund_amount: i64, total_amount: i64) PaymentError!void {
+        if (cfg.mch_id.len == 0 or cfg.serial_no.len == 0 or cfg.private_key_pem.len == 0) return error.InvalidPayConfig;
+        var req_data = self.buildRefundV3Request(allocator, cfg, out_trade_no, out_refund_no, refund_amount, total_amount) catch return error.PrepayFailed;
+        defer req_data.deinit(allocator);
+
+        var client = zigmodu.http.HttpClient.init(allocator, self.io, 4, 10_000);
+        defer client.deinit();
+        var req = zigmodu.http.HttpClient.HttpRequest.init(allocator, "POST", req_data.url);
+        defer req.deinit();
+        req.setHeader("Authorization", req_data.auth) catch return error.PrepayFailed;
+        req.setHeader("Content-Type", "application/json") catch return error.PrepayFailed;
+        req.setBody(req_data.body) catch return error.PrepayFailed;
+        var resp = client.request(req) catch return error.PrepayFailed;
+        defer resp.deinit();
+        if (!resp.isSuccess()) return error.PrepayFailed;
+    }
+
+    /// 构造 v3 商家转账请求（transfer/batches，无网络）。可单测。
+    pub fn buildTransferV3Request(self: *PaymentService, allocator: std.mem.Allocator, cfg: PayConfig, openid: []const u8, amount: i64, out_batch_no: []const u8, out_detail_no: []const u8, remark: []const u8) PaymentError!PrepayRequest {
+        _ = self;
+        const body = std.fmt.allocPrint(
+            allocator,
+            "{{\"appid\":\"{s}\",\"out_batch_no\":\"{s}\",\"batch_name\":\"zweq transfer\",\"batch_remark\":\"{s}\",\"total_amount\":{d},\"total_num\":1,\"transfer_detail_list\":[{{\"out_detail_no\":\"{s}\",\"transfer_amount\":{d},\"transfer_remark\":\"{s}\",\"openid\":\"{s}\"}}]}}",
+            .{ cfg.app_id, out_batch_no, remark, amount, out_detail_no, amount, remark, openid },
+        ) catch return error.PrepayFailed;
+        errdefer allocator.free(body);
+        const v3cfg = zwechat.pay.v3.Config{
+            .app_id = cfg.app_id,
+            .mch_id = cfg.mch_id,
+            .serial_no = cfg.serial_no,
+            .private_key_pem = cfg.private_key_pem,
+            .notify_url = cfg.notify_url,
+        };
+        var sig = zwechat.pay.v3.signer.buildAuthorizationHeader(allocator, v3cfg, "POST", TRANSFER_PATH, body) catch return error.PrepayFailed;
+        defer sig.deinit(allocator);
+        const auth = allocator.dupe(u8, sig.authorization) catch return error.PrepayFailed;
+        errdefer allocator.free(auth);
+        const url = allocator.dupe(u8, TRANSFER_URL) catch return error.PrepayFailed;
+        return .{ .url = url, .body = body, .auth = auth };
+    }
+
+    /// v3 商家转账到零钱（transfer/batches）。需商户证书配置。
+    pub fn transferV3(self: *PaymentService, allocator: std.mem.Allocator, cfg: PayConfig, openid: []const u8, amount: i64, out_batch_no: []const u8, out_detail_no: []const u8, remark: []const u8) PaymentError!void {
+        if (cfg.mch_id.len == 0 or cfg.serial_no.len == 0 or cfg.private_key_pem.len == 0) return error.InvalidPayConfig;
+        var req_data = self.buildTransferV3Request(allocator, cfg, openid, amount, out_batch_no, out_detail_no, remark) catch return error.PrepayFailed;
+        defer req_data.deinit(allocator);
+
+        var client = zigmodu.http.HttpClient.init(allocator, self.io, 4, 10_000);
+        defer client.deinit();
+        var req = zigmodu.http.HttpClient.HttpRequest.init(allocator, "POST", req_data.url);
+        defer req.deinit();
+        req.setHeader("Authorization", req_data.auth) catch return error.PrepayFailed;
+        req.setHeader("Content-Type", "application/json") catch return error.PrepayFailed;
+        req.setBody(req_data.body) catch return error.PrepayFailed;
+        var resp = client.request(req) catch return error.PrepayFailed;
+        defer resp.deinit();
+        if (!resp.isSuccess()) return error.PrepayFailed;
+    }
+
+    /// V2 退款（secapi/pay/refund，需证书双向认证）。复用 zwechat pay.refund
+    /// （v0.4.x 起 RefundResult 持有 _raw + deinit，UAF 已修）。
+    pub fn refundV2(self: *PaymentService, allocator: std.mem.Allocator, cfg: PayV2Config, out_trade_no: []const u8, out_refund_no: []const u8, total_fee: []const u8, refund_fee: []const u8, refund_desc: []const u8) PaymentError!void {
+        _ = self;
+        var r = zwechat.pay.Refund.init(.{
+            .app_id = cfg.app_id,
+            .mch_id = cfg.mch_id,
+            .key = cfg.key,
+            .notify_url = cfg.notify_url,
+            .root_ca = cfg.root_ca,
+        });
+        var result = r.refund(allocator, .{
+            .out_trade_no = out_trade_no,
+            .out_refund_no = out_refund_no,
+            .total_fee = total_fee,
+            .refund_fee = refund_fee,
+            .notify_url = cfg.notify_url,
+            .refund_desc = refund_desc,
+        }) catch return error.RefundFailed;
+        defer result.deinit();
+        if (!std.mem.eql(u8, result.return_code, "SUCCESS") or !std.mem.eql(u8, result.result_code, "SUCCESS")) return error.RefundFailed;
+    }
+
+    /// 企业付款到零钱（V2 transfer，需证书双向认证）。复用 zwechat pay.transfer
+    /// （v0.4.x 起 TransferWalletResult 持有 _raw + deinit，UAF 已修）。
+    pub fn transferToWallet(self: *PaymentService, allocator: std.mem.Allocator, cfg: PayV2Config, open_id: []const u8, amount: i64, desc: []const u8, partner_trade_no: []const u8) PaymentError!void {
+        _ = self;
+        var t = zwechat.pay.Transfer.init(.{
+            .app_id = cfg.app_id,
+            .mch_id = cfg.mch_id,
+            .key = cfg.key,
+            .notify_url = cfg.notify_url,
+            .root_ca = cfg.root_ca,
+        });
+        var result = t.toWallet(allocator, .{
+            .open_id = open_id,
+            .amount = amount,
+            .desc = desc,
+            .partner_trade_no = partner_trade_no,
+        }) catch return error.TransferFailed;
+        defer result.deinit();
+        if (!std.mem.eql(u8, result.return_code, "SUCCESS")) return error.TransferFailed;
     }
 
     /// Verify a WeChat Pay v3 notify signature (RSA-SHA256, platform public

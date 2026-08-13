@@ -110,7 +110,40 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                     }
                 }
             }
-            if (cfg.mch_id.len == 0) return null;
+            if (cfg.mch_id.len == 0) {
+                cfg.deinit(ctx.allocator);
+                return null;
+            }
+            return cfg;
+        }
+
+        /// Read V2 merchant config (refund/transfer mTLS) from site settings.
+        fn readPayV2Config(ctx: *http.Context, self: *Self, tid: i64) ?service.PayV2Config {
+            var cfg = service.PayV2Config{};
+            const keys = [_][]const u8{ "wechat_pay_v2_mchid", "wechat_pay_v2_key", "wechat_pay_v2_cert_p12", "wechat_pay_appid", "wechat_pay_notify_url" };
+            for (keys) |key| {
+                const row_opt = self.settings.get(tid, key) catch null;
+                if (row_opt) |row| {
+                    defer row.free(self.settings.allocator);
+                    if (row.value.len == 0) continue;
+                    const dup = ctx.allocator.dupe(u8, row.value) catch continue;
+                    if (std.mem.eql(u8, key, "wechat_pay_v2_mchid")) {
+                        cfg.mch_id = dup;
+                    } else if (std.mem.eql(u8, key, "wechat_pay_v2_key")) {
+                        cfg.key = dup;
+                    } else if (std.mem.eql(u8, key, "wechat_pay_v2_cert_p12")) {
+                        cfg.root_ca = dup;
+                    } else if (std.mem.eql(u8, key, "wechat_pay_appid")) {
+                        cfg.app_id = dup;
+                    } else if (std.mem.eql(u8, key, "wechat_pay_notify_url")) {
+                        cfg.notify_url = dup;
+                    }
+                }
+            }
+            if (cfg.mch_id.len == 0 or cfg.key.len == 0) {
+                cfg.deinit(ctx.allocator);
+                return null;
+            }
             return cfg;
         }
 
@@ -123,6 +156,10 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/pay/orders", orders, @ptrCast(@alignCast(self)));
             try g.post("/pay/withdraws", withdraw, @ptrCast(@alignCast(self)));
             try g.get("/pay/withdraws", withdraws, @ptrCast(@alignCast(self)));
+            try g.post("/pay/refund", refundV2, @ptrCast(@alignCast(self)));
+            try g.post("/pay/transfer", transferV2, @ptrCast(@alignCast(self)));
+            try g.post("/pay/refund/v3", refundV3, @ptrCast(@alignCast(self)));
+            try g.post("/pay/transfer/v3", transferV3, @ptrCast(@alignCast(self)));
         }
 
         fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
@@ -300,6 +337,167 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             defer result.free(self.svc.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, WithdrawDto, toWithdrawDto);
             try zigmodu.http.sendPaged(ctx, dtos, @intCast(result.total), params, .ruoyi);
+        }
+
+        const RefundV2Req = struct {
+            out_trade_no: []const u8,
+            out_refund_no: []const u8,
+            total_fee: []const u8,
+            refund_fee: []const u8,
+            refund_desc: []const u8 = "",
+        };
+
+        const TransferV2Req = struct {
+            open_id: []const u8,
+            amount: i64,
+            desc: []const u8,
+            partner_trade_no: []const u8,
+        };
+
+        const RefundV3Req = struct {
+            out_trade_no: []const u8,
+            out_refund_no: []const u8,
+            refund_amount: i64,
+            total_amount: i64,
+        };
+
+        const TransferV3Req = struct {
+            openid: []const u8,
+            amount: i64,
+            out_batch_no: []const u8,
+            out_detail_no: []const u8,
+            remark: []const u8 = "转账",
+        };
+
+        fn refundV2(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const cfg_opt = readPayV2Config(ctx, self, tid);
+            const cfg = cfg_opt orelse {
+                try ctx.sendErrorResponse(400, 400, "未配置微信支付 V2（wechat_pay_v2_mchid/key/cert_p12）");
+                return;
+            };
+            defer cfg.deinit(ctx.allocator);
+
+            const req = ctx.bindJson(RefundV2Req) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer {
+                ctx.allocator.free(req.out_trade_no);
+                ctx.allocator.free(req.out_refund_no);
+                ctx.allocator.free(req.total_fee);
+                ctx.allocator.free(req.refund_fee);
+                if (req.refund_desc.len > 0) ctx.allocator.free(req.refund_desc);
+            }
+            self.svc.refundV2(ctx.allocator, cfg, req.out_trade_no, req.out_refund_no, req.total_fee, req.refund_fee, req.refund_desc) catch |err| {                const msg = switch (err) {
+                    error.RefundFailed => "微信退款失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "payment.refund", "payment", 0, "V2 退款", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "退款已受理", .data = null });
+        }
+
+        fn transferV2(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const cfg_opt = readPayV2Config(ctx, self, tid);
+            const cfg = cfg_opt orelse {
+                try ctx.sendErrorResponse(400, 400, "未配置微信支付 V2（wechat_pay_v2_mchid/key/cert_p12）");
+                return;
+            };
+            defer cfg.deinit(ctx.allocator);
+
+            const req = ctx.bindJson(TransferV2Req) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer {
+                ctx.allocator.free(req.open_id);
+                ctx.allocator.free(req.desc);
+                ctx.allocator.free(req.partner_trade_no);
+            }
+            self.svc.transferToWallet(ctx.allocator, cfg, req.open_id, req.amount, req.desc, req.partner_trade_no) catch |err| {
+                const msg = switch (err) {
+                    error.TransferFailed => "企业付款失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "payment.transfer", "payment", 0, "企业付款到零钱", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已发起付款", .data = null });
+        }
+
+        fn refundV3(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const cfg_opt = readPayConfig(ctx, self, tid);
+            const cfg = cfg_opt orelse {
+                try ctx.sendErrorResponse(400, 400, "未配置微信支付 v3（wechat_pay_mchid/appid/serial_no/private_key）");
+                return;
+            };
+            defer cfg.deinit(ctx.allocator);
+
+            const req = ctx.bindJson(RefundV3Req) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer {
+                ctx.allocator.free(req.out_trade_no);
+                ctx.allocator.free(req.out_refund_no);
+            }
+            self.svc.refundV3(ctx.allocator, cfg, req.out_trade_no, req.out_refund_no, req.refund_amount, req.total_amount) catch |err| {
+                const msg = switch (err) {
+                    error.InvalidPayConfig => "支付配置不完整",
+                    error.PrepayFailed => "微信 v3 退款失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "payment.refund.v3", "payment", 0, "v3 退款", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "退款已受理", .data = null });
+        }
+
+        fn transferV3(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const cfg_opt = readPayConfig(ctx, self, tid);
+            const cfg = cfg_opt orelse {
+                try ctx.sendErrorResponse(400, 400, "未配置微信支付 v3（wechat_pay_mchid/appid/serial_no/private_key）");
+                return;
+            };
+            defer cfg.deinit(ctx.allocator);
+
+            const req = ctx.bindJson(TransferV3Req) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer {
+                ctx.allocator.free(req.openid);
+                ctx.allocator.free(req.out_batch_no);
+                ctx.allocator.free(req.out_detail_no);
+                if (req.remark.len > 0) ctx.allocator.free(req.remark);
+            }
+            self.svc.transferV3(ctx.allocator, cfg, req.openid, req.amount, req.out_batch_no, req.out_detail_no, req.remark) catch |err| {
+                const msg = switch (err) {
+                    error.InvalidPayConfig => "支付配置不完整",
+                    error.PrepayFailed => "微信 v3 转账失败",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
+                return;
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "payment.transfer.v3", "payment", 0, "v3 商家转账", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已发起转账", .data = null });
         }
     };
 }

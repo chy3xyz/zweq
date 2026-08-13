@@ -1,0 +1,27 @@
+.{
+    .name = .zweq_cloud,
+    .version = "0.1.0",
+    .fingerprint = 0x4d91fd906e38b635,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        // Git-tag pinned (stable releases).
+        .zent = .{
+            .url = "git+https://github.com/chy3xyz/zent?ref=v0.29.8#386fa6ba6fe417e98f427962fe81ced30ede5db0",
+            .hash = "zent-0.29.8-oiur-zfaDgChhtPY2Tene3TDIMky5PTz9sNCLqzXriLA",
+        },
+        .zigmodu = .{
+            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.15.24#e2331b1ef284db21e7de8d5432b1c6611e851dfb",
+            .hash = "zigmodu-0.15.24-U40vs8DnPgBjRDTyotC9rwGxbYWSHrK-48f8aF1XWBlt",
+        },
+        .zwechat = .{
+            .url = "git+https://github.com/chy3xyz/zwechat?ref=v0.4.3#7ed8f55ca3623d4d68f91d26550bfe0ef172d278",
+            .hash = "zwechat-0.4.3-C1V2ZDsrEAAZIE8SLFlKcjkg2HFldfPK8oY74V9wllHB",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "db_link.zig",
+        "src",
+    },
+}

@@ -51,11 +51,18 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
                     errdefer allocator.destroy(driver);
                     driver.* = try zent.sql_postgres.PostgresDriver.connect(allocator, dsn);
                     errdefer driver.close();
+                    // 迁移锁：pg_advisory_lock 跨实例互斥，防止多实例同时启动
+                    // 竞态建表（首个实例拿到锁执行迁移，其余实例阻塞等待；
+                    // 连接断开自动释放）。key = "ZEWQ" 的 32 位魔数。
+                    const d = driver.asDriver();
+                    _ = try d.exec("SELECT pg_advisory_lock(1515040593)", &.{});
+                    errdefer _ = d.exec("SELECT pg_advisory_unlock(1515040593)", &.{}) catch {};
                     inline for (MigrateGroups) |gi| {
-                        try zent.sql_schema.migrateSchema(allocator, driver.asDriver(), gi);
+                        try zent.sql_schema.migrateSchema(allocator, d, gi);
                     }
+                    _ = try d.exec("SELECT pg_advisory_unlock(1515040593)", &.{});
                     self.pg = driver;
-                    self.client = zent.codegen.client.makeClient(ClientInfos, allocator, driver.asDriver());
+                    self.client = zent.codegen.client.makeClient(ClientInfos, allocator, d);
                 },
             }
             return self;

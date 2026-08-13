@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -81,26 +82,21 @@ pub const AccountStore = struct {
     }
 
     pub fn create(self: *AccountStore, tenant_id: i64, name: []const u8, kind: []const u8, status: []const u8, now: i64) !i64 {
-        var b = try self.client.account.Create();
-        defer b.deinit();
-        _ = try b.setFieldValue("tenant_id", tenant_id);
-        _ = try b.setFieldValue("name", name);
-        _ = try b.setFieldValue("kind", kind);
-        _ = try b.setFieldValue("status", status);
-        _ = try b.setFieldValue("created_at", now);
-        _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try crud.create(self.client.account, .{
+            .tenant_id = tenant_id,
+            .name = name,
+            .kind = kind,
+            .status = status,
+            .created_at = now,
+            .updated_at = now,
+        });
         defer zent.codegen.deinitEntity(infos, AccountInfo, &row, self.allocator);
         return row.id;
     }
 
     pub fn getById(self: *AccountStore, id: i64) !?AccountRow {
-        var q = self.client.account.Query();
-        defer q.deinit();
         const preds = self.client.account.predicates;
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
-        const entity_opt = try q.First();
-        var entity = entity_opt orelse return null;
+        var entity = (try crud.first(self.client.account, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, AccountInfo, &entity, self.allocator);
         return try self.dupAccount(entity);
     }
@@ -133,23 +129,18 @@ pub const AccountStore = struct {
 
     pub fn update(self: *AccountStore, id: i64, name: []const u8, kind: []const u8, status: []const u8, now: i64) !bool {
         const preds = self.client.account.predicates;
-        var upd = self.client.account.Update();
-        defer upd.deinit();
-        _ = try upd.set("name", .{ .string = name });
-        _ = try upd.set("kind", .{ .string = kind });
-        _ = try upd.set("status", .{ .string = status });
-        _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try upd.Save();
-        return true;
+        const affected = try crud.update(self.client.account, .{
+            .name = name,
+            .kind = kind,
+            .status = status,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
+        return affected > 0;
     }
 
     pub fn delete(self: *AccountStore, id: i64) !void {
         const preds = self.client.account.predicates;
-        var d = self.client.account.Delete();
-        defer d.deinit();
-        _ = try d.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try d.Exec();
+        _ = try crud.delete(self.client.account, .{preds.idEQ(.{ .int = id })});
     }
 
     // ── AccountWechat (1:1 WeChat config) ─────────────────────────

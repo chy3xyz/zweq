@@ -66,6 +66,21 @@ pub const ModuleService = struct {
         self.store.unbind(tenant_id, account_id, module) catch return error.Unexpected;
     }
 
+    /// Read the per-account config blob for a bound module. Returns a
+    /// caller-owned string, or null when the module is not bound.
+    pub fn getConfig(self: *ModuleService, allocator: std.mem.Allocator, tenant_id: i64, account_id: i64, module: []const u8) ModuleError!?[]const u8 {
+        const row_opt = self.store.getBinding(tenant_id, account_id, module) catch return error.Unexpected;
+        const row = row_opt orelse return null;
+        defer row.free(self.store.allocator);
+        return allocator.dupe(u8, row.config) catch error.Unexpected;
+    }
+
+    /// Set (or upsert) the per-account config blob for a module binding.
+    pub fn setConfig(self: *ModuleService, tenant_id: i64, account_id: i64, module: []const u8, config: []const u8) ModuleError!i64 {
+        if (std.mem.trim(u8, module, " \t").len == 0) return error.InvalidName;
+        return self.store.setBindingConfig(tenant_id, account_id, module, config, self.now()) catch error.Unexpected;
+    }
+
     pub fn accountModules(self: *ModuleService, tenant_id: i64, account_id: i64) ModuleError![]ModuleBindingRow {
         return self.store.listBindings(tenant_id, account_id) catch error.Unexpected;
     }
