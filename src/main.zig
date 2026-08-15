@@ -50,6 +50,13 @@ const app_bff = @import("modules/app_bff/root.zig");
 const cloud = @import("modules/cloud/root.zig");
 const material = @import("modules/material/root.zig");
 const checkin = @import("modules/checkin/root.zig");
+const lucky_draw = @import("modules/lucky_draw/root.zig");
+const coupon = @import("modules/coupon/root.zig");
+const vote = @import("modules/vote/root.zig");
+const seckill = @import("modules/seckill/root.zig");
+const member_card = @import("modules/member_card/root.zig");
+const distribution = @import("modules/distribution/root.zig");
+const shop = @import("modules/shop/root.zig");
 const menu = @import("modules/menu/root.zig");
 const points = @import("modules/points/root.zig");
 
@@ -133,6 +140,13 @@ pub fn main(init: std.process.Init) !void {
         cloud.persistence.infos,
         material.persistence.infos,
         checkin.persistence.infos,
+        lucky_draw.persistence.infos,
+        coupon.persistence.infos,
+        vote.persistence.infos,
+        seckill.persistence.infos,
+        member_card.persistence.infos,
+        distribution.persistence.infos,
+        shop.persistence.infos,
         menu.persistence.infos,
         points.persistence.infos,
     }).open(allocator, kind, dsn);
@@ -243,6 +257,75 @@ pub fn main(init: std.process.Init) !void {
         .ctx = &checkin_ctx,
         .handle = checkin.service.receiverHandle,
     });
+    var lucky_draw_store = lucky_draw.persistence.DrawStore.init(allocator, store_env.client);
+    var lucky_draw_svc = lucky_draw.service.DrawService.init(allocator, io, &lucky_draw_store);
+    var lucky_draw_ctx = lucky_draw.service.ReceiverCtx{
+        .module_svc = &module_svc,
+        .draw_svc = &lucky_draw_svc,
+        .io = io,
+    };
+    try wechat_svc.registerReceiver(.{
+        .module_name = "lucky_draw",
+        .ctx = &lucky_draw_ctx,
+        .handle = lucky_draw.service.receiverHandle,
+    });
+    var coupon_store = coupon.persistence.CouponStore.init(allocator, store_env.client);
+    var coupon_svc = coupon.service.CouponService.init(allocator, io, &coupon_store);
+    var coupon_ctx = coupon.service.ReceiverCtx{
+        .module_svc = &module_svc,
+        .coupon_svc = &coupon_svc,
+        .io = io,
+    };
+    try wechat_svc.registerReceiver(.{
+        .module_name = "coupon",
+        .ctx = &coupon_ctx,
+        .handle = coupon.service.receiverHandle,
+    });
+    var vote_store = vote.persistence.VoteStore.init(allocator, store_env.client);
+    var vote_svc = vote.service.VoteService.init(allocator, io, &vote_store);
+    var vote_ctx = vote.service.ReceiverCtx{
+        .module_svc = &module_svc,
+        .vote_svc = &vote_svc,
+        .io = io,
+    };
+    try wechat_svc.registerReceiver(.{
+        .module_name = "vote",
+        .ctx = &vote_ctx,
+        .handle = vote.service.receiverHandle,
+    });
+    var seckill_store = seckill.persistence.SeckillStore.init(allocator, store_env.client);
+    var seckill_svc = seckill.service.SeckillService.init(allocator, io, &seckill_store);
+    var seckill_ctx = seckill.service.ReceiverCtx{
+        .io = io,
+        .seckill_svc = &seckill_svc,
+    };
+    try wechat_svc.registerReceiver(.{
+        .module_name = "seckill",
+        .ctx = &seckill_ctx,
+        .handle = seckill.service.receiverHandle,
+    });
+    var member_card_store = member_card.persistence.MemberCardStore.init(allocator, store_env.client);
+    var member_card_svc = member_card.service.MemberCardService.init(allocator, io, &member_card_store);
+    var member_card_ctx = member_card.service.ReceiverCtx{
+        .io = io,
+        .member_svc = &member_card_svc,
+    };
+    try wechat_svc.registerReceiver(.{
+        .module_name = "member_card",
+        .ctx = &member_card_ctx,
+        .handle = member_card.service.receiverHandle,
+    });
+    var distribution_store = distribution.persistence.DistributionStore.init(allocator, store_env.client);
+    var distribution_svc = distribution.service.DistributionService.init(allocator, io, &distribution_store);
+    var distribution_ctx = distribution.service.ReceiverCtx{
+        .io = io,
+        .dist_svc = &distribution_svc,
+    };
+    try wechat_svc.registerReceiver(.{
+        .module_name = "distribution",
+        .ctx = &distribution_ctx,
+        .handle = distribution.service.receiverHandle,
+    });
     var menu_store = menu.persistence.MenuStore.init(allocator, store_env.client);
     var menu_svc = menu.service.MenuService.init(allocator, io, &menu_store, &account_svc, token_cache);
     var points_store = points.persistence.PointsStore.init(allocator, store_env.client);
@@ -294,6 +377,13 @@ pub fn main(init: std.process.Init) !void {
         cloud.module,
         material.module,
         checkin.module,
+        lucky_draw.module,
+        coupon.module,
+        vote.module,
+        seckill.module,
+        member_card.module,
+        distribution.module,
+        shop.module,
         menu.module,
         points.module,
     }, .{});
@@ -375,6 +465,61 @@ pub fn main(init: std.process.Init) !void {
     var cloud_api = cloud.api.CloudApi(@TypeOf(cloud_svc), @TypeOf(user_svc)).init(&cloud_svc, &user_svc, &audit_svc, default_tenant_id);
     var material_api = material.api.MaterialApi(@TypeOf(material_svc), @TypeOf(user_svc)).init(&material_svc, &user_svc, &audit_svc, default_tenant_id);
     var checkin_api = checkin.api.CheckinApi(@TypeOf(checkin_svc), @TypeOf(user_svc)).init(&checkin_svc, &user_svc, &audit_svc, default_tenant_id);
+    var lucky_draw_api = lucky_draw.api.LuckyDrawApi(@TypeOf(lucky_draw_svc), @TypeOf(user_svc)).init(&lucky_draw_svc, &user_svc, &audit_svc, default_tenant_id);
+    var coupon_api = coupon.api.CouponApi(@TypeOf(coupon_svc), @TypeOf(user_svc)).init(&coupon_svc, &user_svc, &audit_svc, default_tenant_id);
+    var vote_api = vote.api.VoteApi(@TypeOf(vote_svc), @TypeOf(user_svc)).init(&vote_svc, &user_svc, &audit_svc, default_tenant_id);
+    var seckill_api = seckill.api.SeckillApi(@TypeOf(seckill_svc), @TypeOf(user_svc)).init(&seckill_svc, &user_svc, &audit_svc, default_tenant_id);
+    var member_card_api = member_card.api.MemberCardApi(@TypeOf(member_card_svc), @TypeOf(user_svc)).init(&member_card_svc, &user_svc, &audit_svc, default_tenant_id);
+    var distribution_api = distribution.api.DistributionApi(@TypeOf(distribution_svc), @TypeOf(user_svc)).init(&distribution_svc, &user_svc, &audit_svc, default_tenant_id);
+    var shop_store = shop.persistence.ShopStore.init(allocator, store_env.client);
+    var shop_svc = shop.service.ShopService.init(allocator, io, &shop_store);
+    shop_svc.dist_svc = &distribution_svc; // 订单支付 → 分销三级分佣
+    shop_svc.coupon_store = &coupon_store; // 下单优惠券校验/核销
+    shop_svc.member_svc = &member_card_svc; // 支付 → 会员积分累计
+    shop_svc.coupon_svc = &coupon_svc; // 邀请达标发券
+    shop_svc.payment_svc = &payment_svc; // 余额支付扣钱包
+    shop_svc.fan_store = &fan_store; // openid → fan_id
+    // 事件驱动：订单支付 → 分销分佣 + 会员积分（解耦消费，替代同步钩子）。
+    {
+        const OrderPaidBus = shop.service.OrderPaidBus;
+        var order_paid_bus = OrderPaidBus.init(allocator);
+        const OrderPaidCtx = struct {
+            var shop_ref: *shop.service.ShopService = undefined;
+            var webhook_transport: @import("http/webhook_transport.zig").WebhookTransport = undefined;
+            fn onPaid(e: shop.service.OrderPaidEvent) void {
+                const s = shop_ref;
+                const o_opt = s.getOrder(e.order_id) catch return;
+                const o = o_opt orelse return;
+                defer o.free(s.allocator);
+                // 分销三级分佣。
+                if (s.dist_svc) |ds| {
+                    const dist_mod = @import("modules/distribution/service.zig");
+                    const dsvc: *dist_mod.DistributionService = @ptrCast(@alignCast(ds));
+                    _ = dsvc.distribute(e.tenant_id, e.account_id, o.openid, o.pay_amount) catch {};
+                }
+                // 会员积分累计（1 元 = 1 积分）。
+                if (s.member_svc) |ms| {
+                    const mc_mod = @import("modules/member_card/service.zig");
+                    const msvc: *mc_mod.MemberCardService = @ptrCast(@alignCast(ms));
+                    _ = msvc.adjust(e.tenant_id, e.account_id, o.openid, @divTrunc(o.pay_amount, 100)) catch {};
+                }
+                // Webhook 推送（事件开放出口）。
+                s.webhook_transport = &webhook_transport;
+                s.dispatchWebhooks("order.paid", e.tenant_id, e.account_id, e.order_id);
+            }
+        };
+        OrderPaidCtx.shop_ref = &shop_svc;
+        OrderPaidCtx.webhook_transport = @import("http/webhook_transport.zig").WebhookTransport.init(io);
+        order_paid_bus.subscribe(OrderPaidCtx.onPaid) catch {};
+        shop_svc.order_paid_bus = &order_paid_bus;
+        // 生命周期：bus 随主循环存活（栈变量，作用域到 main 结束）——需提升到函数级。
+        // 此处用堆分配避免悬挂。
+        const heap_bus = allocator.create(OrderPaidBus) catch unreachable;
+        heap_bus.* = order_paid_bus;
+        shop_svc.order_paid_bus = heap_bus;
+    }
+    var shop_limiter = zigmodu.RateLimiterRegistry.init(allocator, 30, 1);
+    var shop_api = shop.api.ShopApi(@TypeOf(shop_svc), @TypeOf(user_svc)).init(&shop_svc, &user_svc, &audit_svc, default_tenant_id, &shop_limiter, &fan_store, &setting_store);
     var menu_api = menu.api.MenuApi(@TypeOf(menu_svc), @TypeOf(user_svc)).init(&menu_svc, &user_svc, &audit_svc, default_tenant_id);
     var points_api = points.api.PointsApi(@TypeOf(points_svc), @TypeOf(user_svc)).init(&points_svc, &user_svc, &audit_svc, default_tenant_id);
     var audit_api = audit.api.AuditApi(@TypeOf(audit_svc), @TypeOf(user_svc)).init(&audit_svc, &user_svc);
@@ -436,6 +581,14 @@ pub fn main(init: std.process.Init) !void {
     try cloud_api.registerRoutes(&v1);
     try material_api.registerRoutes(&v1);
     try checkin_api.registerRoutes(&v1);
+    try lucky_draw_api.registerRoutes(&v1);
+    try coupon_api.registerRoutes(&v1);
+    try vote_api.registerRoutes(&v1);
+    try seckill_api.registerRoutes(&v1);
+    try member_card_api.registerRoutes(&v1);
+    try distribution_api.registerRoutes(&v1);
+    try shop_api.registerPublicRoutes(&v1);
+    try shop_api.registerAdminRoutes(&v1);
     try menu_api.registerRoutes(&v1);
     try points_api.registerRoutes(&v1);
     try audit_api.registerRoutes(&v1);

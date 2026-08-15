@@ -11,8 +11,8 @@
             .hash = "zent-0.29.8-oiur-zfaDgChhtPY2Tene3TDIMky5PTz9sNCLqzXriLA",
         },
         .zigmodu = .{
-            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.15.24#e2331b1ef284db21e7de8d5432b1c6611e851dfb",
-            .hash = "zigmodu-0.15.24-U40vs8DnPgBjRDTyotC9rwGxbYWSHrK-48f8aF1XWBlt",
+            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.15.28#3b861143cb694596cc4a31bd8dcdb2dfafc9a333",
+            .hash = "zigmodu-0.15.28-U40vs-s0PwDaWMVH02Z78RXCsHXxmjbld2yFoPtfzYwd",
         },
         .zwechat = .{
             .url = "git+https://github.com/chy3xyz/zwechat?ref=v0.4.3#7ed8f55ca3623d4d68f91d26550bfe0ef172d278",

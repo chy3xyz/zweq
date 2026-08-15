@@ -1,0 +1,124 @@
+<template>
+  <view class="flex-1 p-30px">
+    <view class="mb-40px">
+      <text class="text-24px font-bold text-[#1e293b]">zweq 登录</text>
+      <view class="mt-8px">
+        <text class="text-14px text-[#64748b]">多商户微信运营平台管理端</text>
+      </view>
+    </view>
+
+    <!-- 邮箱 -->
+    <view class="h-88rpx rounded-8px bg-[#f1f5f9] flex flex-row items-center px-20rpx mb-24rpx">
+      <input
+        class="flex-1 text-14px"
+        type="text"
+        placeholder="管理员邮箱"
+        placeholder-class="text-[#94a3b8]"
+        v-model="email"
+      />
+    </view>
+
+    <!-- 密码 -->
+    <view class="h-88rpx rounded-8px bg-[#f1f5f9] flex flex-row items-center px-20rpx mb-40rpx">
+      <input
+        class="flex-1 text-14px"
+        type="password"
+        placeholder="密码"
+        placeholder-class="text-[#94a3b8]"
+        v-model="password"
+      />
+    </view>
+
+    <!-- 登录按钮（原生 button 不依赖 CSS 变量换肤，直接绑内联样式） -->
+    <button
+      class="h-88rpx rounded-8px text-[#ffffff] text-16px font-bold"
+      :style="{ backgroundColor: '#0957DE' }"
+      :loading="loading"
+      @click="doLogin"
+    >
+      登 录
+    </button>
+  </view>
+</template>
+
+<script setup lang="uts">
+/* eslint-disable dot-notation */
+import { ref } from 'vue'
+import type { ISingleTokenRes, IUserInfo } from '../../store'
+import { useTokenStore, useUserStore } from '../../store'
+import { login } from '../../api/auth'
+import { isPageTabbar, setCurIdxByPath } from '../../tabbar/store'
+
+const tokenStore = useTokenStore()
+const userStore = useUserStore()
+const redirectUrl = ref<string>('')
+const email = ref<string>('')
+const password = ref<string>('')
+const loading = ref<boolean>(false)
+
+onLoad((options: UTSJSONObject | null) => {
+  if (options != null) {
+    const redirect = options['redirect'] as string | null
+    if (redirect != null) {
+      redirectUrl.value = redirect
+    }
+  }
+})
+
+function afterLogin() {
+  if (redirectUrl.value !== '') {
+    const targetUrl = decodeURIComponent(redirectUrl.value) ?? ''
+    if (isPageTabbar(targetUrl)) {
+      setCurIdxByPath(targetUrl)
+      uni.switchTab({ url: targetUrl })
+    }
+    else {
+      uni.redirectTo({ url: targetUrl })
+    }
+  }
+  else {
+    uni.navigateBack()
+  }
+}
+
+function doLogin() {
+  if (tokenStore.hasValidLogin()) {
+    afterLogin()
+    return
+  }
+  if (email.value === '' || password.value === '') {
+    uni.showToast({ title: '请输入邮箱和密码', icon: 'none' })
+    return
+  }
+  loading.value = true
+  login({
+    email: email.value,
+    password: password.value,
+  })
+    .then((result: any) => {
+      // zweq 登录：{ token, user: { id, name, email, admin } }
+      const token = (result as UTSJSONObject)['token'] as string
+      const user = (result as UTSJSONObject)['user'] as UTSJSONObject
+      tokenStore.setSingleToken({
+        token: token,
+        expiresIn: 604800,
+      } as ISingleTokenRes)
+      userStore.setUserInfo({
+        userId: (user['id'] as number) ?? 0,
+        username: (user['email'] as string) ?? '',
+        nickname: (user['name'] as string) ?? '',
+        avatar: '',
+      } as IUserInfo)
+      uni.showToast({ title: '登录成功', icon: 'success' })
+      setTimeout(() => {
+        afterLogin()
+      }, 300)
+    })
+    .catch(() => {
+      uni.showToast({ title: '登录失败，请检查邮箱与密码', icon: 'none' })
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+</script>

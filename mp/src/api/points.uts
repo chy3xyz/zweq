@@ -1,0 +1,43 @@
+// ==========================================
+// zweq 积分商城 API — 商品/兑换/订单（只读展示）
+// ==========================================
+
+import { http } from '../http/request'
+
+// ==========================================
+// 类型定义
+// ==========================================
+
+/** 积分商品（GET /api/v1/points/products） */
+export type IPointsProduct = {
+  id: number
+  account_id: number
+  name: string
+  points: number
+  stock: number
+  created_at: number
+}
+
+/** 分页返回 */
+export type IPagedList<T> = {
+  list: T[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+// ==========================================
+// API 函数
+// ==========================================
+
+/**
+ * 积分商品列表（admin 鉴权）
+ */
+export function listPointsProducts(
+  accountId: number,
+  page: number = 1,
+  pageSize: number = 20,
+): Promise<IPagedList<IPointsProduct>> {
+  const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+  return http.get<IPagedList<IPointsProduct>>(`/api/v1/points/products?${query}`)
+}

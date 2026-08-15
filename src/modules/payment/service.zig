@@ -143,6 +143,12 @@ pub const PaymentService = struct {
         return true;
     }
 
+    /// 余额支付：原子扣减钱包，余额不足返回 false。
+    pub fn payWithBalance(self: *PaymentService, tenant_id: i64, account_id: i64, fan_id: i64, amount: i64) PaymentError!bool {
+        if (amount <= 0) return error.InvalidAmount;
+        return self.store.debitWallet(self.allocator, tenant_id, account_id, fan_id, amount, self.now()) catch false;
+    }
+
     pub fn walletBalance(self: *PaymentService, tenant_id: i64, account_id: i64, fan_id: i64) PaymentError!?WalletRow {
         return self.store.getWallet(tenant_id, account_id, fan_id) catch error.Unexpected;
     }

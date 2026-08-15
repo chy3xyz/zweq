@@ -1,0 +1,76 @@
+<template>
+  <view>
+    <NavBar title="我的订单" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view v-for="o in orders" :key="o.id" class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;">
+        <view class="flex flex-row items-center justify-between">
+          <text class="text-13px font-mono text-[#64748b]">{{ o.order_no }}</text>
+          <text class="text-12px font-bold" :style="{ color: statusColor(o.status) }">{{ statusLabel(o.status) }}</text>
+        </view>
+        <view class="mt-12rpx flex flex-row items-center justify-between">
+          <text class="text-14px font-bold text-[#1e293b]">¥{{ fenToYuan(o.pay_amount) }}</text>
+          <view class="flex flex-row items-center">
+            <text class="text-12px text-[#94a3b8] mr-16rpx">{{ o.openid }}</text>
+            <view v-if="o.status === 0" class="px-16rpx py-6rpx rounded-8rpx" style="background-color: #0957DE;" @click="pay(o.id)">
+              <text class="text-12px text-[#ffffff]">去支付</text>
+            </view>
+          </view>
+        </view>
+      </view>
+      <view v-if="orders.length === 0" class="mt-60rpx items-center">
+        <text class="text-14px text-[#94a3b8]">暂无订单</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { listShopOrders } from '../../api/shop'
+import { http } from '../../http/request'
+import { fenToYuan } from '../../utils/format'
+import type { IShopOrder } from '../../api/shop'
+
+const orders = ref<IShopOrder[]>([])
+
+onLoad(() => {
+  listShopOrders(0, 1, 50)
+    .then((res: any) => {
+      orders.value = (res as UTSJSONObject)['list'] as IShopOrder[]
+    })
+    .catch(() => {
+      orders.value = []
+    })
+})
+
+function pay(orderId: number) {
+  // H5 演示：mock 支付完成（真实环境走 pay-params + 微信收银台）。
+  http.post('/api/v1/shop/orders/' + orderId + '/pay-complete', {})
+    .then(() => {
+      uni.showToast({ title: '支付成功', icon: 'success' })
+      load()
+    })
+    .catch(() => {
+      uni.showToast({ title: '支付失败', icon: 'none' })
+    })
+}
+
+function statusLabel(s: number): string {
+  switch (s) {
+    case 0: return '待支付'
+    case 1: return '已支付'
+    case 2: return '已发货'
+    case 3: return '已完成'
+    case 4: return '已取消'
+    default: return '未知'
+  }
+}
+
+function statusColor(s: number): string {
+  switch (s) {
+    case 0: return '#f59e0b'
+    case 3: return '#10b981'
+    default: return '#0957DE'
+  }
+}
+</script>

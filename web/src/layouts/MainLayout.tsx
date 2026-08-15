@@ -245,6 +245,69 @@ function MainLayout(props: { children?: JSX.Element }) {
             >
               签到记录
             </A>
+            <A
+              href={ROUTE_PATH.luckyDraw}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              大转盘抽奖
+            </A>
+            <A
+              href={ROUTE_PATH.coupon}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              优惠券
+            </A>
+            <A
+              href={ROUTE_PATH.vote}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              投票
+            </A>
+            <A
+              href={ROUTE_PATH.seckill}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              秒杀
+            </A>
+            <A
+              href={ROUTE_PATH.memberCard}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              会员卡
+            </A>
+            <A
+              href={ROUTE_PATH.shopAdmin}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              商城运营
+            </A>
+            <A
+              href={ROUTE_PATH.shopOrders}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              订单管理
+            </A>
+            <A
+              href={ROUTE_PATH.shop}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              商城
+            </A>
+            <A
+              href={ROUTE_PATH.distribution}
+              class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
+              activeClass="active"
+            >
+              分销
+            </A>
           </Show>
           <A
             href={ROUTE_PATH.aiChat}

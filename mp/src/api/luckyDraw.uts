@@ -1,0 +1,35 @@
+// ==========================================
+// zweq 大转盘抽奖 API — 抽奖记录（只读展示）
+// ==========================================
+
+import { http } from '../http/request'
+import type { IPagedList } from './points'
+
+// ==========================================
+// 类型定义
+// ==========================================
+
+/** 抽奖记录（GET /api/v1/lucky-draw/records） */
+export type ILuckyDrawRecord = {
+  id: number
+  openid: string
+  prize_name: string
+  points: number
+  created_at: number
+}
+
+// ==========================================
+// API 函数
+// ==========================================
+
+/**
+ * 抽奖记录列表（admin 鉴权）
+ */
+export function listLuckyDrawRecords(
+  accountId: number,
+  page: number = 1,
+  pageSize: number = 20,
+): Promise<IPagedList<ILuckyDrawRecord>> {
+  const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+  return http.get<IPagedList<ILuckyDrawRecord>>(`/api/v1/lucky-draw/records?${query}`)
+}

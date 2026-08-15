@@ -431,10 +431,10 @@ def wire_schema(name: str, Name: str):
     patch_once(p,
                'const checkin_graph = zent.codegen.graph.buildGraph(&.{checkin_model.CheckinRecord});',
                f'\nconst {name}_graph = zent.codegen.graph.buildGraph(&.{{{name}_model.{Name}Record}});')
-    # infos 链：checkin 原为末尾项（带分号），改为 `++` 并追加新项。
+    # infos 链：points 为当前末尾项（带分号），改为 `++` 并追加新项。
     patch_replace(p,
-                  '    checkin_graph.types;',
-                  f'    checkin_graph.types ++\n    {name}_graph.types;')
+                  '    points_graph.types;',
+                  f'    points_graph.types ++\n    {name}_graph.types;')
 
 
 def wire_main(name: str, Name: str):

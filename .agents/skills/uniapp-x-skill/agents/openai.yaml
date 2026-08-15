@@ -1,0 +1,4 @@
+interface:
+  display_name: "UniApp X/UTS 开发规范"
+  short_description: "通用、预防优先的 DCloud UniApp X 开发规则"
+  default_prompt: "使用 $uniapp-x-skill，以预防优先和风险分级方式编写 UniApp X/UTS 代码；默认使用内置规则，仅在版本敏感或不确定时查询 DCloud 官方文档。"

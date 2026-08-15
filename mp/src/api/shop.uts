@@ -1,0 +1,157 @@
+// ==========================================
+// zweq 商城 API — 商品/购物车/订单（C 端，openid 标识粉丝）
+// ==========================================
+
+import { http } from '../http/request'
+import type { IPagedList } from './points'
+
+// ==========================================
+// 类型定义
+// ==========================================
+
+export type IShopProduct = {
+  id: number
+  account_id: number
+  category_id: number
+  name: string
+  image: string
+  content: string
+  price: number
+  original_price: number
+  stock: number
+  sales: number
+  status: number
+  created_at: number
+}
+
+export type IShopSku = {
+  id: number
+  product_id: number
+  spec_json: string
+  image: string
+  price: number
+  stock: number
+}
+
+export type IShopProductDetail = {
+  product: IShopProduct
+  skus: IShopSku[]
+}
+
+export type IShopCartItem = {
+  id: number
+  openid: string
+  product_id: number
+  sku_id: number
+  quantity: number
+}
+
+export type IShopFavoriteItem = {
+  id: number
+  openid: string
+  product_id: number
+  created_at: number
+}
+
+export type IShopOrder = {
+  id: number
+  order_no: string
+  openid: string
+  total_amount: number
+  pay_amount: number
+  status: number
+  created_at: number
+}
+
+// ==========================================
+// API 函数
+// ==========================================
+
+const DEMO_OPENID = 'o_h5_demo'
+
+/** 商品列表（公开） */
+export function listShopProducts(accountId: number, page: number = 1, pageSize: number = 20): Promise<IPagedList<IShopProduct>> {
+  const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+  return http.get<IPagedList<IShopProduct>>(`/api/v1/shop/products?${query}`)
+}
+
+/** 商品详情（含 SKU，公开） */
+export function getShopProduct(id: number): Promise<IShopProductDetail> {
+  return http.get<IShopProductDetail>(`/api/v1/shop/products/${id}`)
+}
+
+/** 加购物车（C 端，openid 粉丝） */
+export function addShopCart(accountId: number, productId: number, skuId: number, quantity: number = 1): Promise<{ id: number }> {
+  return http.post<{ id: number }>('/api/v1/shop/cart/add', {
+    account_id: accountId,
+    openid: DEMO_OPENID,
+    product_id: productId,
+    sku_id: skuId,
+    quantity,
+  })
+}
+
+/** 购物车列表 */
+export function listShopCart(accountId: number): Promise<IShopCartItem[]> {
+  const query = `account_id=${accountId}&openid=${DEMO_OPENID}`
+  return http.get<IShopCartItem[]>(`/api/v1/shop/cart?${query}`)
+}
+
+/** 创建地址（下单前置） */
+export function createShopAddress(
+  accountId: number,
+  name: string,
+  mobile: string,
+  region: string,
+  detail: string,
+): Promise<{ id: number }> {
+  return http.post<{ id: number }>('/api/v1/shop/addresses', {
+    account_id: accountId,
+    openid: DEMO_OPENID,
+    name,
+    mobile,
+    region,
+    detail,
+    is_default: 1,
+  })
+}
+
+/** 下单（mock 即时支付入账） */
+export function createShopOrder(
+  accountId: number,
+  addressId: number,
+  items: { product_id: number; sku_id: number; quantity: number }[],
+): Promise<{ id: number }> {
+  return http.post<{ id: number }>('/api/v1/shop/orders', {
+    account_id: accountId,
+    openid: DEMO_OPENID,
+    address_id: addressId,
+    items,
+  })
+}
+
+/** 收藏商品（openid 粉丝） */
+export function addShopFavorite(accountId: number, productId: number): Promise<{ id: number }> {
+  return http.post<{ id: number }>('/api/v1/shop/favorites', {
+    account_id: accountId,
+    openid: DEMO_OPENID,
+    product_id: productId,
+  })
+}
+
+/** 我的收藏列表 */
+export function listShopFavorites(accountId: number): Promise<IShopFavoriteItem[]> {
+  const query = `account_id=${accountId}&openid=${DEMO_OPENID}`
+  return http.get<IShopFavoriteItem[]>(`/api/v1/shop/favorites?${query}`)
+}
+
+/** 删除购物车项 */
+export function deleteShopCart(id: number): Promise<void> {
+  return http.delete<void>(`/api/v1/shop/cart/${id}`)
+}
+
+/** 我的订单 */
+export function listShopOrders(accountId: number, page: number = 1, pageSize: number = 20): Promise<IPagedList<IShopOrder>> {
+  const query = `account_id=${accountId}&openid=${DEMO_OPENID}&page=${page}&page_size=${pageSize}`
+  return http.get<IPagedList<IShopOrder>>(`/api/v1/shop/orders?${query}`)
+}

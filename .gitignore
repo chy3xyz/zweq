@@ -43,3 +43,9 @@ package-lock.json
 
 # Agent working state (not project code)
 .reasonix/
+
+# pnpm store (shared cache)
+.pnpm-store/
+
+# 独立模板源（交付物为 mp/ 定制版）
+unix/

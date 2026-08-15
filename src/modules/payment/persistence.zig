@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -155,6 +156,19 @@ pub const PaymentStore = struct {
         var row = try b.Save();
         defer zent.codegen.deinitEntity(infos, WalletInfo, &row, self.allocator);
         return row.id;
+    }
+
+    /// 原子扣减钱包（乐观锁：balance >= amount），余额不足返回 false。
+    pub fn debitWallet(self: *PaymentStore, allocator: std.mem.Allocator, tenant_id: i64, account_id: i64, fan_id: i64, amount: i64, now: i64) !bool {
+        const wid = try self.ensureWallet(tenant_id, account_id, fan_id, now);
+        const preds = self.client.wallet.predicates;
+        const guard = try std.fmt.allocPrint(allocator, "balance >= {d}", .{amount});
+        defer allocator.free(guard);
+        const affected = crud.increment(self.client.wallet, "balance", -amount, &.{
+            preds.idEQ(.{ .int = wid }),
+            zent.sql.Predicate{ .raw = guard },
+        }) catch return false;
+        return affected > 0;
     }
 
     /// Add `delta` cents to a fan's wallet. Returns the new balance.

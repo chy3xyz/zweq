@@ -1,0 +1,84 @@
+<template>
+  <view>
+    <NavBar title="购物车" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view v-for="c in carts" :key="c.id" class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;">
+        <view class="flex flex-row items-center justify-between">
+          <text class="text-14px font-bold text-[#1e293b]">商品 #{{ c.product_id }}</text>
+          <text class="text-13px text-[#94a3b8]">SKU {{ c.sku_id }}</text>
+        </view>
+        <view class="mt-12rpx flex flex-row items-center justify-between">
+          <text class="text-13px text-[#64748b]">数量 {{ c.quantity }}</text>
+          <view class="flex flex-row">
+            <view class="px-16rpx py-6rpx rounded-8rpx mr-12rpx" style="background-color: #e2e8f0;" @click="del(c.id)">
+              <text class="text-12px text-[#ef4444]">删除</text>
+            </view>
+          </view>
+        </view>
+      </view>
+      <view v-if="carts.length === 0" class="mt-60rpx items-center">
+        <text class="text-14px text-[#94a3b8]">购物车空空如也，去逛逛吧</text>
+      </view>
+
+      <button v-if="carts.length > 0" class="mt-40rpx mx-30rpx h-88rpx rounded-12rpx text-[#ffffff] text-15px font-bold" :style="{ backgroundColor: '#0957DE' }" @click="checkout">
+        结算（下单）
+      </button>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { listShopCart, deleteShopCart, createShopAddress, createShopOrder } from '../../api/shop'
+import type { IShopCartItem } from '../../api/shop'
+
+const carts = ref<IShopCartItem[]>([])
+
+onLoad(() => {
+  load()
+})
+
+function load() {
+  listShopCart(0)
+    .then((res: any) => {
+      carts.value = res as IShopCartItem[]
+    })
+    .catch(() => {
+      carts.value = []
+    })
+}
+
+function del(id: number) {
+  deleteShopCart(id)
+    .then(() => {
+      load()
+    })
+    .catch(() => {
+      uni.showToast({ title: '删除失败', icon: 'none' })
+    })
+}
+
+function checkout() {
+  if (carts.value.length === 0) return
+  // H5 演示：自动建地址 + 用购物车第一项下单（完整多品结算后续迭代）。
+  const first = carts.value[0]
+  createShopAddress(0, '演示用户', '13800138000', '广东省深圳市', '科技园 1 号')
+    .then((addr: any) => {
+      const addressId = (addr as UTSJSONObject)['id'] as number
+      return createShopOrder(0, addressId, [{
+        product_id: first.product_id,
+        sku_id: first.sku_id,
+        quantity: first.quantity,
+      }])
+    })
+    .then(() => {
+      uni.showToast({ title: '下单成功', icon: 'success' })
+      setTimeout(() => {
+        uni.redirectTo({ url: '/src/pages/shop/orders' })
+      }, 400)
+    })
+    .catch(() => {
+      uni.showToast({ title: '下单失败', icon: 'none' })
+    })
+}
+</script>

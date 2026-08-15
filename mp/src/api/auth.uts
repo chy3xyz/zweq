@@ -1,0 +1,75 @@
+// ==========================================
+// zweq 认证 API — 管理端账号登录 / 当前用户
+// ==========================================
+
+import { http } from '../http/request'
+import { useTokenStore } from '../store/token'
+
+// ==========================================
+// 类型定义
+// ==========================================
+
+/** 登录请求体（对应 zweq POST /api/v1/auth/login） */
+export type ILoginParams = {
+  email: string
+  password: string
+}
+
+/** 用户信息（zweq user 模块 DTO） */
+export type IUserInfo = {
+  id: number
+  name: string
+  email: string
+  admin: boolean
+  created_at: number
+}
+
+/** 登录成功响应 data */
+export type ILoginResult = {
+  token: string
+  user: IUserInfo
+}
+
+// ==========================================
+// API 函数
+// ==========================================
+
+/**
+ * 账号密码登录
+ * @returns token + user，调用方用 setToken 持久化
+ */
+export function login(params: ILoginParams): Promise<ILoginResult> {
+  return http.post<ILoginResult>('/api/v1/auth/login', params)
+}
+
+/**
+ * 登录并写入 token store（页面直接调用即可）
+ */
+export async function loginAndStore(params: ILoginParams): Promise<IUserInfo> {
+  const result = await login(params)
+  const tokenStore = useTokenStore()
+  // zweq JWT 有效期默认按后端配置（此处 7 天占位，仅用于本地过期提醒）
+  tokenStore.setSingleToken({ token: result.token, expiresIn: 604800 })
+  return result.user
+}
+
+/**
+ * 获取当前登录用户信息
+ */
+export function getMe(): Promise<IUserInfo> {
+  return http.get<IUserInfo>('/api/v1/auth/me')
+}
+
+/**
+ * 微信小程序 code 登录（仅 MP-WEIXIN 环境有效，需在页面条件编译中调用）
+ * 对应 zweq POST /api/v1/miniprogram/login（body: account_id/code）
+ * 服务端 jscode2session 换 openid 后返回 JWT 与粉丝信息
+ */
+export type IMiniprogramLoginParams = {
+  account_id: number
+  code: string
+}
+
+export function miniprogramLogin(params: IMiniprogramLoginParams): Promise<ILoginResult> {
+  return http.post<ILoginResult>('/api/v1/miniprogram/login', params)
+}

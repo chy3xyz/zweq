@@ -60,6 +60,8 @@ pub const Config = struct {
     /// 远端 zweq-cloud 服务 base url（如 `http://cloud:8100/api/v1`）。
     /// 空 = 本地模式（授权码/市场走本地 DB）。
     cloud_remote_url: []const u8 = "",
+    /// 商城订单支付超时（秒），超时自动取消并回滚库存。
+    shop_order_timeout: i64 = 1800,
 
     pub fn fromEnv(environ: *const std.process.Environ.Map) Config {
         var cfg: Config = .{};
@@ -70,6 +72,7 @@ pub const Config = struct {
         cfg.jwt_secret = environ.get("ZWEQ_JWT_SECRET") orelse "dev-secret-change-me";
         cfg.jwt_secret_explicit = environ.get("ZWEQ_JWT_SECRET") != null;
         cfg.metrics_allow_ips = environ.get("ZWEQ_METRICS_ALLOW_IPS") orelse "";
+        cfg.shop_order_timeout = std.fmt.parseInt(i64, environ.get("ZWEQ_SHOP_ORDER_TIMEOUT") orelse "1800", 10) catch 1800;
         cfg.audit_retention_days = parseInt64(environ.get("ZWEQ_AUDIT_RETENTION_DAYS") orelse "180", 180);
         cfg.token_expiry_seconds = parseInt64(environ.get("ZWEQ_TOKEN_EXPIRY") orelse "86400", 86400);
         cfg.password_token_expiration_seconds = parseInt64(environ.get("ZWEQ_PASSWORD_TOKEN_EXPIRATION") orelse "3600", 3600);

@@ -48,6 +48,15 @@ const AiAdmin = lazy(() => import('#ui/pages/AiAdmin'));
 const Points = lazy(() => import('#ui/pages/Points'));
 const Menu = lazy(() => import('#ui/pages/Menu'));
 const Checkin = lazy(() => import('#ui/pages/Checkin'));
+const LuckyDraw = lazy(() => import('#ui/pages/LuckyDraw'));
+const Coupon = lazy(() => import('#ui/pages/Coupon'));
+const Vote = lazy(() => import('#ui/pages/Vote'));
+const Seckill = lazy(() => import('#ui/pages/Seckill'));
+const MemberCard = lazy(() => import('#ui/pages/MemberCard'));
+const Distribution = lazy(() => import('#ui/pages/Distribution'));
+const Shop = lazy(() => import('#ui/pages/Shop'));
+const ShopOrders = lazy(() => import('#ui/pages/ShopOrders'));
+const ShopAdmin = lazy(() => import('#ui/pages/ShopAdmin'));
 const NotFound = lazy(() => import('#ui/pages/NotFound'));
 
 function BootFallback() {
@@ -268,6 +277,54 @@ if (root) {
             component={() => (
               <AdminGate>
                 <Checkin />
+              </AdminGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.luckyDraw}
+            component={() => (
+              <AdminGate>
+                <LuckyDraw />
+              </AdminGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.coupon}
+            component={() => (
+              <AdminGate>
+                <Coupon />
+              </AdminGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.vote}
+            component={() => (
+              <AdminGate>
+                <Vote />
+              </AdminGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.seckill}
+            component={() => (
+              <AdminGate>
+                <Seckill />
+              </AdminGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.memberCard}
+            component={() => (
+              <AdminGate>
+                <MemberCard />
+              </AdminGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.distribution}
+            component={() => (
+              <AdminGate>
+                <Distribution />
               </AdminGate>
             )}
           />

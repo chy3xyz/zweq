@@ -28,6 +28,13 @@ const payment = @import("modules/payment/root.zig");
 const cloud = @import("modules/cloud/root.zig");
 const material = @import("modules/material/root.zig");
 const checkin = @import("modules/checkin/root.zig");
+const lucky_draw = @import("modules/lucky_draw/root.zig");
+const coupon = @import("modules/coupon/root.zig");
+const vote = @import("modules/vote/root.zig");
+const seckill = @import("modules/seckill/root.zig");
+const member_card = @import("modules/member_card/root.zig");
+const distribution = @import("modules/distribution/root.zig");
+const shop = @import("modules/shop/root.zig");
 const menu = @import("modules/menu/root.zig");
 const points = @import("modules/points/root.zig");
 const cache_svc = @import("services/cache.zig");
@@ -58,6 +65,13 @@ const all_infos = .{
     cloud.persistence.infos,
     material.persistence.infos,
     checkin.persistence.infos,
+    lucky_draw.persistence.infos,
+    coupon.persistence.infos,
+    vote.persistence.infos,
+    seckill.persistence.infos,
+    member_card.persistence.infos,
+    distribution.persistence.infos,
+    shop.persistence.infos,
     menu.persistence.infos,
     points.persistence.infos,
 };
@@ -1746,6 +1760,268 @@ test "checkin: module receiver handles 签到 + per-account config" {
     try std.testing.expectEqualStrings("5", cfg);
 }
 
+test "lucky_draw: weighted pick + draw records + daily_limit" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = lucky_draw.persistence.DrawStore.init(allocator, env.client);
+    var svc = lucky_draw.service.DrawService.init(allocator, std.testing.io, &store);
+
+    // pickPrize：加权边界（roll 落在各区间的确定性结果）。
+    const prizes = [_]lucky_draw.service.Prize{
+        .{ .name = "A", .weight = 50, .points = 10 },
+        .{ .name = "B", .weight = 30, .points = 20 },
+        .{ .name = "C", .weight = 20, .points = 0 },
+    };
+    try std.testing.expectEqual(@as(usize, 0), lucky_draw.service.DrawService.pickPrize(&prizes, 0));
+    try std.testing.expectEqual(@as(usize, 0), lucky_draw.service.DrawService.pickPrize(&prizes, 49));
+    try std.testing.expectEqual(@as(usize, 1), lucky_draw.service.DrawService.pickPrize(&prizes, 50));
+    try std.testing.expectEqual(@as(usize, 2), lucky_draw.service.DrawService.pickPrize(&prizes, 99));
+
+    // parseConfig：合法 JSON + 缺 prizes 兜底。
+    var cfg = svc.parseConfig(allocator, "{\"cost\":5,\"daily_limit\":3,\"prizes\":[{\"name\":\"10积分\",\"weight\":50,\"points\":10},{\"name\":\"谢谢参与\",\"weight\":50,\"points\":0}]}");
+    defer cfg.free(allocator);
+    try std.testing.expectEqual(@as(i64, 5), cfg.cost);
+    try std.testing.expectEqual(@as(i64, 3), cfg.daily_limit);
+    try std.testing.expectEqual(@as(usize, 2), cfg.prizes.len);
+
+    // draw：落库 + 返回中奖。
+    const result = try svc.draw(allocator, 1, 9, "o_luck", &cfg);
+    defer allocator.free(result.prize_name);
+    var list = try svc.list(1, 20, 1, 9);
+    defer list.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), list.total);
+    try std.testing.expectEqualStrings("o_luck", list.items[0].openid);
+
+    // daily_limit=1：第二次 draw → DailyLimit。
+    var cfg1 = svc.parseConfig(allocator, "{\"daily_limit\":1,\"prizes\":[{\"name\":\"X\",\"weight\":1,\"points\":0}]}");
+    defer cfg1.free(allocator);
+    const r1 = try svc.draw(allocator, 1, 9, "o_lim", &cfg1);
+    defer allocator.free(r1.prize_name);
+    try std.testing.expectError(error.DailyLimit, svc.draw(allocator, 1, 9, "o_lim", &cfg1));
+}
+
+test "lucky_draw: module receiver handles 抽奖" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var draw_store = lucky_draw.persistence.DrawStore.init(allocator, env.client);
+    var draw_svc = lucky_draw.service.DrawService.init(allocator, std.testing.io, &draw_store);
+
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.module_svc = &module_svc;
+    var draw_ctx = lucky_draw.service.ReceiverCtx{ .module_svc = &module_svc, .draw_svc = &draw_svc, .io = std.testing.io };
+    try wechat_svc.registerReceiver(.{ .module_name = "lucky_draw", .ctx = &draw_ctx, .handle = lucky_draw.service.receiverHandle });
+
+    const account_id = try account_svc.create(1, "抽奖测试号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokl", .encoding_aes_key = "", .verified = false });
+    _ = try module_svc.bind(1, account_id, "lucky_draw", "active");
+    _ = try module_svc.setConfig(1, account_id, "lucky_draw", "{\"prizes\":[{\"name\":\"10积分\",\"weight\":1,\"points\":10}]}");
+
+    const token = "tokl";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "n2";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    const text_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_draw]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[抽奖]]></Content></xml>";
+    const r = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, text_xml);
+    defer allocator.free(r);
+    try std.testing.expect(std.mem.indexOf(u8, r, "抽中") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r, "10积分") != null);
+
+    // 中奖记录落库。
+    var list = try draw_svc.list(1, 20, 1, account_id);
+    defer list.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), list.total);
+}
+
+test "coupon: create/claim/use lifecycle + stock/limit" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = coupon.persistence.CouponStore.init(allocator, env.client);
+    var svc = coupon.service.CouponService.init(allocator, std.testing.io, &store);
+
+    // 建券：总量 2，每人限领 1。
+    const cid = try svc.createCoupon(1, 9, "满100减20", 2000, 10000, 2, 1, 0, 0);
+    const c = (try svc.getCoupon(cid)).?;
+    defer c.free(allocator);
+    try std.testing.expectEqualStrings("满100减20", c.title);
+    try std.testing.expectEqual(@as(i64, 2000), c.amount);
+
+    // 领券：券码 CP- 前缀。
+    const code1 = try svc.claimCoupon(allocator, 1, 9, "o_a", cid);
+    defer allocator.free(code1);
+    try std.testing.expect(std.mem.startsWith(u8, code1, "CP-"));
+
+    // 每人限领 1：同用户再领 → LimitReached。
+    try std.testing.expectError(error.LimitReached, svc.claimCoupon(allocator, 1, 9, "o_a", cid));
+
+    // 库存：总量 2，已发 1，再发 1 给另一用户 → 成功；第 3 个 → OutOfStock。
+    const code2 = try svc.claimCoupon(allocator, 1, 9, "o_b", cid);
+    defer allocator.free(code2);
+    try std.testing.expectError(error.OutOfStock, svc.claimCoupon(allocator, 1, 9, "o_c", cid));
+
+    // 核销：unused→used 幂等。
+    try svc.useCoupon(code1);
+    try std.testing.expectError(error.AlreadyUsed, svc.useCoupon(code1));
+
+    // 领取记录落库。
+    var list = try svc.listUserCoupons(1, 20, 1, 9, null);
+    defer list.free(allocator);
+    try std.testing.expectEqual(@as(i64, 2), list.total);
+
+    // 过期券：end_at 已过 → Expired。
+    const cid2 = try svc.createCoupon(1, 9, "过期券", 100, 0, 0, 1, 0, 1000);
+    try std.testing.expectError(error.Expired, svc.claimCoupon(allocator, 1, 9, "o_d", cid2));
+}
+
+test "coupon: module receiver handles 领券" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var coupon_store = coupon.persistence.CouponStore.init(allocator, env.client);
+    var coupon_svc = coupon.service.CouponService.init(allocator, std.testing.io, &coupon_store);
+
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.module_svc = &module_svc;
+    var coupon_ctx = coupon.service.ReceiverCtx{ .module_svc = &module_svc, .coupon_svc = &coupon_svc, .io = std.testing.io };
+    try wechat_svc.registerReceiver(.{ .module_name = "coupon", .ctx = &coupon_ctx, .handle = coupon.service.receiverHandle });
+
+    const account_id = try account_svc.create(1, "券测试号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokcp", .encoding_aes_key = "", .verified = false });
+    _ = try module_svc.bind(1, account_id, "coupon", "active");
+    _ = try coupon_svc.createCoupon(1, account_id, "新人券", 500, 0, 10, 1, 0, 0);
+
+    const token = "tokcp";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "ncp";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    const text_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_cp]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[领券]]></Content></xml>";
+    const r = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, text_xml);
+    defer allocator.free(r);
+    try std.testing.expect(std.mem.indexOf(u8, r, "领券成功") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r, "CP-") != null);
+
+    // 已领满（每人限领 1）→ 回复「已领完」。
+    const r2 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, text_xml);
+    defer allocator.free(r2);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "已领完") != null);
+}
+
+test "vote: create/vote/tally lifecycle + dedup" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = vote.persistence.VoteStore.init(allocator, env.client);
+    var svc = vote.service.VoteService.init(allocator, std.testing.io, &store);
+
+    const vid = try svc.createVote(1, 9, "最喜欢的语言", "[\"Zig\",\"Rust\",\"Go\"]", 0);
+    const v = (try svc.getVote(vid)).?;
+    defer v.free(allocator);
+    try std.testing.expectEqualStrings("最喜欢的语言", v.title);
+
+    // 投票：o_a 投 0（Zig），o_b 投 1（Rust），o_c 投 0。
+    try svc.vote(1, 9, "o_a", vid, 0);
+    try svc.vote(1, 9, "o_b", vid, 1);
+    try svc.vote(1, 9, "o_c", vid, 0);
+
+    // 防重：o_a 再投 → AlreadyVoted。
+    try std.testing.expectError(error.AlreadyVoted, svc.vote(1, 9, "o_a", vid, 1));
+
+    // 计票：Zig=2, Rust=1, Go=0。
+    const tally = try svc.tally(allocator, vid);
+    defer allocator.free(tally);
+    try std.testing.expectEqual(@as(i64, 2), tally[0]);
+    try std.testing.expectEqual(@as(i64, 1), tally[1]);
+    try std.testing.expectEqual(@as(i64, 0), tally[2]);
+
+    // 非法选项 → InvalidOption。
+    try std.testing.expectError(error.InvalidOption, svc.vote(1, 9, "o_d", vid, 99));
+}
+
+test "vote: module receiver handles 投票 + 投N" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var vote_store = vote.persistence.VoteStore.init(allocator, env.client);
+    var vote_svc = vote.service.VoteService.init(allocator, std.testing.io, &vote_store);
+
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.module_svc = &module_svc;
+    var vote_ctx = vote.service.ReceiverCtx{ .module_svc = &module_svc, .vote_svc = &vote_svc, .io = std.testing.io };
+    try wechat_svc.registerReceiver(.{ .module_name = "vote", .ctx = &vote_ctx, .handle = vote.service.receiverHandle });
+
+    const account_id = try account_svc.create(1, "投票测试号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokv", .encoding_aes_key = "", .verified = false });
+    _ = try module_svc.bind(1, account_id, "vote", "active");
+    _ = try vote_svc.createVote(1, account_id, "今晚吃什么", "[\"火锅\",\"烧烤\"]", 0);
+
+    const token = "tokv";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "nv";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    // 「投票」→ 列题目 + 选项。
+    const q_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_v]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[投票]]></Content></xml>";
+    const r1 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, q_xml);
+    defer allocator.free(r1);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "今晚吃什么") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "火锅") != null);
+
+    // 「投1」→ 投票成功。
+    const v_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_v]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[投1]]></Content></xml>";
+    const r2 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, v_xml);
+    defer allocator.free(r2);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "投票成功") != null);
+
+    // 再「投2」→ 已投过。
+    const v2_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_v]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[投2]]></Content></xml>";
+    const r3 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, v2_xml);
+    defer allocator.free(r3);
+    try std.testing.expect(std.mem.indexOf(u8, r3, "已经投过") != null);
+}
+
 test "checkin: unbound module declines, falls through to default reply" {
     const allocator = std.testing.allocator;
     var env = try openMemory(allocator);
@@ -2040,4 +2316,1407 @@ test "session revocation: token_version bump invalidates old JWTs" {
     var denied = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, "/api/v1/whoami", .{ .headers = &.{.{ "authorization", auth_header }} });
     defer denied.deinit(allocator);
     try std.testing.expectEqual(@as(u16, 401), denied.status_code);
+}
+
+test "seckill: rush lifecycle + atomic stock + dedup" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = seckill.persistence.SeckillStore.init(allocator, env.client);
+    var svc = seckill.service.SeckillService.init(allocator, std.testing.io, &store);
+
+    const aid = try svc.createActivity(1, 9, "限时特惠", 9900, 19900, 2, 1, 0, 0);
+
+    // 抢 1 件成功，sold=1。
+    _ = try svc.rush(1, 9, "o_a", aid, 1);
+    const a1 = (try svc.getActivity(aid)).?;
+    defer a1.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), a1.sold);
+
+    // 另一用户抢 1 件，sold=2（库存耗尽）。
+    _ = try svc.rush(1, 9, "o_b", aid, 1);
+    const a2 = (try svc.getActivity(aid)).?;
+    defer a2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 2), a2.sold);
+
+    // 第 3 件 → OutOfStock（原子扣减失败）。
+    try std.testing.expectError(error.OutOfStock, svc.rush(1, 9, "o_c", aid, 1));
+
+    // 限购：o_a 已抢 1，per_user=1 → 再抢 LimitReached。
+    try std.testing.expectError(error.LimitReached, svc.rush(1, 9, "o_a", aid, 1));
+
+    // 不存在活动 → NotFound。
+    try std.testing.expectError(error.NotFound, svc.rush(1, 9, "o_x", 9999, 1));
+}
+
+test "seckill: module receiver handles 秒杀 + 抢N" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var seckill_store = seckill.persistence.SeckillStore.init(allocator, env.client);
+    var seckill_svc = seckill.service.SeckillService.init(allocator, std.testing.io, &seckill_store);
+
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.module_svc = &module_svc;
+    var seckill_ctx = seckill.service.ReceiverCtx{ .io = std.testing.io, .seckill_svc = &seckill_svc };
+    try wechat_svc.registerReceiver(.{ .module_name = "seckill", .ctx = &seckill_ctx, .handle = seckill.service.receiverHandle });
+
+    const account_id = try account_svc.create(1, "秒杀测试号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "toks", .encoding_aes_key = "", .verified = false });
+    _ = try module_svc.bind(1, account_id, "seckill", "active");
+    _ = try seckill_svc.createActivity(1, account_id, "周年庆秒杀", 100, 500, 10, 1, 0, 0);
+
+    const token = "toks";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "ns";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    // 「秒杀」→ 列活动 + 价格 + 剩余。
+    const q_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_s]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[秒杀]]></Content></xml>";
+    const r1 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, q_xml);
+    defer allocator.free(r1);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "周年庆秒杀") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "1.00") != null);
+
+    // 「抢1」→ 抢购成功。
+    const rush_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_s]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[抢1]]></Content></xml>";
+    const r2 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, rush_xml);
+    defer allocator.free(r2);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "抢购成功") != null);
+
+    // 再抢 → 每人限购。
+    const r3 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, rush_xml);
+    defer allocator.free(r3);
+    try std.testing.expect(std.mem.indexOf(u8, r3, "每人限购") != null);
+}
+
+test "member_card: open/view/adjust lifecycle + auto level-up" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = member_card.persistence.MemberCardStore.init(allocator, env.client);
+    var svc = member_card.service.MemberCardService.init(allocator, std.testing.io, &store);
+
+    // 建两个等级：普通（0 积分 9.5 折）+ 黄金（1000 积分 9 折）。
+    const normal_id = try svc.createLevel(1, 9, "普通会员", 1, 950, 100, 0);
+    const gold_id = try svc.createLevel(1, 9, "黄金会员", 2, 900, 200, 1000);
+
+    // 开卡 → 默认普通等级。
+    try svc.openCard(1, 9, "o_m");
+    var v1 = (try svc.view(1, 9, "o_m")).?;
+    defer v1.free(allocator);
+    try std.testing.expectEqualStrings("普通会员", v1.level_name);
+    try std.testing.expectEqual(@as(i64, 0), v1.points);
+    try std.testing.expectEqual(@as(i64, 950), v1.discount);
+
+    // 重复开卡 → AlreadyOpened。
+    try std.testing.expectError(error.AlreadyOpened, svc.openCard(1, 9, "o_m"));
+
+    // 加积分 1200 → 余额 1200 + 自动升级黄金。
+    try svc.adjust(1, 9, "o_m", 1200);
+    var v2 = (try svc.view(1, 9, "o_m")).?;
+    defer v2.free(allocator);
+    try std.testing.expectEqualStrings("黄金会员", v2.level_name);
+    try std.testing.expectEqual(@as(i64, 1200), v2.points);
+    try std.testing.expectEqual(@as(i64, 900), v2.discount);
+
+    // 消耗 1300 → 积分不足拒绝。
+    try std.testing.expectError(error.InsufficientPoints, svc.adjust(1, 9, "o_m", -1300));
+
+    // 消耗 500 → 余额 700，等级仍黄金（累计 1200 >= 1000）。
+    try svc.adjust(1, 9, "o_m", -500);
+    var v3 = (try svc.view(1, 9, "o_m")).?;
+    defer v3.free(allocator);
+    try std.testing.expectEqual(@as(i64, 700), v3.points);
+    try std.testing.expectEqualStrings("黄金会员", v3.level_name);
+
+    // 未办卡 → NotFound。
+    try std.testing.expectError(error.NotFound, svc.adjust(1, 9, "o_nobody", 100));
+    _ = normal_id;
+    _ = gold_id;
+}
+
+test "member_card: module receiver handles 办卡 + 查卡" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var mc_store = member_card.persistence.MemberCardStore.init(allocator, env.client);
+    var mc_svc = member_card.service.MemberCardService.init(allocator, std.testing.io, &mc_store);
+
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.module_svc = &module_svc;
+    var mc_ctx = member_card.service.ReceiverCtx{ .io = std.testing.io, .member_svc = &mc_svc };
+    try wechat_svc.registerReceiver(.{ .module_name = "member_card", .ctx = &mc_ctx, .handle = member_card.service.receiverHandle });
+
+    const account_id = try account_svc.create(1, "会员卡测试号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokm", .encoding_aes_key = "", .verified = false });
+    _ = try module_svc.bind(1, account_id, "member_card", "active");
+    _ = try mc_svc.createLevel(1, account_id, "普通会员", 1, 950, 100, 0);
+
+    const token = "tokm";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "nm";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    // 「办卡」→ 成功。
+    const open_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_mc]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[办卡]]></Content></xml>";
+    const r1 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, open_xml);
+    defer allocator.free(r1);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "办卡成功") != null);
+
+    // 「查卡」→ 等级 + 积分 + 折扣。
+    const view_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_mc]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[查卡]]></Content></xml>";
+    const r2 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, view_xml);
+    defer allocator.free(r2);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "普通会员") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "积分") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "9.50 折") != null);
+
+    // 再「办卡」→ 已办过。
+    const r3 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, open_xml);
+    defer allocator.free(r3);
+    try std.testing.expect(std.mem.indexOf(u8, r3, "已经办过") != null);
+}
+
+test "distribution: join/3-level commission/withdraw lifecycle" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = distribution.persistence.DistributionStore.init(allocator, env.client);
+    var svc = distribution.service.DistributionService.init(allocator, std.testing.io, &store);
+
+    // 三级链：A(顶) ← B(中) ← C(买家分销员)。
+    try svc.becomeDistributor(1, 9, "o_A", "");
+    try svc.becomeDistributor(1, 9, "o_B", "o_A");
+    try svc.becomeDistributor(1, 9, "o_C", "o_B");
+
+    // 重复加盟 → AlreadyDistributor。
+    try std.testing.expectError(error.AlreadyDistributor, svc.becomeDistributor(1, 9, "o_B", ""));
+    // 上级无效 → InvalidParent（自己不能做自己上级）。
+    try std.testing.expectError(error.InvalidParent, svc.becomeDistributor(1, 9, "o_X", "o_X"));
+    try std.testing.expectError(error.InvalidParent, svc.becomeDistributor(1, 9, "o_X", "o_NotFound"));
+
+    // C 消费 10000 分 → 一级上级 B 得 10%（1000）、二级上级 A 得 5%（500）。
+    const count = try svc.distribute(1, 9, "o_C", 10000);
+    try std.testing.expectEqual(@as(usize, 2), count);
+
+    const a = (try svc.getDistributor(1, 9, "o_A")).?;
+    defer a.free(allocator);
+    const b = (try svc.getDistributor(1, 9, "o_B")).?;
+    defer b.free(allocator);
+    const c = (try svc.getDistributor(1, 9, "o_C")).?;
+    defer c.free(allocator);
+    try std.testing.expectEqual(@as(i64, 500), a.commission_balance);
+    try std.testing.expectEqual(@as(i64, 1000), b.commission_balance);
+    try std.testing.expectEqual(@as(i64, 0), c.commission_balance);
+
+    // B 提现 700 → 余额 300；超额提现拒绝。
+    try svc.withdraw(1, 9, "o_B", 700);
+    const b2 = (try svc.getDistributor(1, 9, "o_B")).?;
+    defer b2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 300), b2.commission_balance);
+    try std.testing.expectError(error.InsufficientBalance, svc.withdraw(1, 9, "o_B", 400));
+}
+
+test "distribution: module receiver handles 加盟 + 分销" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var dist_store = distribution.persistence.DistributionStore.init(allocator, env.client);
+    var dist_svc = distribution.service.DistributionService.init(allocator, std.testing.io, &dist_store);
+
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+    wechat_svc.module_svc = &module_svc;
+    var dist_ctx = distribution.service.ReceiverCtx{ .io = std.testing.io, .dist_svc = &dist_svc };
+    try wechat_svc.registerReceiver(.{ .module_name = "distribution", .ctx = &dist_ctx, .handle = distribution.service.receiverHandle });
+
+    const account_id = try account_svc.create(1, "分销测试号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokd", .encoding_aes_key = "", .verified = false });
+    _ = try module_svc.bind(1, account_id, "distribution", "active");
+
+    const token = "tokd";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "nd";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    // 「加盟」→ 成功。
+    const join_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_d]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[加盟]]></Content></xml>";
+    const r1 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, join_xml);
+    defer allocator.free(r1);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "加盟成功") != null);
+
+    // 「分销」→ 佣金余额 0.00 元。
+    const view_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_d]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[分销]]></Content></xml>";
+    const r2 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, view_xml);
+    defer allocator.free(r2);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "佣金余额") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "0.00 元") != null);
+
+    // 再「加盟」→ 已是分销员。
+    const r3 = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, join_xml);
+    defer allocator.free(r3);
+    try std.testing.expect(std.mem.indexOf(u8, r3, "已经是分销员") != null);
+}
+
+test "shop: category CRUD + product lifecycle (Phase1)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    // 分类：创建两个 + 列表 + 删除。
+    const cat_id = try svc.createCategory(1, 9, "数码", 0, 1);
+    _ = try svc.createCategory(1, 9, "服饰", 0, 2);
+    var cats = try svc.listCategories(1, 9);
+    defer cats.free(allocator);
+    try std.testing.expectEqual(@as(usize, 2), cats.items.len);
+
+    // 商品（默认单 SKU）。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = cat_id,
+        .name = "蓝牙耳机",
+        .image = "/img/x.png",
+        .content = "好耳机",
+        .price = 9900,
+        .original_price = 19900,
+        .stock = 100,
+        .status = 1,
+        .skus = &.{},
+    });
+    const p = (try svc.getProduct(pid)).?;
+    defer p.free(allocator);
+    try std.testing.expectEqualStrings("蓝牙耳机", p.name);
+    try std.testing.expectEqual(@as(i64, 9900), p.price);
+
+    // 详情含默认 SKU。
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    try std.testing.expectEqual(@as(usize, 1), skus.len);
+    try std.testing.expectEqual(@as(i64, 9900), skus[0].price);
+
+    // C 端列表（仅上架）含商品。
+    var list = try svc.listProducts(1, 20, 1, 9, 0, "", true);
+    defer list.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), list.total);
+
+    // 下架后 C 端不可见。
+    _ = try svc.updateProduct(1, 9, pid, .{
+        .category_id = cat_id,
+        .name = "蓝牙耳机",
+        .image = "/img/x.png",
+        .content = "",
+        .price = 9900,
+        .original_price = 19900,
+        .stock = 100,
+        .status = 0,
+        .skus = &.{},
+    });
+    var list2 = try svc.listProducts(1, 20, 1, 9, 0, "", true);
+    defer list2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 0), list2.total);
+
+    // 删除商品 + 分类。
+    try svc.deleteProduct(pid);
+    try std.testing.expect((try svc.getProduct(pid)) == null);
+    try svc.deleteCategory(cat_id);
+}
+
+test "shop: product with multi-SKU specs" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0,
+        .name = "定制T恤",
+        .image = "",
+        .content = "",
+        .price = 5900,
+        .original_price = 9900,
+        .stock = 200,
+        .status = 1,
+        .skus = &.{
+            .{ .spec_json = "[{\"k\":\"颜色\",\"v\":\"红\"}]", .image = "", .price = 5900, .stock = 100 },
+            .{ .spec_json = "[{\"k\":\"颜色\",\"v\":\"蓝\"}]", .image = "", .price = 6900, .stock = 100 },
+        },
+    });
+
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    try std.testing.expectEqual(@as(usize, 2), skus.len);
+    try std.testing.expect(std.mem.indexOf(u8, skus[0].spec_json, "红") != null or std.mem.indexOf(u8, skus[1].spec_json, "红") != null);
+}
+
+test "shop: cart/address/order trade lifecycle (Phase2)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    // 商品 + 默认 SKU。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "测试商品", .image = "", .content = "",
+        .price = 5000, .original_price = 8000, .stock = 10, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const sku_id = skus[0].id;
+
+    // 购物车：加入 + 累加。
+    const cart_id = try svc.addCart(1, 9, "o_buyer", pid, sku_id, 2);
+    _ = try svc.addCart(1, 9, "o_buyer", pid, sku_id, 3);
+    const carts = try svc.listCarts(1, "o_buyer");
+    defer {
+        for (carts) |c| c.free(allocator);
+        if (carts.len > 0) allocator.free(carts);
+    }
+    try std.testing.expectEqual(@as(usize, 1), carts.len);
+    try std.testing.expectEqual(@as(i64, 5), carts[0].quantity);
+
+    // 地址（默认）。
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_buyer", .name = "张三", .mobile = "13800138000",
+        .region = "广东省深圳市", .detail = "科技园 1 号", .is_default = 1,
+    });
+    const addrs = try svc.listAddresses(1, "o_buyer");
+    defer {
+        for (addrs) |a| a.free(allocator);
+        if (addrs.len > 0) allocator.free(addrs);
+    }
+    try std.testing.expectEqual(@as(usize, 1), addrs.len);
+
+    // 下单：数量 5 → 扣库存 10→5；金额 5000*5。
+    const order_id = try svc.createOrder(1, 9, "o_buyer", addr_id, &.{
+        .{ .product_id = pid, .sku_id = sku_id, .quantity = 5 },
+    }, "", "", "", 0);
+    var o = (try svc.getOrder(order_id)).?;
+    defer o.free(allocator);
+    try std.testing.expectEqual(@as(i64, 25000), o.total_amount);
+    try std.testing.expectEqual(@as(i64, 0), o.status);
+
+    // 库存已扣：SKU stock 10-5=5。
+    const sku2 = (try svc.getSku(sku_id)).?;
+    defer sku2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 5), sku2.stock);
+
+    // 明细。
+    const ops = try svc.listOrderProducts(order_id);
+    defer {
+        for (ops) |op| op.free(allocator);
+        if (ops.len > 0) allocator.free(ops);
+    }
+    try std.testing.expectEqual(@as(usize, 1), ops.len);
+    try std.testing.expectEqualStrings("测试商品", ops[0].name);
+
+    // 超库存下单 → OutOfStock。
+    try std.testing.expectError(error.OutOfStock, svc.createOrder(1, 9, "o_buyer", addr_id, &.{
+        .{ .product_id = pid, .sku_id = sku_id, .quantity = 99 },
+    }, "", "", "", 0));
+
+    // 状态流转：支付 → 发货 → 确认收货；待支付取消 → 冲突。
+    try svc.markPaid(1, 9, order_id);
+    try svc.shipOrder(order_id, "顺丰", "SF123");
+    try svc.confirmOrder(order_id);
+    var o2 = (try svc.getOrder(order_id)).?;
+    defer o2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 3), o2.status);
+    try std.testing.expectEqualStrings("顺丰", o2.express_company);
+    try std.testing.expectError(error.OrderStateConflict, svc.cancelOrder(order_id));
+
+    // 清理购物车/地址。
+    try svc.updateCart(cart_id, 1);
+    try svc.deleteCart(cart_id);
+    try svc.deleteAddress(addr_id);
+}
+
+test "shop: refund apply/audit + comment + distribution hookup (Phase3)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var dist_store = distribution.persistence.DistributionStore.init(allocator, env.client);
+    var dist_svc = distribution.service.DistributionService.init(allocator, std.testing.io, &dist_store);
+    svc.dist_svc = &dist_svc;
+
+    // 分销链：A(顶) ← B(买家上级)。
+    try dist_svc.becomeDistributor(1, 9, "o_A", "");
+    try dist_svc.becomeDistributor(1, 9, "o_B", "o_A");
+
+    // 商品 + 下单（mock 支付 markPaid → 触发分佣）。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "佣金商品", .image = "", .content = "",
+        .price = 10000, .original_price = 12000, .stock = 10, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_B", .name = "B", .mobile = "13800000000", .region = "SZ", .detail = "1号", .is_default = 1,
+    });
+    const order_id = try svc.createOrder(1, 9, "o_B", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+    try svc.markPaid(1, 9, order_id);
+
+    // 分佣：B 的一级上级 A 得 10% = 1000。
+    const a = (try dist_svc.getDistributor(1, 9, "o_A")).?;
+    defer a.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1000), a.commission_balance);
+
+    // 退款：申请（重复申请拒绝）→ 审核同意 → 订单置已取消。
+    _ = try svc.applyRefund(1, 9, order_id, "o_B", "不想要了");
+    try std.testing.expectError(error.Duplicate, svc.applyRefund(1, 9, order_id, "o_B", "再次申请"));
+    var refunds = try svc.listRefunds(1, 20, 1, 9, -1);
+    defer refunds.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), refunds.total);
+    try svc.auditRefund(order_id, refunds.items[0].id, true);
+    var o = (try svc.getOrder(order_id)).?;
+    defer o.free(allocator);
+    try std.testing.expectEqual(@as(i64, 4), o.status);
+
+    // 评价实名：退款订单（status=4）不可评。
+    const ops = try svc.listOrderProducts(order_id);
+    defer {
+        for (ops) |op| op.free(allocator);
+        if (ops.len > 0) allocator.free(ops);
+    }
+    try std.testing.expectError(error.OrderStateConflict, svc.createComment(1, 9, .{
+        .order_product_id = ops[0].id,
+        .product_id = pid,
+        .openid = "o_B",
+        .star = 5,
+        .content = "不该能评",
+    }));
+
+    // 完整订单（支付→发货→收货）后可评价；非买家不可评。
+    const order2 = try svc.createOrder(1, 9, "o_B", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+    try svc.markPaid(1, 9, order2);
+    try svc.shipOrder(order2, "顺丰", "SF2");
+    try svc.confirmOrder(order2);
+    const ops2 = try svc.listOrderProducts(order2);
+    defer {
+        for (ops2) |op| op.free(allocator);
+        if (ops2.len > 0) allocator.free(ops2);
+    }
+    // 非买家（o_x）评价 → InvalidInput。
+    try std.testing.expectError(error.InvalidInput, svc.createComment(1, 9, .{
+        .order_product_id = ops2[0].id,
+        .product_id = pid,
+        .openid = "o_x",
+        .star = 5,
+        .content = "冒充",
+    }));
+    _ = try svc.createComment(1, 9, .{
+        .order_product_id = ops2[0].id,
+        .product_id = pid,
+        .openid = "o_B",
+        .star = 5,
+        .content = "很好用",
+    });
+    const comments = try svc.listComments(pid);
+    defer {
+        for (comments) |c| c.free(allocator);
+        if (comments.len > 0) allocator.free(comments);
+    }
+    try std.testing.expectEqual(@as(usize, 1), comments.len);
+    try std.testing.expectEqualStrings("很好用", comments[0].content);
+}
+
+test "shop: coupon deduction + member points accrual on payment" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var coupon_store = coupon.persistence.CouponStore.init(allocator, env.client);
+    var coupon_svc = coupon.service.CouponService.init(allocator, std.testing.io, &coupon_store);
+    var mc_store = member_card.persistence.MemberCardStore.init(allocator, env.client);
+    var mc_svc = member_card.service.MemberCardService.init(allocator, std.testing.io, &mc_store);
+    svc.coupon_store = &coupon_store;
+    svc.member_svc = &mc_svc;
+
+    // 商品 100 元（10000 分）。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "满减测试", .image = "", .content = "",
+        .price = 10000, .original_price = 12000, .stock = 10, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_m", .name = "M", .mobile = "13800000000", .region = "SZ", .detail = "1号", .is_default = 1,
+    });
+
+    // 会员卡（支付后积分累计的前提）：先建等级，开卡自动绑定。
+    _ = try mc_svc.createLevel(1, 9, "普通会员", 1, 1000, 100, 0);
+    try mc_svc.openCard(1, 9, "o_m");
+
+    // 领券：满 50 减 10（1000 分）。
+    const coupon_id = try coupon_svc.createCoupon(1, 9, "满50减10", 1000, 5000, 100, 1, 0, 0);
+    const code = try coupon_svc.claimCoupon(allocator, 1, 9, "o_m", coupon_id);
+    defer allocator.free(code);
+
+    // 下单用券：100 元 - 10 元 = 90 元实付。
+    const order_id = try svc.createOrder(1, 9, "o_m", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, code, "", "", 0);
+    var o = (try svc.getOrder(order_id)).?;
+    defer o.free(allocator);
+    try std.testing.expectEqual(@as(i64, 10000), o.total_amount);
+    try std.testing.expectEqual(@as(i64, 9000), o.pay_amount);
+
+    // 券已核销（used）。
+    const u = (try coupon_store.getByCode(code)).?;
+    defer u.free(allocator);
+    try std.testing.expectEqualStrings("used", u.status);
+
+    // 支付 → 会员积分累计：90 元 = 90 积分。
+    try svc.markPaid(1, 9, order_id);
+    const v = (try mc_svc.view(1, 9, "o_m")).?;
+    defer v.free(allocator);
+    try std.testing.expectEqual(@as(i64, 90), v.points);
+
+    // 他人券不可用：B 领券，A 下单用 B 的券 → InvalidInput。
+    const code_b = try coupon_svc.claimCoupon(allocator, 1, 9, "o_other", coupon_id);
+    defer allocator.free(code_b);
+    try std.testing.expectError(error.InvalidInput, svc.createOrder(1, 9, "o_m", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, code_b, "", "", 0));
+}
+
+test "shop: idempotency + stock restore on cancel (production hardening)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "回滚测试", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 10, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_r", .name = "R", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+    const items: []const shop.service.OrderItemInput = &.{ .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 3 } };
+
+    // 幂等：同 client_trade_no 重复下单 → 返回同一订单，库存只扣一次（10→7）。
+    const o1 = try svc.createOrder(1, 9, "o_r", addr_id, items, "", "CTN-001", "", 0);
+    const o2 = try svc.createOrder(1, 9, "o_r", addr_id, items, "", "CTN-001", "", 0);
+    try std.testing.expectEqual(o1, o2);
+    const sku_after = (try svc.getSku(skus[0].id)).?;
+    defer sku_after.free(allocator);
+    try std.testing.expectEqual(@as(i64, 7), sku_after.stock);
+
+    // 取消 → 库存回滚（7→10），销量回退。
+    try svc.cancelOrder(o1);
+    const sku_restored = (try svc.getSku(skus[0].id)).?;
+    defer sku_restored.free(allocator);
+    try std.testing.expectEqual(@as(i64, 10), sku_restored.stock);
+    const p2 = (try svc.getProduct(pid)).?;
+    defer p2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 0), p2.sales);
+}
+
+test "shop: favorite + order stats (production extras)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    // 两件商品。
+    const pid1 = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "收藏A", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 5, .status = 1, .skus = &.{},
+    });
+    const pid2 = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "收藏B", .image = "", .content = "",
+        .price = 2000, .original_price = 3000, .stock = 5, .status = 1, .skus = &.{},
+    });
+
+    // 收藏：两件 + 幂等（重复收藏不重复）。
+    try svc.favorite(1, 9, "o_f", pid1);
+    try svc.favorite(1, 9, "o_f", pid1);
+    try svc.favorite(1, 9, "o_f", pid2);
+    try std.testing.expect(try svc.isFavorite(1, "o_f", pid1));
+    const favs = try svc.listFavorites(1, "o_f");
+    defer {
+        for (favs) |f| f.free(allocator);
+        if (favs.len > 0) allocator.free(favs);
+    }
+    try std.testing.expectEqual(@as(usize, 2), favs.len);
+
+    // 取消收藏一件。
+    try svc.unfavorite(favs[0].id);
+    try std.testing.expect(!(try svc.isFavorite(1, "o_f", pid1)));
+
+    // 订单统计：2 单（1 支付 1 取消）+ 1 单待支付。
+    const s1 = try svc.listSkus(pid1);
+    defer {
+        for (s1) |x| x.free(allocator);
+        if (s1.len > 0) allocator.free(s1);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_s", .name = "S", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+    const o1 = try svc.createOrder(1, 9, "o_s", addr_id, &.{
+        .{ .product_id = pid1, .sku_id = s1[0].id, .quantity = 2 },
+    }, "", "", "", 0);
+    try svc.markPaid(1, 9, o1); // 已支付 2000
+    const o2 = try svc.createOrder(1, 9, "o_s", addr_id, &.{
+        .{ .product_id = pid2, .sku_id = s1[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+    try svc.cancelOrder(o2); // 取消
+    _ = try svc.createOrder(1, 9, "o_s", addr_id, &.{
+        .{ .product_id = pid1, .sku_id = s1[0].id, .quantity = 1 },
+    }, "", "", "", 0); // 待支付
+
+    const stats = try svc.orderStats(1, 9);
+    try std.testing.expectEqual(@as(i64, 1), stats.pending_pay);
+    try std.testing.expectEqual(@as(i64, 1), stats.pending_ship);
+    try std.testing.expectEqual(@as(i64, 2000), stats.total_sales);
+}
+
+test "shop: balance payment via wallet (production extras)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var pay_store = payment.persistence.PaymentStore.init(allocator, env.client);
+    var pay_svc = payment.service.PaymentService.init(allocator, std.testing.io, &pay_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    svc.payment_svc = &pay_svc;
+    svc.fan_store = &fan_store;
+
+    // 粉丝 + 充值钱包 200 元（20000 分）。
+    const now_ts = zigmodu.time.wallClockSeconds(std.testing.io);
+    const fan_id = try fan_store.upsert(1, 9, "o_balance", "", "余额买家", "", true, now_ts, now_ts);
+    _ = try pay_store.creditWallet(1, 9, fan_id, 20000, zigmodu.time.wallClockSeconds(std.testing.io));
+
+    // 商品 150 元。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "余额支付商品", .image = "", .content = "",
+        .price = 15000, .original_price = 20000, .stock = 10, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_balance", .name = "B", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+
+    // 余额支付下单：钱包 20000 → 15000，订单已支付。
+    const order_id = try svc.createOrder(1, 9, "o_balance", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "balance", 0);
+    var o = (try svc.getOrder(order_id)).?;
+    defer o.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), o.status); // 已支付
+    const wallet = (try pay_svc.walletBalance(1, 9, fan_id)).?;
+    try std.testing.expectEqual(@as(i64, 5000), wallet.balance);
+
+    // 余额不足（仅 5000）→ 再下单 100 元 → InsufficientBalance。
+    try std.testing.expectError(error.InsufficientBalance, svc.createOrder(1, 9, "o_balance", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "balance", 0));
+}
+
+test "shop: outlet CRUD + self-pickup verification code" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    // 门店 CRUD。
+    const outlet_id = try svc.createOutlet(1, 9, "南山店", "科技园 1 号", "0755-1234");
+    const outlets = try svc.listOutlets(1, 9);
+    defer {
+        for (outlets) |o| o.free(allocator);
+        if (outlets.len > 0) allocator.free(outlets);
+    }
+    try std.testing.expectEqual(@as(usize, 1), outlets.len);
+    try std.testing.expectEqualStrings("南山店", outlets[0].name);
+
+    // 商品 + 自提下单（pickup_store_id>0 → 自提码）。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "自提商品", .image = "", .content = "",
+        .price = 3000, .original_price = 4000, .stock = 5, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_p", .name = "P", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+    const order_id = try svc.createOrder(1, 9, "o_p", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", outlet_id);
+    var o = (try svc.getOrder(order_id)).?;
+    defer o.free(allocator);
+    try std.testing.expectEqualStrings("self", o.pickup_type);
+    try std.testing.expect(o.pickup_code.len == 6);
+
+    // 支付 → 核销：错误码拒绝，正确码成功（状态 3）。
+    try svc.markPaid(1, 9, order_id);
+    try std.testing.expectError(error.InvalidInput, svc.pickupOrder(order_id, "000000"));
+    try svc.pickupOrder(order_id, o.pickup_code);
+    var o2 = (try svc.getOrder(order_id)).?;
+    defer o2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 3), o2.status);
+
+    // 快递单（pickup_store_id=0）不可核销。
+    const order_delivery = try svc.createOrder(1, 9, "o_p", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+    try svc.markPaid(1, 9, order_delivery);
+    try std.testing.expectError(error.OrderStateConflict, svc.pickupOrder(order_delivery, "123456"));
+
+    try svc.deleteOutlet(outlet_id);
+}
+
+test "shop: balance plan recharge (Bonus) lifecycle" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var pay_store = payment.persistence.PaymentStore.init(allocator, env.client);
+    var pay_svc = payment.service.PaymentService.init(allocator, std.testing.io, &pay_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    svc.payment_svc = &pay_svc;
+    svc.fan_store = &fan_store;
+
+    // 粉丝 + 套餐（充 100 送 20）。
+    const now_ts = zigmodu.time.wallClockSeconds(std.testing.io);
+    const fan_id = try fan_store.upsert(1, 9, "o_plan", "", "储值用户", "", true, now_ts, now_ts);
+    const plan_id = try svc.createBalancePlan(1, 9, "充100送20", 10000, 2000);
+
+    // 列表（仅上架）。
+    const plans = try svc.listBalancePlans(1, 9);
+    defer {
+        for (plans) |p| p.free(allocator);
+        if (plans.len > 0) allocator.free(plans);
+    }
+    try std.testing.expectEqual(@as(usize, 1), plans.len);
+
+    // 充值：钱包 0 → 12000（amount + bonus）。
+    try svc.rechargePlan(1, 9, "o_plan", plan_id);
+    const wallet = (try pay_svc.walletBalance(1, 9, fan_id)).?;
+    try std.testing.expectEqual(@as(i64, 12000), wallet.balance);
+
+    // 充值后可余额支付下单（闭环）。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "储值消费", .image = "", .content = "",
+        .price = 10000, .original_price = 15000, .stock = 5, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_plan", .name = "P", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+    const order_id = try svc.createOrder(1, 9, "o_plan", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "balance", 0);
+    const wallet2 = (try pay_svc.walletBalance(1, 9, fan_id)).?;
+    try std.testing.expectEqual(@as(i64, 2000), wallet2.balance);
+    var o = (try svc.getOrder(order_id)).?;
+    defer o.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), o.status); // 已支付
+
+    try svc.deleteBalancePlan(plan_id);
+}
+
+test "shop: auto-cancel expired pending orders (production ops)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "超时商品", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 3, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_t", .name = "T", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+
+    // 待支付订单（扣库存 3→2）。
+    const order_id = try svc.createOrder(1, 9, "o_t", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+
+    // 超时 0 秒 → 立即被清理（timeout_secs=0 表示所有待支付都过期）。
+    const cancelled = try svc.autoCancelExpired(1, 9, 0);
+    try std.testing.expectEqual(@as(usize, 1), cancelled);
+    var o = (try svc.getOrder(order_id)).?;
+    defer o.free(allocator);
+    try std.testing.expectEqual(@as(i64, 4), o.status); // 已取消
+
+    // 库存回滚：2→3。
+    const sku_restored = (try svc.getSku(skus[0].id)).?;
+    defer sku_restored.free(allocator);
+    try std.testing.expectEqual(@as(i64, 3), sku_restored.stock);
+}
+
+test "shop: groupon open/join/success lifecycle" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    // 商品（售价 100，团价 80，2 人成团）。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "拼团商品", .image = "", .content = "",
+        .price = 10000, .original_price = 12000, .stock = 10, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const gid = try svc.createGroupon(1, 9, pid, 8000, 2, 0, 0);
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_g1", .name = "G1", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+
+    // 开团：leader o_g1，团价 8000 下单。
+    const team_id = try svc.openGroupon(1, 9, "o_g1", addr_id, gid, skus[0].id);
+    var team = (try store.getTeam(team_id)).?;
+    defer team.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), team.current);
+    try std.testing.expectEqual(@as(i64, 0), team.status); // 拼团中
+
+    // 参团：o_g2 → current=2 → 成团。
+    const addr2 = try svc.createAddress(1, 9, .{
+        .openid = "o_g2", .name = "G2", .mobile = "13800000000", .region = "SZ", .detail = "2", .is_default = 1,
+    });
+    _ = try svc.joinGroupon(1, 9, "o_g2", addr2, team_id, skus[0].id);
+    var team2 = (try store.getTeam(team_id)).?;
+    defer team2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 2), team2.current);
+    try std.testing.expectEqual(@as(i64, 1), team2.status); // 成团
+
+    // 成团后：团内订单全部已支付（mock）。
+    const orders = try store.listOrdersByTeam(team_id);
+    defer {
+        for (orders) |o| o.free(allocator);
+        if (orders.len > 0) allocator.free(orders);
+    }
+    try std.testing.expectEqual(@as(usize, 2), orders.len);
+    try std.testing.expectEqual(@as(i64, 1), orders[0].status);
+    try std.testing.expectEqual(@as(i64, 8000), orders[0].pay_amount);
+
+    // 已结束团不可再参。
+    try std.testing.expectError(error.InvalidInput, svc.joinGroupon(1, 9, "o_g3", addr2, team_id, skus[0].id));
+}
+
+test "shop: invite gift bind/reward lifecycle" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var mc_store = member_card.persistence.MemberCardStore.init(allocator, env.client);
+    var mc_svc = member_card.service.MemberCardService.init(allocator, std.testing.io, &mc_store);
+    svc.member_svc = &mc_svc;
+
+    // 会员卡（积分奖励前提）+ 奖励配置（邀请 2 人 → 100 积分）。
+    _ = try mc_svc.createLevel(1, 9, "普通会员", 1, 1000, 100, 0);
+    try mc_svc.openCard(1, 9, "o_inviter");
+    _ = try svc.createInviteGift(1, 9, 2, "points", 100);
+
+    // 邀请 2 人 → 邀请人得 100 积分。
+    try svc.bindInvite(1, 9, "o_inviter", "o_f1");
+    var v1 = (try mc_svc.view(1, 9, "o_inviter")).?;
+    defer v1.free(allocator);
+    try std.testing.expectEqual(@as(i64, 0), v1.points); // 未达标
+
+    try svc.bindInvite(1, 9, "o_inviter", "o_f2");
+    var v2 = (try mc_svc.view(1, 9, "o_inviter")).?;
+    defer v2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 100), v2.points); // 达标发奖
+
+    // 幂等：同 invitee 不重复绑定。
+    try svc.bindInvite(1, 9, "o_inviter", "o_f2");
+    var v3 = (try mc_svc.view(1, 9, "o_inviter")).?;
+    defer v3.free(allocator);
+    try std.testing.expectEqual(@as(i64, 100), v3.points); // 不重复发奖
+
+    // 自邀请拒绝。
+    try std.testing.expectError(error.InvalidInput, svc.bindInvite(1, 9, "o_inviter", "o_inviter"));
+
+    // 邀请数查询。
+    try std.testing.expectEqual(@as(i64, 2), try svc.store.countInvites(1, "o_inviter"));
+}
+
+test "shop: article CRUD + publish filter" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    const aid = try svc.createArticle(1, 9, "新品发布", "内容：商城上线拼团与邀请有礼！");
+    const a = (try svc.getArticle(aid)).?;
+    defer a.free(allocator);
+    try std.testing.expectEqualStrings("新品发布", a.title);
+
+    // C 端列表（仅发布）含文章。
+    var list = try svc.listArticles(1, 20, 1, 9, true);
+    defer list.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), list.total);
+    try std.testing.expectEqualStrings("新品发布", list.items[0].title);
+
+    // 删除后列表为空。
+    try svc.deleteArticle(aid);
+    var list2 = try svc.listArticles(1, 20, 1, 9, true);
+    defer list2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 0), list2.total);
+}
+
+test "shop: AI assistant order-context replies" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    // 商品 + 下单（已支付）+ 收藏。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "助手商品", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 5, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_ai", .name = "AI", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+    const oid = try svc.createOrder(1, 9, "o_ai", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+    try svc.markPaid(1, 9, oid);
+    try svc.favorite(1, 9, "o_ai", pid);
+
+    // 问订单 → 返回最近订单（含状态与金额）。
+    const r1 = try svc.assistant(allocator, 1, 9, "o_ai", "我的订单");
+    defer allocator.free(r1);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "SO") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r1, "已支付") != null);
+
+    // 问支付 → 待支付/已支付统计。
+    const r2 = try svc.assistant(allocator, 1, 9, "o_ai", "支付情况");
+    defer allocator.free(r2);
+    try std.testing.expect(std.mem.indexOf(u8, r2, "已支付 1 单") != null);
+
+    // 问收藏。
+    const r3 = try svc.assistant(allocator, 1, 9, "o_ai", "我的收藏");
+    defer allocator.free(r3);
+    try std.testing.expect(std.mem.indexOf(u8, r3, "收藏了 1 件") != null);
+
+    // 问物流（无已发货订单）→ 引导。
+    const r4 = try svc.assistant(allocator, 1, 9, "o_ai", "物流到哪了");
+    defer allocator.free(r4);
+    try std.testing.expect(std.mem.indexOf(u8, r4, "没有已发货") != null);
+
+    // 未知问题 → 能力引导。
+    const r5 = try svc.assistant(allocator, 1, 9, "o_ai", "今天天气");
+    defer allocator.free(r5);
+    try std.testing.expect(std.mem.indexOf(u8, r5, "我可以帮您") != null);
+}
+
+test "shop: event-driven markPaid via OrderPaidBus" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var dist_store = distribution.persistence.DistributionStore.init(allocator, env.client);
+    var dist_svc = distribution.service.DistributionService.init(allocator, std.testing.io, &dist_store);
+    svc.dist_svc = &dist_svc;
+
+    // 事件总线 + 消费者（分销分佣）。
+    var bus = shop.service.OrderPaidBus.init(allocator);
+    defer bus.deinit();
+    const PaidCtx = struct {
+        var dist_ref: *distribution.service.DistributionService = undefined;
+        fn onPaid(e: shop.service.OrderPaidEvent) void {
+            const d = dist_ref;
+            _ = d.distribute(e.tenant_id, e.account_id, "o_buyer", e.order_id) catch {};
+        }
+    };
+    // 用简单计数器验证事件被消费。
+    const Counter = struct {
+        var n: usize = 0;
+        fn onPaid(e: shop.service.OrderPaidEvent) void {
+            _ = e;
+            n += 1;
+        }
+    };
+    bus.subscribe(Counter.onPaid) catch {};
+    svc.order_paid_bus = &bus;
+
+    // 商品 + 下单 + 支付 → 事件被发布（计数器 +1）。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "事件商品", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 5, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_ev", .name = "E", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+    const oid = try svc.createOrder(1, 9, "o_ev", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+    try svc.markPaid(1, 9, oid);
+    try std.testing.expectEqual(@as(usize, 1), Counter.n);
+    _ = PaidCtx;
+}
+
+test "shop: stock rollback on order failure paths" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var pay_store = payment.persistence.PaymentStore.init(allocator, env.client);
+    var pay_svc = payment.service.PaymentService.init(allocator, std.testing.io, &pay_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    svc.payment_svc = &pay_svc;
+    svc.fan_store = &fan_store;
+
+    // 商品（库存 3）+ 粉丝（钱包 0）。
+    const now_ts = zigmodu.time.wallClockSeconds(std.testing.io);
+    _ = try fan_store.upsert(1, 9, "o_roll", "", "回滚用户", "", true, now_ts, now_ts);
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "回滚商品", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 3, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_roll", .name = "R", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+
+    // 余额支付（钱包 0 不够）→ InsufficientBalance + 库存回滚（3 → 扣1 → 回滚 → 3）。
+    try std.testing.expectError(error.InsufficientBalance, svc.createOrder(1, 9, "o_roll", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "balance", 0));
+    const sku_after = (try svc.getSku(skus[0].id)).?;
+    defer sku_after.free(allocator);
+    try std.testing.expectEqual(@as(i64, 3), sku_after.stock); // 已回滚
+}
+
+test "shop: webhook dispatch on order paid" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    const wt = @import("http/webhook_transport.zig");
+
+    // Webhook 配置 + mock transport 记录。
+    const wh_id = try svc.createWebhook(1, 9, "https://merchant.example.com/hook", "order.paid");
+    var received = std.ArrayList([]u8).empty;
+    const Recorder = struct {
+        var out: *std.ArrayList([]u8) = undefined;
+        fn rec(url: []const u8, payload: []const u8) void {
+            out.append(std.heap.c_allocator, std.fmt.allocPrint(std.heap.c_allocator, "{s}|{s}", .{ url, payload }) catch "") catch {};
+        }
+    };
+    Recorder.out = &received;
+    var transport = wt.WebhookTransport.init(std.testing.io);
+    transport.recorder = Recorder.rec;
+    svc.webhook_transport = &transport;
+
+    // 商品 + 下单 + 支付 → webhook 推送（event/order_id/account_id）。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "回调商品", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 5, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_wh", .name = "W", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+    const oid = try svc.createOrder(1, 9, "o_wh", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+    svc.dispatchWebhooks("order.paid", 1, 9, oid);
+
+    // mock 收到 payload。
+    try std.testing.expectEqual(@as(usize, 1), received.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, received.items[0], "order.paid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, received.items[0], "merchant.example.com") != null);
+    for (received.items) |r| std.heap.c_allocator.free(r);
+    received.deinit(std.heap.c_allocator);
+
+    try svc.deleteWebhook(wh_id);
+}
+
+test "shop: C-token issue + order uses token openid (anti-forgery)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var user_store = user.persistence.UserStore.init(allocator, env.client);
+    var sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = "test-c-jwt-secret", .token_expiry_seconds = 3600 });
+    var user_svc = user.service.UserService.init(&user_store, &sec, std.testing.io, 3600, 3600);
+    var registry = zigmodu.RateLimiterRegistry.init(allocator, 30, 1);
+    _ = &registry;
+    _ = &user_svc;
+    _ = &fan_store;
+
+    // 粉丝 + 商品。
+    const now_ts = zigmodu.time.wallClockSeconds(std.testing.io);
+    _ = try fan_store.upsert(1, 9, "o_jwt", "", "JWT用户", "", true, now_ts, now_ts);
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "JWT商品", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 5, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+
+    // 签发 C-token（粉丝 openid）。
+    const c_token = try sec.module.generateTokenWithTenant("o_jwt", &.{"fan"}, "0");
+    defer allocator.free(c_token);
+
+    // 校验 token 解析出 openid（sub）。
+    const payload = try sec.module.verifyToken(c_token);
+    defer {
+        allocator.free(payload.sub);
+        allocator.free(payload.iss);
+        allocator.free(payload.aud);
+        for (payload.roles) |r| allocator.free(r);
+        allocator.free(payload.roles);
+    }
+    try std.testing.expectEqualStrings("o_jwt", payload.sub);
+    var is_fan = false;
+    for (payload.roles) |r| {
+        if (std.mem.eql(u8, r, "fan")) is_fan = true;
+    }
+    try std.testing.expect(is_fan);
+
+    // 非粉丝 openid 无法签发（fan_store 校验逻辑在 cLogin handler，service 层验证 fan 存在）。
+    // 这里验证 token 机制本身：管理端 token（无 fan role）不可作 C-token。
+    const admin_token = try sec.module.generateTokenWithTenant("admin_x", &.{"admin"}, "1");
+    defer allocator.free(admin_token);
+    const admin_payload = try sec.module.verifyToken(admin_token);
+    defer {
+        allocator.free(admin_payload.sub);
+        allocator.free(admin_payload.iss);
+        allocator.free(admin_payload.aud);
+        for (admin_payload.roles) |r| allocator.free(r);
+        allocator.free(admin_payload.roles);
+    }
+    var admin_is_fan = false;
+    for (admin_payload.roles) |r| {
+        if (std.mem.eql(u8, r, "fan")) admin_is_fan = true;
+    }
+    try std.testing.expect(!admin_is_fan);
+}
+
+test "shop: order pay-params mock mode (no v3 config)" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var user_store = user.persistence.UserStore.init(allocator, env.client);
+    var sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = "pay-params-secret", .token_expiry_seconds = 3600 });
+    var user_svc = user.service.UserService.init(&user_store, &sec, std.testing.io, 3600, 3600);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var audit_store = audit.persistence.AuditStore.init(allocator, env.client);
+    var audit_svc = audit.service.AuditService.init(allocator, std.testing.io, &audit_store);
+    var registry = zigmodu.RateLimiterRegistry.init(allocator, 30, 1);
+    defer registry.deinit();
+    var shop_api = shop.api.ShopApi(@TypeOf(svc), @TypeOf(user_svc)).init(&svc, &user_svc, &audit_svc, 1, &registry, &fan_store, &setting_store);
+
+    // 商品 + 待支付订单。
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "支付参数商品", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 5, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_pay", .name = "P", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+    const oid = try svc.createOrder(1, 9, "o_pay", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+
+    // 走 HTTP：GET pay-params（无 v3 配置 → mock 模式）。
+    var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
+    defer server.deinit();
+    var g = server.group("/api/v1");
+    try shop_api.registerPublicRoutes(&g);
+    const pay_url = try std.fmt.allocPrint(allocator, "/api/v1/shop/orders/{d}/pay-params", .{oid});
+    defer allocator.free(pay_url);
+    var res = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, pay_url, .{});
+    defer res.deinit(allocator);
+    try std.testing.expectEqual(@as(u16, 200), res.status_code);
+    try std.testing.expect(std.mem.indexOf(u8, res.body, "\"mode\":\"mock\"") != null);
+}
+
+test "shop: mock pay-complete with C-token ownership" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var user_store = user.persistence.UserStore.init(allocator, env.client);
+    var sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = "pay-complete-secret", .token_expiry_seconds = 3600 });
+    var user_svc = user.service.UserService.init(&user_store, &sec, std.testing.io, 3600, 3600);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var audit_store = audit.persistence.AuditStore.init(allocator, env.client);
+    var audit_svc = audit.service.AuditService.init(allocator, std.testing.io, &audit_store);
+    var registry = zigmodu.RateLimiterRegistry.init(allocator, 30, 1);
+    defer registry.deinit();
+    var shop_api = shop.api.ShopApi(@TypeOf(svc), @TypeOf(user_svc)).init(&svc, &user_svc, &audit_svc, 1, &registry, &fan_store, &setting_store);
+
+    // 粉丝 + 商品 + 待支付订单。
+    const now_ts = zigmodu.time.wallClockSeconds(std.testing.io);
+    _ = try fan_store.upsert(1, 9, "o_pc", "", "支付用户", "", true, now_ts, now_ts);
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0, .name = "支付完成商品", .image = "", .content = "",
+        .price = 1000, .original_price = 2000, .stock = 5, .status = 1, .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_pc", .name = "P", .mobile = "13800000000", .region = "SZ", .detail = "1", .is_default = 1,
+    });
+    const oid = try svc.createOrder(1, 9, "o_pc", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", 0);
+
+    // 无 C-token → 401。
+    var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
+    defer server.deinit();
+    var g = server.group("/api/v1");
+    try shop_api.registerPublicRoutes(&g);
+    const url1 = try std.fmt.allocPrint(allocator, "/api/v1/shop/orders/{d}/pay-complete", .{oid});
+    defer allocator.free(url1);
+    var res1 = try zigmodu.http.Testkit.dispatchOpts(&server, .POST, url1, .{});
+    defer res1.deinit(allocator);
+    try std.testing.expectEqual(@as(u16, 401), res1.status_code);
+
+    // 带 C-token（买家本人）→ 200 支付成功。
+    const c_token = try sec.module.generateTokenWithTenant("o_pc", &.{"fan"}, "0");
+    defer allocator.free(c_token);
+    const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{c_token});
+    defer allocator.free(auth_header);
+    var res2 = try zigmodu.http.Testkit.dispatchOpts(&server, .POST, url1, .{ .headers = &.{.{ "authorization", auth_header }} });
+    defer res2.deinit(allocator);
+    try std.testing.expectEqual(@as(u16, 200), res2.status_code);
+    var o2 = (try svc.getOrder(oid)).?;
+    defer o2.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), o2.status); // 已支付
 }

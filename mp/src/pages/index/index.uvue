@@ -1,0 +1,131 @@
+<template>
+  <view>
+    <NavBar title="zweq" :show-back="false" />
+    <view class="content-container pb-20px">
+      <view class="mt-30px flex flex-col items-center">
+        <text class="text-36px font-bold text-[#0957DE]">zweq 小程序</text>
+        <text class="text-14px text-[#64748b] mt-8px">多商户微信运营平台 · 场景应用中心</text>
+      </view>
+
+      <!-- 登录状态 -->
+      <view
+        class="mx-30px mt-30px px-24rpx py-20rpx rounded-12px"
+        style="background-color: rgba(9, 87, 222, 0.06);"
+      >
+        <view v-if="loggedIn" class="flex flex-row items-center justify-between">
+          <text class="text-14px font-bold">{{ nickname }}</text>
+          <text class="text-12px text-[#64748b]">{{ email }}</text>
+        </view>
+        <view v-else class="flex flex-row items-center justify-between">
+          <text class="text-14px text-[#64748b]">未登录</text>
+          <text class="text-12px text-[#0957DE]" @click="goLogin">去登录 ›</text>
+        </view>
+      </view>
+
+      <!-- AI 入口引导条 -->
+      <view
+        class="mx-30px mt-20rpx px-24rpx py-20rpx rounded-12px flex flex-row items-center justify-between"
+        style="background-color: rgba(37, 99, 235, 0.08);"
+        @click="goAi"
+      >
+        <text class="text-14px font-bold text-[#2563eb]">🤖 AI 智能助手</text>
+        <text class="text-12px text-[#64748b]">答疑 · 运营建议 ›</text>
+      </view>
+
+      <!-- 场景应用网格 -->
+      <view class="mt-30px mx-30px">
+        <text class="text-16px font-bold text-[#1e293b]">微信场景应用</text>
+        <text class="text-12px text-[#94a3b8] ml-8rpx">粉丝在公众号回复关键词即可互动</text>
+        <view class="mt-16rpx flex flex-row flex-wrap justify-between">
+          <view
+            v-for="scene in scenes"
+            :key="scene.key"
+            class="w-320rpx mb-20rpx px-24rpx py-24rpx rounded-12px"
+            style="background-color: #f8fafc;"
+            @click="showScene(scene)"
+          >
+            <text class="text-16px font-bold text-[#1e293b]">{{ scene.emoji }} {{ scene.name }}</text>
+            <view class="mt-8rpx">
+              <text class="text-12px text-[#64748b]">{{ scene.tip }}</text>
+            </view>
+            <view class="mt-8rpx">
+              <text v-if="scene.keyword !== ''" class="text-11px px-8rpx py-2rpx rounded-8rpx text-[#0957DE]" style="background-color: rgba(9,87,222,0.08);">
+                回复「{{ scene.keyword }}」
+              </text>
+              <text v-else class="text-11px px-8rpx py-2rpx rounded-8rpx text-[#64748b]" style="background-color: #e2e8f0;">
+                管理端查看
+              </text>
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+/* eslint-disable dot-notation */
+import { ref } from 'vue'
+import { useTokenStore, useUserStore } from '../../store'
+import { setCurIdxByPath } from '../../tabbar/store'
+
+const tokenStore = useTokenStore()
+const userStore = useUserStore()
+
+const loggedIn = ref<boolean>(tokenStore.hasValidLogin())
+const nickname = ref<string>('')
+const email = ref<string>('')
+
+onShow(() => {
+  loggedIn.value = tokenStore.hasValidLogin()
+  if (loggedIn.value) {
+    const info = userStore.getUserInfo()
+    nickname.value = info.nickname
+    email.value = info.username
+  }
+})
+
+type IScene = {
+  key: string
+  emoji: string
+  name: string
+  tip: string
+  keyword: string
+}
+
+const scenes: IScene[] = [
+  { key: 'shop', emoji: '🛍️', name: '商城', tip: '商品 · 购物车 · 下单', keyword: '' },
+  { key: 'checkin', emoji: '📅', name: '签到', tip: '每日签到领积分', keyword: '签到' },
+  { key: 'luckyDraw', emoji: '🎰', name: '大转盘', tip: '积分抽奖赢好礼', keyword: '抽奖' },
+  { key: 'coupon', emoji: '🎫', name: '优惠券', tip: '领券下单享折扣', keyword: '领券' },
+  { key: 'vote', emoji: '🗳️', name: '投票', tip: '粉丝互动选题', keyword: '投票' },
+  { key: 'seckill', emoji: '⚡', name: '秒杀', tip: '限时低价抢购', keyword: '秒杀' },
+  { key: 'memberCard', emoji: '💳', name: '会员卡', tip: '积分等级与折扣', keyword: '办卡' },
+  { key: 'distribution', emoji: '💰', name: '分销', tip: '三级返佣体系', keyword: '加盟' },
+  { key: 'points', emoji: '🛒', name: '积分商城', tip: '积分兑换商品', keyword: '' },
+]
+
+function goLogin() {
+  uni.navigateTo({ url: '/src/sub/auth/login' })
+}
+
+function goAi() {
+  setCurIdxByPath('/src/pages/ai/ai')
+  uni.switchTab({ url: '/src/pages/ai/ai' })
+}
+
+function showScene(scene: IScene) {
+  if (scene.key === 'shop') {
+    uni.navigateTo({ url: '/src/pages/shop/products' })
+    return
+  }
+  uni.showModal({
+    title: `${scene.emoji} ${scene.name}`,
+    content: scene.keyword === ''
+      ? `${scene.tip}，登录后可在管理端查看`
+      : `${scene.tip}。粉丝在公众号回复「${scene.keyword}」，由消息接收器（Receiver）自动响应`,
+    showCancel: false,
+    confirmText: '知道了',
+  })
+}
+</script>

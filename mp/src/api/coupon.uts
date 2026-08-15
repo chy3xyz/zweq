@@ -1,0 +1,62 @@
+// ==========================================
+// zweq 优惠券 API — 券模板/领取记录（只读展示）
+// ==========================================
+
+import { http } from '../http/request'
+import type { IPagedList } from './points'
+
+// ==========================================
+// 类型定义
+// ==========================================
+
+/** 券模板（GET /api/v1/coupons） */
+export type ICouponItem = {
+  id: number
+  account_id: number
+  title: string
+  amount: number
+  min_amount: number
+  total: number
+  per_user: number
+  start_at: number
+  end_at: number
+  created_at: number
+}
+
+/** 用户券（GET /api/v1/coupon-users） */
+export type ICouponUserItem = {
+  id: number
+  openid: string
+  coupon_id: number
+  code: string
+  status: string // unused | used | expired
+  created_at: number
+}
+
+// ==========================================
+// API 函数
+// ==========================================
+
+/**
+ * 券模板列表（admin 鉴权）
+ */
+export function listCoupons(
+  accountId: number,
+  page: number = 1,
+  pageSize: number = 20,
+): Promise<IPagedList<ICouponItem>> {
+  const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+  return http.get<IPagedList<ICouponItem>>(`/api/v1/coupons?${query}`)
+}
+
+/**
+ * 领取记录（admin 鉴权）
+ */
+export function listCouponUsers(
+  accountId: number,
+  page: number = 1,
+  pageSize: number = 20,
+): Promise<IPagedList<ICouponUserItem>> {
+  const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+  return http.get<IPagedList<ICouponUserItem>>(`/api/v1/coupon-users?${query}`)
+}

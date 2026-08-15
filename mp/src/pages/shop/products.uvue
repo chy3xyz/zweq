@@ -1,0 +1,67 @@
+<template>
+  <view>
+    <NavBar title="商城" :show-back="false" />
+    <view class="content-container pb-20px">
+      <!-- 分类/搜索占位：直接商品流 -->
+      <view class="mt-20rpx mx-30rpx">
+        <text class="text-16px font-bold text-[#1e293b]">全部商品</text>
+      </view>
+      <view class="mt-16rpx px-30rpx flex flex-row flex-wrap justify-between">
+        <view
+          v-for="p in products"
+          :key="p.id"
+          class="w-330rpx mb-20rpx rounded-12px overflow-hidden"
+          style="background-color: #f8fafc;"
+          @click="goDetail(p.id)"
+        >
+          <image v-if="p.image !== ''" class="w-full h-220rpx" :src="p.image" mode="aspectFill" />
+          <view v-else class="w-full h-220rpx items-center justify-center" style="background-color: #e2e8f0;">
+            <text class="text-12px text-[#94a3b8]">无图</text>
+          </view>
+          <view class="p-16rpx">
+            <text class="text-14px font-bold text-[#1e293b]">{{ p.name }}</text>
+            <view class="mt-8rpx flex flex-row items-center justify-between">
+              <text class="text-16px font-bold text-[#ef4444]">¥{{ fenToYuan(p.price) }}</text>
+              <text class="text-11px text-[#94a3b8]">已售 {{ p.sales }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+      <view v-if="products.length === 0 && !loading" class="mt-60rpx items-center">
+        <text class="text-14px text-[#94a3b8]">暂无商品，请在管理端创建</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { listShopProducts } from '../../api/shop'
+import { fenToYuan } from '../../utils/format'
+import type { IShopProduct } from '../../api/shop'
+
+const products = ref<IShopProduct[]>([])
+const loading = ref<boolean>(false)
+
+onLoad(() => {
+  load()
+})
+
+function load() {
+  loading.value = true
+  listShopProducts(0, 1, 50)
+    .then((res: any) => {
+      products.value = (res as UTSJSONObject)['list'] as IShopProduct[]
+    })
+    .catch(() => {
+      products.value = []
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function goDetail(id: number) {
+  uni.navigateTo({ url: `/src/pages/shop/product-detail?id=${id}` })
+}
+</script>

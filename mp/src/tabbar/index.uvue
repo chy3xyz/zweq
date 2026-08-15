@@ -1,0 +1,143 @@
+<script setup lang="uts">
+import { curIdx, setCurIdx, syncCurIdxByCurrentPage, tabbarList } from './store'
+import TabbarItem from './TabbarItem.uvue'
+import { safeAreaInsets } from '../utils/systemInfo'
+
+/** tabbar 白色底板高度（px） */
+const TABBAR_HEIGHT: number = 50
+
+/** tabbar 容器总高度（包含鼓包突出的部分） */
+const TABBAR_CONTAINER_HEIGHT: number = 80
+
+/** 安全区底部高度，从全局 systemInfo 工具中响应式读取 */
+const safeAreaBottom = computed<number>((): number => {
+  const insets = safeAreaInsets.value
+  if (insets != null) {
+    return insets.bottom
+  }
+  return 0
+})
+
+/** 中间鼓包 tabbarItem 点击事件 */
+function handleClickBulge() {
+  uni.navigateTo({
+    url: '/src/pages/ai/ai',
+  })
+}
+
+/** 点击 tab 切换 */
+function handleClick(index: number) {
+  if (index == curIdx.value)
+    return
+  const list = tabbarList
+  if (list.length <= index)
+    return
+  if (list[index].isBulge) {
+    handleClickBulge()
+    return
+  }
+  const url = list[index].pagePath
+  setCurIdx(index)
+  uni.switchTab({ url })
+}
+
+// 首次挂载时同步索引
+onMounted(() => {
+  syncCurIdxByCurrentPage()
+
+  // #ifndef MP-WEIXIN || MP-ALIPAY
+  uni.hideTabBar({
+    fail: (err: any) => {
+      console.log('hideTabBar fail: ', err)
+    },
+  })
+  // #endif
+})
+</script>
+
+<template>
+  <!-- 占位块：防止页面内容被固定底栏遮挡 -->
+  <view class="tabbar-placeholder" :style="{ height: `${TABBAR_HEIGHT + safeAreaBottom}px` }">
+    <view
+      class="tabbar-container"
+      :style="{ height: `${TABBAR_CONTAINER_HEIGHT + safeAreaBottom}px` }"
+    >
+      <!-- 【整体白色底板】覆盖「固定高度 + 安全区」的全部区域 -->
+      <view
+        class="tabbar-bg"
+        :style="{ height: `${TABBAR_HEIGHT + safeAreaBottom}px` }"
+      ></view>
+
+      <!-- 【固定高度】tab 图标按鈕区 -->
+      <view class="tabbar-inner">
+        <view
+          v-for="(item, index) in tabbarList"
+          :key="index"
+          class="tabbar-item"
+          :class="{ 'tabbar-item-bulge': item.isBulge }"
+          @click="handleClick(index)"
+        >
+          <TabbarItem :item="item" :index="index" :is-bulge="item.isBulge" />
+        </view>
+      </view>
+
+      <!-- 【安全区】底部安全区白色填充块 -->
+      <view class="safe-area-bg" :style="{ height: `${safeAreaBottom}px` }" />
+    </view>
+  </view>
+</template>
+
+<style>
+.tabbar-placeholder {
+  /* 高度通过 :style 动态绑定 */
+}
+
+/* 固定在底部的容器，内部级联展示三个层 */
+.tabbar-container {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  background-color: transparent;
+  flex-direction: column;
+}
+
+/* 【底板层】覆盖「固定高度 + 安全区」的白色底板，绑定高度动态设定 */
+.tabbar-bg {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: #ffffff;
+  border-top-width: 1rpx;
+  border-top-style: solid;
+  border-top-color: #eeeeee;
+  z-index: 1;
+}
+
+/* 【固定高度层】tab 图标按鈕区，与底板同高；鼓包由 TabbarItem 内绝对定位向上突出 */
+.tabbar-inner {
+  flex-direction: row;
+  height: 80px;
+  align-items: flex-end;
+  z-index: 2;
+}
+
+.tabbar-item {
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  height: 50px;
+}
+
+.tabbar-item-bulge {
+  height: 80px;
+}
+
+/* 【安全区层】底部安全区白色填充，高度动态设定 */
+.safe-area-bg {
+  z-index: 1;
+  background-color: #ffffff;
+}
+</style>
