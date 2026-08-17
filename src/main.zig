@@ -222,7 +222,7 @@ pub fn main(init: std.process.Init) !void {
     var cloud_store = cloud.persistence.CloudStore.init(allocator, store_env.client);
     var cloud_svc = cloud.service.CloudService.init(allocator, io, &cloud_store, &module_svc, cfg.cloud_remote_url);
     // 注入原始 SQL 执行器（市场包 manifest 迁移 SQL 用）。
-    cloud_svc.setDriver(if (kind == .postgres) store_env.pg.?.asDriver() else store_env.sqlite.?.asDriver());
+    cloud_svc.setDriver(if (kind == .postgres) store_env.pg_pool.?.asDriver() else store_env.sqlite.?.asDriver());
     // 动态表元数据存储（manifest tables 注册 + 通用查询网关）。
     var dyn_table_store = cloud.persistence.DynamicTableStore.init(allocator, store_env.client);
     cloud_svc.setDynamicTableStore(&dyn_table_store);
