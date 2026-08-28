@@ -70,6 +70,12 @@ export type IMiniprogramLoginParams = {
   code: string
 }
 
-export function miniprogramLogin(params: IMiniprogramLoginParams): Promise<ILoginResult> {
-  return http.post<ILoginResult>('/api/v1/miniprogram/login', params)
+export type IMiniprogramOpenidResult = {
+  openid: string
+}
+
+export function miniprogramLogin(params: IMiniprogramLoginParams): Promise<IMiniprogramOpenidResult> {
+  return http.post<IMiniprogramOpenidResult>('/api/v1/miniprogram/login', params, {
+    extra: { ignoreAuth: true } as UTSJSONObject,
+  })
 }

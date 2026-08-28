@@ -9,7 +9,6 @@ const user_svc = @import("../user/service.zig");
 const service = @import("service.zig");
 const audit_svc = @import("../audit/service.zig");
 
-
 const TaskDto = struct {
     id: i64,
     name: []const u8,
@@ -51,6 +50,20 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
         user_svc: *UserService,
         audit: *audit_svc.AuditService,
 
+        pub const module_name = "task";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "tasks/stats", .handler = http.wrapHandler(Self, stats), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "tasks", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "tasks/{id}", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "tasks/{id}/retry", .handler = http.wrapHandler(Self, retry), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "tasks/{id}/cancel", .handler = http.wrapHandler(Self, cancel), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "tasks/purge", .handler = http.wrapHandler(Self, purge), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "tasks/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit };
         }
@@ -58,6 +71,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
         pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
             var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
+            g = try g.use(mw.adminGuard(self.user_svc.store));
             try g.get("/tasks/stats", stats, @ptrCast(@alignCast(self)));
             try g.get("/tasks", list, @ptrCast(@alignCast(self)));
             try g.get("/tasks/{id}", get, @ptrCast(@alignCast(self)));
@@ -67,31 +81,17 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
             try g.delete("/tasks/{id}", delete, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.store.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn stats(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const counts = self.svc.counts() catch |err| {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
@@ -101,7 +101,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
 
         fn list(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             const status = ctx.queryParam("status");
@@ -118,7 +118,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
 
         fn get(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
@@ -138,7 +138,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
 
         fn retry(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;
@@ -155,7 +156,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
 
         fn cancel(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;
@@ -172,7 +174,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
 
         fn purge(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             _ = self.svc.purge() catch |err| {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
@@ -184,7 +187,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
 
         fn delete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;

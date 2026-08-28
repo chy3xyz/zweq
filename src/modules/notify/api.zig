@@ -33,6 +33,18 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
         svc: *Service,
         user_svc: *UserService,
 
+        pub const module_name = "notify";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "notifications/unread-count", .handler = http.wrapHandler(Self, unreadCount), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "notifications", .handler = http.wrapHandler(Self, list), .meta = .{ .auth = .jwt } },
+            .{ .method = .POST, .path = "notifications/read-all", .handler = http.wrapHandler(Self, markAllRead), .meta = .{ .auth = .jwt } },
+            .{ .method = .POST, .path = "notifications/{id}/read", .handler = http.wrapHandler(Self, markRead), .meta = .{ .auth = .jwt } },
+            .{ .method = .DELETE, .path = "notifications/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .auth = .jwt } },
+        };
+
         pub fn init(svc: *Service, users: *UserService) Self {
             return .{ .svc = svc, .user_svc = users };
         }

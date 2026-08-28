@@ -86,7 +86,7 @@ pub const MemberCardService = struct {
         const preds = self.store.client.member_card_level.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
-        _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("threshold"), zent.sql.OrderAsc("level")});
+        _ = try q.OrderBy(&[_]zent.sql.Order{ zent.sql.OrderAsc("threshold"), zent.sql.OrderAsc("level") });
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;

@@ -17,14 +17,16 @@ pub const DistributorRow = struct {
     account_id: i64,
     openid: []const u8,
     parent_openid: []const u8,
-    commission_balance: i64,
-    total_commission: i64,
+    commission_balance: []const u8,
+    total_commission: []const u8,
     status: i64,
     created_at: i64,
 
     pub fn free(self: DistributorRow, allocator: std.mem.Allocator) void {
         allocator.free(self.openid);
         allocator.free(self.parent_openid);
+        allocator.free(self.commission_balance);
+        allocator.free(self.total_commission);
     }
 };
 
@@ -34,13 +36,14 @@ pub const CommissionRow = struct {
     openid: []const u8,
     source_openid: []const u8,
     level: i64,
-    amount: i64,
+    amount: []const u8,
     status: i64,
     created_at: i64,
 
     pub fn free(self: CommissionRow, allocator: std.mem.Allocator) void {
         allocator.free(self.openid);
         allocator.free(self.source_openid);
+        allocator.free(self.amount);
     }
 };
 
@@ -77,13 +80,17 @@ pub const DistributionStore = struct {
         errdefer self.allocator.free(openid);
         const parent = try self.allocator.dupe(u8, e.parent_openid);
         errdefer self.allocator.free(parent);
+        const commission_balance = try self.allocator.dupe(u8, e.commission_balance);
+        errdefer self.allocator.free(commission_balance);
+        const total_commission = try self.allocator.dupe(u8, e.total_commission);
+        errdefer self.allocator.free(total_commission);
         return .{
             .id = e.id,
             .account_id = e.account_id,
             .openid = openid,
             .parent_openid = parent,
-            .commission_balance = e.commission_balance,
-            .total_commission = e.total_commission,
+            .commission_balance = commission_balance,
+            .total_commission = total_commission,
             .status = e.status,
             .created_at = e.created_at orelse 0,
         };
@@ -94,13 +101,15 @@ pub const DistributionStore = struct {
         errdefer self.allocator.free(openid);
         const source = try self.allocator.dupe(u8, e.source_openid);
         errdefer self.allocator.free(source);
+        const amount = try self.allocator.dupe(u8, e.amount);
+        errdefer self.allocator.free(amount);
         return .{
             .id = e.id,
             .account_id = e.account_id,
             .openid = openid,
             .source_openid = source,
             .level = e.level,
-            .amount = e.amount,
+            .amount = amount,
             .status = e.status,
             .created_at = e.created_at orelse 0,
         };
@@ -125,8 +134,8 @@ pub const DistributionStore = struct {
             .account_id = account_id,
             .openid = openid,
             .parent_openid = parent_openid,
-            .commission_balance = 0,
-            .total_commission = 0,
+            .commission_balance = "0",
+            .total_commission = "0",
             .status = 1,
             .created_at = now,
             .updated_at = now,
@@ -138,36 +147,47 @@ pub const DistributionStore = struct {
     /// 原子佣金入账：commission_balance += amount, total_commission += amount。
     pub fn addCommission(self: *DistributionStore, allocator: std.mem.Allocator, distributor_id: i64, amount: i64) !bool {
         _ = allocator;
+        const amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{amount});
+        defer self.allocator.free(amount_str);
         const preds = self.client.distributor.predicates;
-        _ = crud.increment(self.client.distributor, "commission_balance", amount, &.{
-            preds.idEQ(.{ .int = distributor_id }),
-        }) catch return false;
-        _ = crud.increment(self.client.distributor, "total_commission", amount, &.{
-            preds.idEQ(.{ .int = distributor_id }),
-        }) catch {};
+        var upd = self.client.distributor.Update();
+        defer upd.deinit();
+        _ = try upd.setExprArgs("commission_balance", "commission_balance + ?", &.{.{ .string = amount_str }});
+        _ = try upd.Where(.{preds.idEQ(.{ .int = distributor_id })});
+        _ = try upd.Save();
+        var upd2 = self.client.distributor.Update();
+        defer upd2.deinit();
+        _ = try upd2.setExprArgs("total_commission", "total_commission + ?", &.{.{ .string = amount_str }});
+        _ = try upd2.Where(.{preds.idEQ(.{ .int = distributor_id })});
+        _ = upd2.Save() catch {};
         return true;
     }
 
     /// 原子佣金扣减（提现）：commission_balance -= amount，余额不足返回 false。
     pub fn deductCommission(self: *DistributionStore, allocator: std.mem.Allocator, distributor_id: i64, amount: i64) !bool {
+        const amount_str = try std.fmt.allocPrint(allocator, "{d}", .{amount});
+        defer allocator.free(amount_str);
         const preds = self.client.distributor.predicates;
-        const guard = try std.fmt.allocPrint(allocator, "commission_balance >= {d}", .{amount});
+        const guard = try std.fmt.allocPrint(allocator, "CAST(commission_balance AS INTEGER) >= {d}", .{amount});
         defer allocator.free(guard);
-        const affected = crud.increment(self.client.distributor, "commission_balance", -amount, &.{
-            preds.idEQ(.{ .int = distributor_id }),
-            zent.sql.Predicate{ .raw = guard },
-        }) catch return false;
+        var upd = self.client.distributor.Update();
+        defer upd.deinit();
+        _ = try upd.setExprArgs("commission_balance", "commission_balance - ?", &.{.{ .string = amount_str }});
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = distributor_id }), zent.sql.Predicate{ .raw = guard } });
+        const affected = try upd.Save();
         return affected > 0;
     }
 
     pub fn createCommission(self: *DistributionStore, tenant_id: i64, account_id: i64, openid: []const u8, source_openid: []const u8, level: i64, amount: i64, now: i64) !i64 {
+        const amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{amount});
+        defer self.allocator.free(amount_str);
         var row = try crud.create(self.client.commission_record, .{
             .tenant_id = tenant_id,
             .account_id = account_id,
             .openid = openid,
             .source_openid = source_openid,
             .level = level,
-            .amount = amount,
+            .amount = amount_str,
             .status = 1,
             .created_at = now,
             .updated_at = now,

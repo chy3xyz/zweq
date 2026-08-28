@@ -16,8 +16,8 @@ pub const SeckillActivityRow = struct {
     id: i64,
     account_id: i64,
     title: []const u8,
-    price: i64,
-    original_price: i64,
+    price: []const u8,
+    original_price: []const u8,
     stock: i64,
     sold: i64,
     per_user: i64,
@@ -27,6 +27,8 @@ pub const SeckillActivityRow = struct {
 
     pub fn free(self: SeckillActivityRow, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
+        allocator.free(self.price);
+        allocator.free(self.original_price);
     }
 };
 
@@ -74,12 +76,16 @@ pub const SeckillStore = struct {
     fn dupActivity(self: *SeckillStore, e: anytype) !SeckillActivityRow {
         const title = try self.allocator.dupe(u8, e.title);
         errdefer self.allocator.free(title);
+        const price = try self.allocator.dupe(u8, e.price);
+        errdefer self.allocator.free(price);
+        const original_price = try self.allocator.dupe(u8, e.original_price);
+        errdefer self.allocator.free(original_price);
         return .{
             .id = e.id,
             .account_id = e.account_id,
             .title = title,
-            .price = e.price,
-            .original_price = e.original_price,
+            .price = price,
+            .original_price = original_price,
             .stock = e.stock,
             .sold = e.sold,
             .per_user = e.per_user,
@@ -103,20 +109,25 @@ pub const SeckillStore = struct {
     }
 
     pub fn createActivity(self: *SeckillStore, tenant_id: i64, account_id: i64, title: []const u8, price: i64, original_price: i64, stock: i64, per_user: i64, start_at: i64, end_at: i64, now: i64) !i64 {
-        var row = try crud.create(self.client.seckill_activity, .{
-            .tenant_id = tenant_id,
-            .account_id = account_id,
-            .title = title,
-            .price = price,
-            .original_price = original_price,
-            .stock = stock,
-            .sold = 0,
-            .per_user = per_user,
-            .start_at = start_at,
-            .end_at = end_at,
-            .created_at = now,
-            .updated_at = now,
-        });
+        const price_str = try std.fmt.allocPrint(self.allocator, "{d}", .{price});
+        defer self.allocator.free(price_str);
+        const original_price_str = try std.fmt.allocPrint(self.allocator, "{d}", .{original_price});
+        defer self.allocator.free(original_price_str);
+        var b = try self.client.seckill_activity.Create();
+        defer b.deinit();
+        _ = try b.setFieldValue("tenant_id", tenant_id);
+        _ = try b.setFieldValue("account_id", account_id);
+        _ = try b.setFieldValue("title", title);
+        _ = try b.setFieldValue("price", price_str);
+        _ = try b.setFieldValue("original_price", original_price_str);
+        _ = try b.setFieldValue("stock", stock);
+        _ = try b.setFieldValue("sold", 0);
+        _ = try b.setFieldValue("per_user", per_user);
+        _ = try b.setFieldValue("start_at", start_at);
+        _ = try b.setFieldValue("end_at", end_at);
+        _ = try b.setFieldValue("created_at", now);
+        _ = try b.setFieldValue("updated_at", now);
+        var row = try b.Save();
         defer zent.codegen.deinitEntity(infos, SeckillActivityInfo, &row, self.allocator);
         return row.id;
     }

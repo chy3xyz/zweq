@@ -37,6 +37,7 @@
 <script setup lang="uts">
 import { ref } from 'vue'
 import { listShopProducts } from '../../api/shop'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
 import { fenToYuan } from '../../utils/format'
 import type { IShopProduct } from '../../api/shop'
 
@@ -49,7 +50,7 @@ onLoad(() => {
 
 function load() {
   loading.value = true
-  listShopProducts(0, 1, 50)
+  listShopProducts(ZWEQ_ACCOUNT_ID, 1, 50)
     .then((res: any) => {
       products.value = (res as UTSJSONObject)['list'] as IShopProduct[]
     })

@@ -67,6 +67,20 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "account";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "accounts", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "accounts", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "accounts/{id}", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "accounts/{id}", .handler = http.wrapHandler(Self, update), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "accounts/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "accounts/{id}/wechat", .handler = http.wrapHandler(Self, getWechat), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "accounts/{id}/wechat", .handler = http.wrapHandler(Self, setWechat), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -74,6 +88,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
         pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
             var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
+            g = try g.use(mw.adminGuard(self.user_svc.store));
             try g.get("/accounts", list, @ptrCast(@alignCast(self)));
             try g.post("/accounts", create, @ptrCast(@alignCast(self)));
             try g.get("/accounts/{id}", get, @ptrCast(@alignCast(self)));
@@ -83,26 +98,12 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
             try g.put("/accounts/{id}/wechat", setWechat, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
@@ -111,7 +112,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
 
         fn list(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -128,7 +129,8 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
 
         fn create(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(CreateAccountReq) catch {
@@ -156,7 +158,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
 
         fn get(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
@@ -176,7 +178,8 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
 
         fn update(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
@@ -222,7 +225,8 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
 
         fn delete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
@@ -238,7 +242,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
 
         fn getWechat(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
@@ -259,7 +263,8 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
 
         fn setWechat(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const id = ctx.paramInt(i64, "id") catch {

@@ -1,0 +1,105 @@
+// ==========================================
+// 商城 C 端登录：wx.login → miniprogram/login → shop/auth/login
+// ==========================================
+
+import { http } from '../http/request'
+import { ZWEQ_ACCOUNT_ID } from '../config/zweq'
+import { useShopSessionStore } from '../store/shopSession'
+import { useTokenStore } from '../store/token'
+
+export type IMiniprogramOpenidResult = {
+  openid: string
+}
+
+export type IShopFanLoginResult = {
+  token: string
+}
+
+/** 微信 jscode2session（公开接口） */
+export function miniprogramCode2Openid(accountId: number, code: string): Promise<IMiniprogramOpenidResult> {
+  return http.post<IMiniprogramOpenidResult>(
+    '/api/v1/miniprogram/login',
+    { account_id: accountId, code },
+    { extra: { ignoreAuth: true } as UTSJSONObject },
+  )
+}
+
+/** 粉丝 C-token 签发（需 openid 已是粉丝） */
+export function shopFanLogin(accountId: number, openid: string): Promise<IShopFanLoginResult> {
+  return http.post<IShopFanLoginResult>(
+    '/api/v1/shop/auth/login',
+    { account_id: accountId, openid },
+    { extra: { ignoreAuth: true } as UTSJSONObject },
+  )
+}
+
+function getWxLoginCode(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // #ifdef MP-WEIXIN
+    uni.login({
+      provider: 'weixin',
+      success: (res) => {
+        if (res.code != null && res.code !== '') {
+          resolve(res.code as string)
+        } else {
+          reject(new Error('wx.login 未返回 code'))
+        }
+      },
+      fail: (err) => reject(err),
+    })
+    // #endif
+    // #ifndef MP-WEIXIN
+    reject(new Error('非微信小程序环境，请使用 H5 演示 openid'))
+    // #endif
+  })
+}
+
+/**
+ * 确保商城粉丝会话有效；返回 openid。
+ * 成功后会将 C-token 写入 shopSession，并临时注入 http 拦截器使用的 tokenStore。
+ */
+export async function ensureShopFanSession(accountId: number = ZWEQ_ACCOUNT_ID): Promise<string> {
+  const session = useShopSessionStore()
+  if (session.isValid(accountId)) {
+    const tokenStore = useTokenStore()
+    tokenStore.setSingleToken({ token: session.getToken(), expiresIn: 604800 })
+    return session.getOpenid()
+  }
+
+  const code = await getWxLoginCode()
+  const mini = await miniprogramCode2Openid(accountId, code)
+  const fan = await shopFanLogin(accountId, mini.openid)
+  session.setSession(accountId, mini.openid, fan.token, 604800)
+
+  const tokenStore = useTokenStore()
+  tokenStore.setSingleToken({ token: fan.token, expiresIn: 604800 })
+  return mini.openid
+}
+
+/** H5 开发兜底：固定演示 openid（需后端存在对应粉丝） */
+export async function ensureShopFanSessionH5Demo(accountId: number = ZWEQ_ACCOUNT_ID): Promise<string> {
+  const demoOpenid = 'o_h5_demo'
+  const session = useShopSessionStore()
+  if (session.isValid(accountId) && session.getOpenid() === demoOpenid) {
+    const tokenStore = useTokenStore()
+    tokenStore.setSingleToken({ token: session.getToken(), expiresIn: 604800 })
+    return demoOpenid
+  }
+  const fan = await shopFanLogin(accountId, demoOpenid)
+  session.setSession(accountId, demoOpenid, fan.token, 604800)
+  const tokenStore = useTokenStore()
+  tokenStore.setSingleToken({ token: fan.token, expiresIn: 604800 })
+  return demoOpenid
+}
+
+/**
+ * 按平台自动选择登录方式。
+ */
+export async function ensureShopSession(accountId: number = ZWEQ_ACCOUNT_ID): Promise<string> {
+  // #ifdef MP-WEIXIN
+  return ensureShopFanSession(accountId)
+  // #endif
+  // #ifndef MP-WEIXIN
+  return ensureShopFanSessionH5Demo(accountId)
+  // #endif
+}

@@ -15,8 +15,8 @@ pub const Distributor = Schema("Distributor", .{
         field.Int("account_id"),
         field.String("openid"),
         field.String("parent_openid").Default(""),
-        field.Int("commission_balance").Default(0), // 佣金余额（分）
-        field.Int("total_commission").Default(0), // 累计佣金（分）
+        field.Decimal("commission_balance").Default("0"), // 佣金余额（分）
+        field.Decimal("total_commission").Default("0"), // 累计佣金（分）
         field.Int("status").Default(1), // 1=active
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
@@ -30,7 +30,7 @@ pub const CommissionRecord = Schema("CommissionRecord", .{
         field.String("openid"), // 受益分销员
         field.String("source_openid"), // 购买者
         field.Int("level").Default(1),
-        field.Int("amount").Default(0), // 佣金（分）
+        field.Decimal("amount").Default("0"), // 佣金（分）
         field.Int("status").Default(0), // 0=pending 1=settled
     },
     .mixins = &.{zent.core.mixin.TimeMixin},

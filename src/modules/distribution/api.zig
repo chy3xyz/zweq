@@ -26,8 +26,8 @@ fn toDto(row: service.DistributorRow) DistributorDto {
         .account_id = row.account_id,
         .openid = row.openid,
         .parent_openid = row.parent_openid,
-        .commission_balance = row.commission_balance,
-        .total_commission = row.total_commission,
+        .commission_balance = std.fmt.parseInt(i64, row.commission_balance, 10) catch 0,
+        .total_commission = std.fmt.parseInt(i64, row.total_commission, 10) catch 0,
         .status = row.status,
         .created_at = row.created_at,
     };
@@ -48,6 +48,30 @@ const WithdrawReq = struct {
     amount: i64,
 };
 
+const CommissionDto = struct {
+    id: i64,
+    account_id: i64,
+    openid: []const u8,
+    source_openid: []const u8,
+    level: i64,
+    amount: i64,
+    status: i64,
+    created_at: i64,
+};
+
+fn toCommissionDto(row: service.CommissionRow) CommissionDto {
+    return .{
+        .id = row.id,
+        .account_id = row.account_id,
+        .openid = row.openid,
+        .source_openid = row.source_openid,
+        .level = row.level,
+        .amount = std.fmt.parseInt(i64, row.amount, 10) catch 0,
+        .status = row.status,
+        .created_at = row.created_at,
+    };
+}
+
 pub fn DistributionApi(comptime Service: type, comptime UserService: type) type {
     return struct {
         const Self = @This();
@@ -55,6 +79,18 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
         user_svc: *UserService,
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
+
+        pub const module_name = "distribution";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "distributions", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "distributions/commissions", .handler = http.wrapHandler(Self, commissions), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "distributions/join", .handler = http.wrapHandler(Self, join), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "distributions/distribute", .handler = http.wrapHandler(Self, distribute), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "distributions/withdraw", .handler = http.wrapHandler(Self, withdraw), .meta = .{ .permission = "admin" } },
+        };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
@@ -68,6 +104,14 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
             try g.post("/distributions/join", join, @ptrCast(@alignCast(self)));
             try g.post("/distributions/distribute", distribute, @ptrCast(@alignCast(self)));
             try g.post("/distributions/withdraw", withdraw, @ptrCast(@alignCast(self)));
+        }
+
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
+            try ctx.setAttr("audit_actor", row.name);
         }
 
         fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
@@ -98,7 +142,7 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
 
         fn list(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -113,7 +157,7 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
 
         fn commissions(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -122,12 +166,14 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
                 return;
             };
             defer result.free(ctx.allocator);
-            try zigmodu.http.sendPaged(ctx, result.items, @intCast(result.total), params, .ruoyi);
+            const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, CommissionDto, toCommissionDto);
+            try zigmodu.http.sendPaged(ctx, dtos, @intCast(result.total), params, .ruoyi);
         }
 
         fn join(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const req = ctx.bindJson(JoinReq) catch {
@@ -153,7 +199,8 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
 
         fn distribute(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const req = ctx.bindJson(DistributeReq) catch {
@@ -171,7 +218,8 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
 
         fn withdraw(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const req = ctx.bindJson(WithdrawReq) catch {

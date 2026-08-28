@@ -136,7 +136,8 @@ pub const DistributionService = struct {
         const d_opt = self.store.getByOpenid(tenant_id, account_id, openid) catch return error.Unexpected;
         const d = d_opt orelse return error.NotFound;
         defer d.free(self.allocator);
-        if (d.commission_balance < amount) return error.InsufficientBalance;
+        const balance_cents = std.fmt.parseInt(i64, d.commission_balance, 10) catch return error.Unexpected;
+        if (balance_cents < amount) return error.InsufficientBalance;
         if (!(self.store.deductCommission(self.allocator, d.id, amount) catch return error.Unexpected)) return error.InsufficientBalance;
         _ = self.store.createCommission(tenant_id, account_id, openid, "", 0, -amount, self.now()) catch {};
     }
@@ -177,7 +178,7 @@ pub fn receiverHandle(ctx: ?*anyopaque, allocator: std.mem.Allocator, msg: messa
         var buf = std.ArrayList(u8).empty;
         defer buf.deinit(allocator);
         try buf.appendSlice(allocator, "💰 我的分销\n佣金余额：");
-        const balance = d.commission_balance;
+        const balance = std.fmt.parseInt(i64, d.commission_balance, 10) catch 0;
         const balance_yuan = @divTrunc(balance, 100);
         const balance_fen = @mod(balance, 100);
         const bal = if (balance_fen < 10)
@@ -187,7 +188,8 @@ pub fn receiverHandle(ctx: ?*anyopaque, allocator: std.mem.Allocator, msg: messa
         defer allocator.free(bal);
         try buf.appendSlice(allocator, bal);
         try buf.appendSlice(allocator, "\n累计佣金：");
-        const total = std.fmt.allocPrint(allocator, "{d}", .{d.total_commission}) catch "?";
+        const total_commission_cents = std.fmt.parseInt(i64, d.total_commission, 10) catch 0;
+        const total = std.fmt.allocPrint(allocator, "{d}", .{total_commission_cents}) catch "?";
         defer allocator.free(total);
         try buf.appendSlice(allocator, total);
         try buf.appendSlice(allocator, " 分\n邀请好友下单，三级返佣自动到账！");

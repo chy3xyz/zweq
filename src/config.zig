@@ -62,6 +62,13 @@ pub const Config = struct {
     cloud_remote_url: []const u8 = "",
     /// 商城订单支付超时（秒），超时自动取消并回滚库存。
     shop_order_timeout: i64 = 1800,
+    /// Redis 开关。启用后限流器切换到分布式固定窗口（多实例共享）。
+    /// 注意：当前 zigmodu Redis 客户端只支持 host/port，不支持密码/非零 DB。
+    redis_enable: bool = false,
+    /// Redis 主机（redis_enable=true 时生效）。
+    redis_host: []const u8 = "localhost",
+    /// Redis 端口。
+    redis_port: u16 = 6379,
 
     pub fn fromEnv(environ: *const std.process.Environ.Map) Config {
         var cfg: Config = .{};
@@ -97,6 +104,9 @@ pub const Config = struct {
         cfg.ai_key_secret = environ.get("ZWEQ_AI_KEY_SECRET") orelse "";
         cfg.ai_daily_run_limit = parseInt64(environ.get("ZWEQ_AI_DAILY_RUN_LIMIT") orelse "100", 100);
         cfg.cloud_remote_url = environ.get("ZWEQ_CLOUD_REMOTE_URL") orelse "";
+        cfg.redis_enable = parseBool(environ.get("ZWEQ_REDIS_ENABLE") orelse "false", false);
+        cfg.redis_host = environ.get("ZWEQ_REDIS_HOST") orelse "localhost";
+        cfg.redis_port = parsePort(environ.get("ZWEQ_REDIS_PORT") orelse "6379");
         return cfg;
     }
 };

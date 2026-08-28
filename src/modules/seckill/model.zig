@@ -13,8 +13,8 @@ pub const SeckillActivity = Schema("SeckillActivity", .{
         field.Int("tenant_id").Default(1),
         field.Int("account_id"),
         field.String("title"),
-        field.Int("price").Default(0), // 秒杀价（分）
-        field.Int("original_price").Default(0), // 原价（分）
+        field.Decimal("price").Default("0"), // 秒杀价（分）
+        field.Decimal("original_price").Default("0"), // 原价（分）
         field.Int("stock").Default(0), // 总库存
         field.Int("sold").Default(0), // 已售
         field.Int("per_user").Default(1), // 每人限购

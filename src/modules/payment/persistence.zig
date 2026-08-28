@@ -19,8 +19,12 @@ pub const WalletRow = struct {
     tenant_id: i64,
     account_id: i64,
     fan_id: i64,
-    balance: i64,
+    balance: []const u8,
     updated_at: i64,
+
+    pub fn free(self: WalletRow, allocator: std.mem.Allocator) void {
+        allocator.free(self.balance);
+    }
 };
 
 pub const RechargeOrderRow = struct {
@@ -29,7 +33,7 @@ pub const RechargeOrderRow = struct {
     account_id: i64,
     order_no: []const u8,
     fan_id: i64,
-    amount: i64,
+    amount: []const u8,
     channel: []const u8,
     status: []const u8,
     paid_at: i64,
@@ -37,6 +41,7 @@ pub const RechargeOrderRow = struct {
 
     pub fn free(self: RechargeOrderRow, allocator: std.mem.Allocator) void {
         allocator.free(self.order_no);
+        allocator.free(self.amount);
         allocator.free(self.channel);
         allocator.free(self.status);
     }
@@ -57,11 +62,12 @@ pub const WithdrawRow = struct {
     tenant_id: i64,
     account_id: i64,
     fan_id: i64,
-    amount: i64,
+    amount: []const u8,
     status: []const u8,
     created_at: i64,
 
     pub fn free(self: WithdrawRow, allocator: std.mem.Allocator) void {
+        allocator.free(self.amount);
         allocator.free(self.status);
     }
 };
@@ -87,6 +93,8 @@ pub const PaymentStore = struct {
     fn dupOrder(self: *PaymentStore, e: anytype) !RechargeOrderRow {
         const order_no = try self.allocator.dupe(u8, e.order_no);
         errdefer self.allocator.free(order_no);
+        const amount = try self.allocator.dupe(u8, e.amount);
+        errdefer self.allocator.free(amount);
         const channel = try self.allocator.dupe(u8, e.channel);
         errdefer self.allocator.free(channel);
         const status = try self.allocator.dupe(u8, e.status);
@@ -97,7 +105,7 @@ pub const PaymentStore = struct {
             .account_id = e.account_id,
             .order_no = order_no,
             .fan_id = e.fan_id,
-            .amount = e.amount,
+            .amount = amount,
             .channel = channel,
             .status = status,
             .paid_at = e.paid_at,
@@ -106,6 +114,8 @@ pub const PaymentStore = struct {
     }
 
     fn dupWithdraw(self: *PaymentStore, e: anytype) !WithdrawRow {
+        const amount = try self.allocator.dupe(u8, e.amount);
+        errdefer self.allocator.free(amount);
         const status = try self.allocator.dupe(u8, e.status);
         errdefer self.allocator.free(status);
         return .{
@@ -113,7 +123,7 @@ pub const PaymentStore = struct {
             .tenant_id = e.tenant_id,
             .account_id = e.account_id,
             .fan_id = e.fan_id,
-            .amount = e.amount,
+            .amount = amount,
             .status = status,
             .created_at = e.created_at orelse 0,
         };
@@ -132,25 +142,32 @@ pub const PaymentStore = struct {
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
         defer zent.codegen.deinitEntity(infos, WalletInfo, &entity, self.allocator);
+        const balance = try self.allocator.dupe(u8, entity.balance);
+        errdefer self.allocator.free(balance);
         return .{
             .id = entity.id,
             .tenant_id = entity.tenant_id,
             .account_id = entity.account_id,
             .fan_id = entity.fan_id,
-            .balance = entity.balance,
+            .balance = balance,
             .updated_at = entity.updated_at orelse 0,
         };
     }
 
     /// Create a wallet (balance 0) if absent, return its id.
     pub fn ensureWallet(self: *PaymentStore, tenant_id: i64, account_id: i64, fan_id: i64, now: i64) !i64 {
-        if (try self.getWallet(tenant_id, account_id, fan_id)) |w| return w.id;
+        const existing = try self.getWallet(tenant_id, account_id, fan_id);
+        if (existing) |w| {
+            const id = w.id;
+            w.free(self.allocator);
+            return id;
+        }
         var b = try self.client.wallet.Create();
         defer b.deinit();
         _ = try b.setFieldValue("tenant_id", tenant_id);
         _ = try b.setFieldValue("account_id", account_id);
         _ = try b.setFieldValue("fan_id", fan_id);
-        _ = try b.setFieldValue("balance", @as(i64, 0));
+        _ = try b.setFieldValue("balance", "0");
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
@@ -160,42 +177,51 @@ pub const PaymentStore = struct {
 
     /// 原子扣减钱包（乐观锁：balance >= amount），余额不足返回 false。
     pub fn debitWallet(self: *PaymentStore, allocator: std.mem.Allocator, tenant_id: i64, account_id: i64, fan_id: i64, amount: i64, now: i64) !bool {
+        _ = allocator;
         const wid = try self.ensureWallet(tenant_id, account_id, fan_id, now);
         const preds = self.client.wallet.predicates;
-        const guard = try std.fmt.allocPrint(allocator, "balance >= {d}", .{amount});
-        defer allocator.free(guard);
-        const affected = crud.increment(self.client.wallet, "balance", -amount, &.{
-            preds.idEQ(.{ .int = wid }),
-            zent.sql.Predicate{ .raw = guard },
-        }) catch return false;
+        const guard = try std.fmt.allocPrint(self.allocator, "CAST(balance AS INTEGER) >= {d}", .{amount});
+        defer self.allocator.free(guard);
+        const amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{amount});
+        defer self.allocator.free(amount_str);
+        var upd = self.client.wallet.Update();
+        defer upd.deinit();
+        _ = try upd.setExprArgs("balance", "balance - ?", &.{.{ .string = amount_str }});
+        _ = try upd.setFieldValue("updated_at", now);
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = wid }), zent.sql.Predicate{ .raw = guard } });
+        const affected = try upd.Save();
         return affected > 0;
     }
 
     /// Add `delta` cents to a fan's wallet. Returns the new balance.
     pub fn creditWallet(self: *PaymentStore, tenant_id: i64, account_id: i64, fan_id: i64, delta: i64, now: i64) !i64 {
         const wid = try self.ensureWallet(tenant_id, account_id, fan_id, now);
-        const current = (try self.getWallet(tenant_id, account_id, fan_id)).?;
-        const new_balance = current.balance + delta;
+        const delta_str = try std.fmt.allocPrint(self.allocator, "{d}", .{delta});
+        defer self.allocator.free(delta_str);
         const preds = self.client.wallet.predicates;
         var upd = self.client.wallet.Update();
         defer upd.deinit();
-        _ = try upd.set("balance", .{ .int = new_balance });
+        _ = try upd.setExprArgs("balance", "balance + ?", &.{.{ .string = delta_str }});
         _ = try upd.setFieldValue("updated_at", now);
         _ = try upd.Where(.{preds.idEQ(.{ .int = wid })});
         _ = try upd.Save();
-        return new_balance;
+        const current = (try self.getWallet(tenant_id, account_id, fan_id)) orelse return error.Unexpected;
+        defer current.free(self.allocator);
+        return try std.fmt.parseInt(i64, current.balance, 10);
     }
 
     // ── RechargeOrder ─────────────────────────────────────────────
 
     pub fn createOrder(self: *PaymentStore, tenant_id: i64, account_id: i64, order_no: []const u8, fan_id: i64, amount: i64, channel: []const u8, now: i64) !i64 {
+        const amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{amount});
+        defer self.allocator.free(amount_str);
         var b = try self.client.recharge_order.Create();
         defer b.deinit();
         _ = try b.setFieldValue("tenant_id", tenant_id);
         _ = try b.setFieldValue("account_id", account_id);
         _ = try b.setFieldValue("order_no", order_no);
         _ = try b.setFieldValue("fan_id", fan_id);
-        _ = try b.setFieldValue("amount", amount);
+        _ = try b.setFieldValue("amount", amount_str);
         _ = try b.setFieldValue("channel", channel);
         _ = try b.setFieldValue("status", "pending");
         _ = try b.setFieldValue("paid_at", @as(i64, 0));
@@ -278,12 +304,14 @@ pub const PaymentStore = struct {
     // ── Withdraw ──────────────────────────────────────────────────
 
     pub fn createWithdraw(self: *PaymentStore, tenant_id: i64, account_id: i64, fan_id: i64, amount: i64, now: i64) !i64 {
+        const amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{amount});
+        defer self.allocator.free(amount_str);
         var b = try self.client.withdraw.Create();
         defer b.deinit();
         _ = try b.setFieldValue("tenant_id", tenant_id);
         _ = try b.setFieldValue("account_id", account_id);
         _ = try b.setFieldValue("fan_id", fan_id);
-        _ = try b.setFieldValue("amount", amount);
+        _ = try b.setFieldValue("amount", amount_str);
         _ = try b.setFieldValue("status", "pending");
         _ = try b.setFieldValue("created_at", now);
         var row = try b.Save();

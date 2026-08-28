@@ -36,6 +36,17 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "setting";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "settings", .handler = http.wrapHandler(Self, list), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "settings/{key}", .handler = http.wrapHandler(Self, get), .meta = .{ .auth = .jwt } },
+            .{ .method = .PUT, .path = "settings/{key}", .handler = http.wrapHandler(Self, set), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "settings/{key}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -45,8 +56,9 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
             try g.get("/settings", list, @ptrCast(@alignCast(self)));
             try g.get("/settings/{key}", get, @ptrCast(@alignCast(self)));
-            try g.put("/settings/{key}", set, @ptrCast(@alignCast(self)));
-            try g.delete("/settings/{key}", delete, @ptrCast(@alignCast(self)));
+            var admin_g = try g.use(mw.adminGuard(self.user_svc.store));
+            try admin_g.put("/settings/{key}", set, @ptrCast(@alignCast(self)));
+            try admin_g.delete("/settings/{key}", delete, @ptrCast(@alignCast(self)));
         }
 
         /// Authenticated user id (any role).
@@ -58,23 +70,12 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
             return uid;
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = (try requireAuth(ctx)) orelse return null;
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
@@ -120,7 +121,8 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
 
         fn set(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const key = ctx.param("key") orelse {
@@ -148,7 +150,8 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
 
         fn delete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const key = ctx.param("key") orelse {

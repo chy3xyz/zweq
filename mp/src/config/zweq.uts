@@ -1,0 +1,2 @@
+// zweq 站点配置 — 部署时按实际公众号账号修改
+export const ZWEQ_ACCOUNT_ID: number = 1

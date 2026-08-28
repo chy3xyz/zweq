@@ -37,6 +37,14 @@ pub fn CheckinApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "checkin";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "checkin/records", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -47,31 +55,18 @@ pub fn CheckinApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/checkin/records", list, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        /// Sets the `audit_actor` context attribute from the authenticated user.
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn list(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
 
             const account_raw = ctx.queryParam("account_id") orelse {

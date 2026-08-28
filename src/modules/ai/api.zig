@@ -137,6 +137,30 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
         svc: *AiSvcT,
         user_svc: *UserService,
 
+        pub const module_name = "ai";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "ai/sessions", .handler = http.wrapHandler(Self, listSessions), .meta = .{ .auth = .jwt } },
+            .{ .method = .POST, .path = "ai/sessions", .handler = http.wrapHandler(Self, createSession), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "ai/sessions/{id}/messages", .handler = http.wrapHandler(Self, listMessages), .meta = .{ .auth = .jwt } },
+            .{ .method = .POST, .path = "ai/sessions/{id}/chat", .handler = http.wrapHandler(Self, chat), .meta = .{ .auth = .jwt } },
+            .{ .method = .DELETE, .path = "ai/sessions/{id}", .handler = http.wrapHandler(Self, deleteSession), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "ai/providers", .handler = http.wrapHandler(Self, listProviders), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "ai/providers", .handler = http.wrapHandler(Self, createProvider), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "ai/providers/{id}", .handler = http.wrapHandler(Self, updateProvider), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "ai/providers/{id}", .handler = http.wrapHandler(Self, deleteProvider), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "ai/providers/{id}/check", .handler = http.wrapHandler(Self, checkProvider), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "ai/approvals", .handler = http.wrapHandler(Self, listApprovals), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "ai/approvals/{id}/approve", .handler = http.wrapHandler(Self, approveApproval), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "ai/approvals/{id}/reject", .handler = http.wrapHandler(Self, rejectApproval), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "ai/runs", .handler = http.wrapHandler(Self, listRuns), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "ai/workflow/run", .handler = http.wrapHandler(Self, runWorkflow), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "ai/metrics", .handler = http.wrapHandler(Self, metrics), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "ai/skills", .handler = http.wrapHandler(Self, skills), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *AiSvcT, users: *UserService) Self {
             return .{ .svc = svc, .user_svc = users };
         }
@@ -169,32 +193,19 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
             return mw.authUserId(ctx);
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = authUid(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(ctx.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
-            return uid;
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = authUid(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
+            try ctx.setAttr("audit_actor", row.name);
         }
 
         // ── Provider CRUD ──
 
         fn listProviders(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             var result = self.svc.store.listProviders(params.page, params.page_size) catch |err| {
                 std.log.err("internal error: {s}", .{@errorName(err)});
@@ -208,7 +219,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn createProvider(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const req = ctx.bindJson(SaveProviderReq) catch {
                 try ctx.sendErrorResponse(400, 400, "无效的请求 JSON");
                 return;
@@ -265,7 +276,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn updateProvider(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的 Provider ID");
                 return;
@@ -334,7 +345,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn deleteProvider(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的 Provider ID");
                 return;
@@ -349,7 +360,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn checkProvider(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的 Provider ID");
                 return;
@@ -528,7 +539,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn listApprovals(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             const status = ctx.queryParam("status");
             var result = self.svc.store.listApprovals(status, params.page, params.page_size) catch |err| {
@@ -543,7 +554,8 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn resolveApproval(ctx: *http.Context, approve: bool) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = authUid(ctx) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的 Approval ID");
                 return;
@@ -570,7 +582,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn listRuns(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             const uid = ctx.queryInt(i64, "user_id", 0);
             var result = self.svc.store.listRuns(if (uid > 0) uid else null, params.page, params.page_size) catch |err| {
@@ -585,7 +597,8 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn runWorkflow(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = authUid(ctx) orelse return;
             const tenant_id = mw.authTenantId(ctx) orelse 1;
 
             var result = self.svc.runHealthWorkflow(ctx.allocator, admin_id, tenant_id) catch |err| {
@@ -622,7 +635,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn metrics(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             var snapshot = self.svc.currentAgentMetrics();
             var ai_metrics = zigmodu.ai.observability.AiMetrics{ .agent = &snapshot };
             const body = try ai_metrics.toPrometheusFormat(ctx.allocator);
@@ -632,7 +645,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
         fn skills(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const names = [_][]const u8{ "zweq.user.search", "zweq.task.stats", "zweq.audit.search", "zweq.tenant.list", "zweq.notify.send" };
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = .{ .skills = names[0..] } });
         }

@@ -29,6 +29,15 @@ pub fn AppBffApi(comptime AccountService: type, comptime ModuleService: type, co
         user_svc: *UserService,
         default_tenant_id: i64,
 
+        pub const module_name = "app_bff";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "app/accounts/{id}", .handler = http.wrapHandler(Self, accountInfo), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "app/accounts/{id}/modules", .handler = http.wrapHandler(Self, modules), .meta = .{ .auth = .jwt } },
+        };
+
         pub fn init(accounts: *AccountService, mods: *ModuleService, users: *UserService, default_tenant_id: i64) Self {
             return .{ .account_svc = accounts, .module_svc = mods, .user_svc = users, .default_tenant_id = default_tenant_id };
         }

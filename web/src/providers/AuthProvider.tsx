@@ -2,7 +2,7 @@ import { useNavigate } from '@solidjs/router';
 import { type JSX, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 
-import { type AuthUser, login as apiLogin, logout as apiLogout, register as apiRegister, setAuthToken, setUnauthorizedHandler } from '#ui/api';
+import { type AuthUser, login as apiLogin, logout as apiLogout, me as apiMe, register as apiRegister, setAuthToken, setUnauthorizedHandler } from '#ui/api';
 import { APP_CONFIG } from '#ui/config';
 import { ROUTE_PATH } from '#ui/constants';
 import { AuthContext, type AuthActions, type AuthContextValue, type AuthState } from '#ui/context';
@@ -56,6 +56,15 @@ export function AuthProvider(props: JSX.HTMLAttributes<HTMLElement>) {
         user: session.user,
         error: null,
       });
+      void apiMe()
+        .then((user) => {
+          const token = session.token;
+          persistSession(token, user);
+          setStore('user', user);
+        })
+        .catch(() => {
+          // Stale token — clear silently; 401 handler may also fire.
+        });
     } else {
       setStore('status', 'unverified');
     }
@@ -69,7 +78,8 @@ export function AuthProvider(props: JSX.HTMLAttributes<HTMLElement>) {
       setStore('error', null);
       try {
         const result = await apiLogin({ email, password });
-        applySession(result.token, result.user);
+        const user = await apiMe().catch(() => result.user);
+        applySession(result.token, user);
         navigate(ROUTE_PATH.index, { replace: true });
       } catch (err) {
         setStore(
@@ -83,7 +93,8 @@ export function AuthProvider(props: JSX.HTMLAttributes<HTMLElement>) {
       setStore('error', null);
       try {
         const result = await apiRegister({ name, email, password });
-        applySession(result.token, result.user);
+        const user = await apiMe().catch(() => result.user);
+        applySession(result.token, user);
         navigate(ROUTE_PATH.index, { replace: true });
       } catch (err) {
         setStore(

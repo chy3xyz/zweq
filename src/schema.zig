@@ -64,6 +64,7 @@ const permission_graph = zent.codegen.graph.buildGraph(&.{
     permission_model.Role,
     permission_model.Permission,
     permission_model.UserRole,
+    permission_model.RolePermission,
 });
 const setting_graph = zent.codegen.graph.buildGraph(&.{setting_model.SiteSetting});
 const rule_graph = zent.codegen.graph.buildGraph(&.{

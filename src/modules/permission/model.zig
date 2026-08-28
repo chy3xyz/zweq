@@ -37,3 +37,13 @@ pub const UserRole = Schema("UserRole", .{
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });
+
+/// Join table: role ↔ permission (module:action grants).
+pub const RolePermission = Schema("RolePermission", .{
+    .fields = &.{
+        field.Int("tenant_id").Default(1),
+        field.Int("role_id"),
+        field.Int("permission_id"),
+    },
+    .mixins = &.{zent.core.mixin.TimeMixin},
+});

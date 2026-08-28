@@ -16,8 +16,8 @@ pub const CouponRow = struct {
     id: i64,
     account_id: i64,
     title: []const u8,
-    amount: i64,
-    min_amount: i64,
+    amount: []const u8,
+    min_amount: []const u8,
     total: i64,
     per_user: i64,
     start_at: i64,
@@ -26,6 +26,8 @@ pub const CouponRow = struct {
 
     pub fn free(self: CouponRow, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
+        allocator.free(self.amount);
+        allocator.free(self.min_amount);
     }
 };
 
@@ -77,12 +79,16 @@ pub const CouponStore = struct {
     fn dupCoupon(self: *CouponStore, e: anytype) !CouponRow {
         const title = try self.allocator.dupe(u8, e.title);
         errdefer self.allocator.free(title);
+        const amount = try self.allocator.dupe(u8, e.amount);
+        errdefer self.allocator.free(amount);
+        const min_amount = try self.allocator.dupe(u8, e.min_amount);
+        errdefer self.allocator.free(min_amount);
         return .{
             .id = e.id,
             .account_id = e.account_id,
             .title = title,
-            .amount = e.amount,
-            .min_amount = e.min_amount,
+            .amount = amount,
+            .min_amount = min_amount,
             .total = e.total,
             .per_user = e.per_user,
             .start_at = e.start_at,
@@ -113,19 +119,24 @@ pub const CouponStore = struct {
     // ── 券模板 ─────────────────────────────────────────────
 
     pub fn createCoupon(self: *CouponStore, tenant_id: i64, account_id: i64, title: []const u8, amount: i64, min_amount: i64, total: i64, per_user: i64, start_at: i64, end_at: i64, now: i64) !i64 {
-        var row = try crud.create(self.client.coupon, .{
-            .tenant_id = tenant_id,
-            .account_id = account_id,
-            .title = title,
-            .amount = amount,
-            .min_amount = min_amount,
-            .total = total,
-            .per_user = per_user,
-            .start_at = start_at,
-            .end_at = end_at,
-            .created_at = now,
-            .updated_at = now,
-        });
+        const amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{amount});
+        defer self.allocator.free(amount_str);
+        const min_amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{min_amount});
+        defer self.allocator.free(min_amount_str);
+        var b = try self.client.coupon.Create();
+        defer b.deinit();
+        _ = try b.setFieldValue("tenant_id", tenant_id);
+        _ = try b.setFieldValue("account_id", account_id);
+        _ = try b.setFieldValue("title", title);
+        _ = try b.setFieldValue("amount", amount_str);
+        _ = try b.setFieldValue("min_amount", min_amount_str);
+        _ = try b.setFieldValue("total", total);
+        _ = try b.setFieldValue("per_user", per_user);
+        _ = try b.setFieldValue("start_at", start_at);
+        _ = try b.setFieldValue("end_at", end_at);
+        _ = try b.setFieldValue("created_at", now);
+        _ = try b.setFieldValue("updated_at", now);
+        var row = try b.Save();
         defer zent.codegen.deinitEntity(infos, CouponInfo, &row, self.allocator);
         return row.id;
     }

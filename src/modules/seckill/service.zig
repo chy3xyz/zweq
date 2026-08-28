@@ -97,8 +97,9 @@ pub fn receiverHandle(ctx: ?*anyopaque, allocator: std.mem.Allocator, msg: messa
         try buf.appendSlice(allocator, "⚡ 秒杀：");
         try buf.appendSlice(allocator, a.title);
         try buf.appendSlice(allocator, "\n💴 秒杀价 ");
-        const price_yuan = @divTrunc(a.price, 100);
-        const price_fen = @mod(a.price, 100);
+        const price_cents = std.fmt.parseInt(i64, a.price, 10) catch return null;
+        const price_yuan = @divTrunc(price_cents, 100);
+        const price_fen = @mod(price_cents, 100);
         const price_str = if (price_fen < 10)
             (std.fmt.allocPrint(allocator, "{d}.0{d} 元", .{ price_yuan, price_fen }) catch "?")
         else

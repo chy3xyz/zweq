@@ -7,6 +7,8 @@ export interface AuthUser {
   tenant_id: number;
   created_at: number;
   updated_at: number;
+  /** Effective RBAC codes from role bindings (e.g. admin, operator, shop:read). */
+  permissions?: string[];
 }
 
 export interface LoginRequest {

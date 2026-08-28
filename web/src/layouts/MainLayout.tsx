@@ -13,6 +13,7 @@ import {
 import { useAuth } from '#ui/hooks';
 import { ROUTE_PATH } from '#ui/constants';
 import { formatDateTime } from '#ui/utils';
+import { canAccessAdmin } from '#ui/utils/permissions';
 
 function NotificationBell() {
   const [open, setOpen] = createSignal(false);
@@ -127,6 +128,7 @@ function NotificationBell() {
 
 function MainLayout(props: { children?: JSX.Element }) {
   const [auth, actions] = useAuth();
+  const showAdmin = () => canAccessAdmin(auth.user?.permissions, auth.user?.admin);
 
   return (
     <div class="flex h-screen overflow-hidden bg-base-100">
@@ -135,7 +137,7 @@ function MainLayout(props: { children?: JSX.Element }) {
           <span class="text-lg font-bold">Zweq</span>
         </div>
         <nav class="flex-1 space-y-1 p-3">
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.dashboard}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -144,7 +146,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               概览
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.users}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -153,7 +155,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               用户管理
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.accounts}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -162,7 +164,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               账号管理
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.rules}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -171,7 +173,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               自动回复
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.fans}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -180,7 +182,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               粉丝管理
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.payments}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -189,7 +191,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               充值支付
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.modules}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -198,7 +200,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               模块管理
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.cloud}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -207,7 +209,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               云服务
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.logs}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -216,7 +218,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               消息日志
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.materials}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -316,7 +318,7 @@ function MainLayout(props: { children?: JSX.Element }) {
           >
             AI 助手
           </A>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.aiAdmin}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -325,7 +327,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               AI 管理
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.auditLogs}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -334,7 +336,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               审计日志
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.mailTemplates}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -343,7 +345,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               邮件模板
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.tasks}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -352,7 +354,7 @@ function MainLayout(props: { children?: JSX.Element }) {
               任务中心
             </A>
           </Show>
-          <Show when={auth.user?.admin}>
+          <Show when={showAdmin()}>
             <A
               href={ROUTE_PATH.tenants}
               class="block rounded-lg px-3 py-2 text-sm hover:bg-base-300 [&.active]:bg-primary [&.active]:text-primary-content"
@@ -389,7 +391,7 @@ function MainLayout(props: { children?: JSX.Element }) {
           <div class="flex items-center gap-3 text-sm text-base-content/70">
             <NotificationBell />
             <span class="badge badge-ghost">{auth.user?.name ?? '-'}</span>
-            <span class="badge badge-outline">{auth.user?.admin ? '管理员' : '用户'}</span>
+            <span class="badge badge-outline">{showAdmin() ? '管理员' : '用户'}</span>
           </div>
         </header>
         <main class="flex-1 overflow-y-auto p-6">{props.children}</main>

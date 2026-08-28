@@ -39,6 +39,17 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "file";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .POST, .path = "files", .handler = http.wrapHandler(Self, upload), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "files", .handler = http.wrapHandler(Self, list), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "files/{id}", .handler = http.wrapHandler(Self, download), .meta = .{ .auth = .jwt } },
+            .{ .method = .DELETE, .path = "files/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .auth = .jwt } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -107,13 +118,10 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             const current_tenant = mw.authTenantId(ctx) orelse self.default_tenant_id;
             const owner: ?i64 = if (actor.admin) null else actor.id;
-            const tenant_filter: ?i64 = if (actor.admin)
-                blk: {
-                    const tid = ctx.queryInt(i64, "tenant_id", 0);
-                    break :blk if (tid > 0) tid else null;
-                }
-            else
-                current_tenant;
+            const tenant_filter: ?i64 = if (actor.admin) blk: {
+                const tid = ctx.queryInt(i64, "tenant_id", 0);
+                break :blk if (tid > 0) tid else null;
+            } else current_tenant;
             const sort = zigmodu.http.page.parseSort(ctx, &.{ "name", "size_bytes", "created_at" });
             const sort_col: ?[]const u8 = if (sort) |s| s.column else null;
             const sort_desc = if (sort) |s| s.desc else false;

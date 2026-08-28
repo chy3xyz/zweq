@@ -48,6 +48,21 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "points";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "points/products", .handler = http.wrapHandler(Self, listProducts), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "points/products", .handler = http.wrapHandler(Self, createProduct), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "points/products/{id}", .handler = http.wrapHandler(Self, getProduct), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "points/products/{id}", .handler = http.wrapHandler(Self, updateProduct), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "points/products/{id}", .handler = http.wrapHandler(Self, deleteProduct), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "points/redeem", .handler = http.wrapHandler(Self, redeem), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "points/adjust", .handler = http.wrapHandler(Self, adjust), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "points/orders", .handler = http.wrapHandler(Self, listOrders), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -65,26 +80,12 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/points/orders", listOrders, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
@@ -93,7 +94,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
 
         fn listProducts(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_raw = ctx.queryParam("account_id") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");
@@ -115,7 +116,8 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
 
         fn createProduct(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(ProductReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -138,7 +140,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
 
         fn getProduct(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的商品 ID");
                 return;
@@ -157,7 +159,8 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
 
         fn updateProduct(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的商品 ID");
@@ -184,7 +187,8 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
 
         fn deleteProduct(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的商品 ID");
@@ -200,7 +204,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
 
         fn redeem(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(RedeemReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -223,7 +227,8 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
 
         fn adjust(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(AdjustReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -245,7 +250,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
 
         fn listOrders(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_raw = ctx.queryParam("account_id") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");

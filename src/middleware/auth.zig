@@ -37,39 +37,73 @@ pub fn tokenVersionGuard(sec: *zigmodu.security.AppSecurity, user_store: *user_p
     };
     S.stored_sec = sec;
     S.stored_store = user_store;
-    return .{ .func = struct {
-        fn mw(ctx: *http.Context, next: http.HandlerFn, _: ?*anyopaque) anyerror!void {
-            const uid = authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
-            const hdr = ctx.header("authorization") orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
-            const token = zigmodu.security.SecurityModule.extractBearerToken(hdr) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
-            const payload = S.stored_sec.module.verifyToken(token) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
-            defer S.stored_sec.module.freePayload(payload);
-            const row_opt = S.stored_store.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
-            defer row.free(ctx.allocator);
-            if (payload.ver != row.token_version) {
-                try ctx.sendErrorResponse(401, 401, "登录已失效,请重新登录");
-                return;
+    return .{
+        .func = struct {
+            fn mw(ctx: *http.Context, next: http.HandlerFn, _: ?*anyopaque) anyerror!void {
+                // Catalog-aware: public routes have no user_id; skip the version check.
+                const uid = authUserId(ctx) orelse {
+                    try next(ctx);
+                    return;
+                };
+                const hdr = ctx.header("authorization") orelse ctx.header("X-Token") orelse {
+                    try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
+                    return;
+                };
+                const token = zigmodu.security.SecurityModule.extractBearerToken(hdr) orelse hdr;
+                const payload = S.stored_sec.module.verifyToken(token) catch {
+                    try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
+                    return;
+                };
+                defer S.stored_sec.module.freePayload(payload);
+                const row_opt = S.stored_store.getUserById(uid) catch {
+                    try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
+                    return;
+                };
+                const row = row_opt orelse {
+                    try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
+                    return;
+                };
+                defer row.free(ctx.allocator);
+                if (payload.ver != row.token_version) {
+                    try ctx.sendErrorResponse(401, 401, "登录已失效,请重新登录");
+                    return;
+                }
+                try next(ctx);
             }
-            try next(ctx);
-        }
-    }.mw };
+        }.mw,
+    };
+}
+
+/// 挂载在 `jwtAuthWithSecurity` 之后:要求当前用户具有 `admin` 角色。
+/// 用于保持 `registerRoutes` 兼容层与 ComptimeRouter 的 `.permission = "admin"` 行为一致。
+pub fn adminGuard(user_store: *user_persist.UserStore) http.Middleware {
+    const S = struct {
+        var stored_store: *user_persist.UserStore = undefined;
+    };
+    S.stored_store = user_store;
+    return .{
+        .func = struct {
+            fn mw(ctx: *http.Context, next: http.HandlerFn, _: ?*anyopaque) anyerror!void {
+                const uid = authUserId(ctx) orelse {
+                    // 公开路由没有 user_id,跳过管理员校验。
+                    try next(ctx);
+                    return;
+                };
+                const row_opt = S.stored_store.getUserById(uid) catch {
+                    try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
+                    return;
+                };
+                const row = row_opt orelse {
+                    try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
+                    return;
+                };
+                defer row.free(S.stored_store.allocator);
+                if (!row.admin) {
+                    try ctx.sendErrorResponse(403, 403, "需要管理员权限");
+                    return;
+                }
+                try next(ctx);
+            }
+        }.mw,
+    };
 }

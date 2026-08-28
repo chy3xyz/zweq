@@ -18,8 +18,8 @@ pub const ModuleError = error{
 
 /// The built-in modules every site ships with (compile-time set).
 pub const builtin_modules = [_][]const u8{
-    "account",   "permission", "setting", "rule",
-    "member",    "message",    "module",  "payment",
+    "account", "permission", "setting", "rule",
+    "member",  "message",    "module",  "payment",
 };
 
 pub fn validStatus(status: []const u8) bool {

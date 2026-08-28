@@ -14,6 +14,7 @@ const notify_service = @import("../notify/service.zig");
 const mail = @import("../../services/mail.zig");
 const audit_svc = @import("../audit/service.zig");
 const mail_template_svc = @import("../mail_template/service.zig");
+const catalog_permissions = @import("../../middleware/catalog_permissions.zig");
 
 const RegisterReq = struct {
     name: []const u8,
@@ -64,6 +65,18 @@ const UserDto = struct {
     updated_at: i64,
 };
 
+const MeDto = struct {
+    id: i64,
+    name: []const u8,
+    email: []const u8,
+    verified: bool,
+    admin: bool,
+    tenant_id: i64,
+    created_at: i64,
+    updated_at: i64,
+    permissions: [][]const u8,
+};
+
 fn toDto(row: user_service.UserRow) UserDto {
     return .{
         .id = row.id,
@@ -82,7 +95,7 @@ pub fn AuthApi(comptime Service: type) type {
         const Self = @This();
         svc: *Service,
         app_host: []const u8,
-        registry: *zigmodu.RateLimiterRegistry,
+        limiter: *mw_rate.PerIpLimiter,
         mailer: *const mail.Mailer,
         task_svc: *task_service.TaskService,
         notify_svc: *notify_service.NotificationService,
@@ -90,10 +103,27 @@ pub fn AuthApi(comptime Service: type) type {
         templates: *mail_template_svc.MailTemplateService,
         default_tenant_id: i64,
 
+        pub const module_name = "auth";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .POST, .path = "auth/register", .handler = http.wrapHandler(Self, register), .meta = .{ .auth = .public } },
+            .{ .method = .POST, .path = "auth/login", .handler = http.wrapHandler(Self, login), .meta = .{ .auth = .public } },
+            .{ .method = .POST, .path = "auth/logout", .handler = http.wrapHandler(Self, logout), .meta = .{ .auth = .public } },
+            .{ .method = .POST, .path = "auth/forgot-password", .handler = http.wrapHandler(Self, forgotPassword), .meta = .{ .auth = .public } },
+            .{ .method = .POST, .path = "auth/reset-password", .handler = http.wrapHandler(Self, resetPassword), .meta = .{ .auth = .public } },
+            .{ .method = .POST, .path = "auth/verify-email", .handler = http.wrapHandler(Self, verifyEmail), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "auth/me", .handler = http.wrapHandler(Self, me), .meta = .{ .auth = .jwt } },
+            .{ .method = .POST, .path = "auth/send-verification", .handler = http.wrapHandler(Self, sendVerification), .meta = .{ .auth = .jwt } },
+            .{ .method = .PUT, .path = "auth/profile", .handler = http.wrapHandler(Self, updateProfile), .meta = .{ .auth = .jwt } },
+            .{ .method = .PUT, .path = "auth/password", .handler = http.wrapHandler(Self, changePassword), .meta = .{ .auth = .jwt } },
+        };
+
         pub fn init(
             svc: *Service,
             app_host: []const u8,
-            registry: *zigmodu.RateLimiterRegistry,
+            limiter: *mw_rate.PerIpLimiter,
             mailer: *const mail.Mailer,
             task_svc: *task_service.TaskService,
             notify_svc: *notify_service.NotificationService,
@@ -104,7 +134,7 @@ pub fn AuthApi(comptime Service: type) type {
             return .{
                 .svc = svc,
                 .app_host = app_host,
-                .registry = registry,
+                .limiter = limiter,
                 .mailer = mailer,
                 .task_svc = task_svc,
                 .notify_svc = notify_svc,
@@ -117,7 +147,7 @@ pub fn AuthApi(comptime Service: type) type {
         pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
             // Public routes are per-IP rate-limited to blunt credential
             // stuffing / reset-token brute force without starving other users.
-            var limited = try group.use(mw_rate.perIpRateLimit(self.registry, 20, 1));
+            var limited = try group.use(mw_rate.perIpRateLimit(self.limiter));
             try limited.post("/auth/register", register, @ptrCast(@alignCast(self)));
             try limited.post("/auth/login", login, @ptrCast(@alignCast(self)));
             try limited.post("/auth/logout", logout, @ptrCast(@alignCast(self)));
@@ -244,7 +274,29 @@ pub fn AuthApi(comptime Service: type) type {
                 return;
             };
             defer row.free(self.svc.store.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = toDto(row) });
+            const perms = catalog_permissions.listCodes(ctx.allocator, uid) catch |err| switch (err) {
+                error.CatalogPermissionsNotInitialized => try ctx.allocator.alloc([]const u8, 0),
+                else => {
+                    try ctx.sendErrorResponse(500, 500, @errorName(err));
+                    return;
+                },
+            };
+            defer {
+                for (perms) |p| ctx.allocator.free(p);
+                ctx.allocator.free(perms);
+            }
+            const me_dto = MeDto{
+                .id = row.id,
+                .name = row.name,
+                .email = row.email,
+                .verified = row.verified,
+                .admin = row.admin,
+                .tenant_id = row.tenant_id,
+                .created_at = row.created_at,
+                .updated_at = row.updated_at,
+                .permissions = perms,
+            };
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = me_dto });
         }
 
         fn forgotPassword(ctx: *http.Context) !void {

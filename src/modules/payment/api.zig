@@ -26,7 +26,7 @@ fn toOrderDto(row: service.RechargeOrderRow) OrderDto {
         .id = row.id,
         .order_no = row.order_no,
         .fan_id = row.fan_id,
-        .amount = row.amount,
+        .amount = std.fmt.parseInt(i64, row.amount, 10) catch 0,
         .channel = row.channel,
         .status = row.status,
         .paid_at = row.paid_at,
@@ -52,7 +52,7 @@ fn toWithdrawDto(row: service.WithdrawRow) WithdrawDto {
     return .{
         .id = row.id,
         .fan_id = row.fan_id,
-        .amount = row.amount,
+        .amount = std.fmt.parseInt(i64, row.amount, 10) catch 0,
         .status = row.status,
         .created_at = row.created_at,
     };
@@ -80,6 +80,23 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
         settings: *setting_store_mod.SettingStore,
+
+        pub const module_name = "payment";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .POST, .path = "pay/recharge", .handler = http.wrapHandler(Self, recharge), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "pay/recharge/{order_no}/complete", .handler = http.wrapHandler(Self, complete), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "pay/wallet", .handler = http.wrapHandler(Self, wallet), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "pay/orders", .handler = http.wrapHandler(Self, orders), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "pay/withdraws", .handler = http.wrapHandler(Self, withdraw), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "pay/withdraws", .handler = http.wrapHandler(Self, withdraws), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "pay/refund", .handler = http.wrapHandler(Self, refundV2), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "pay/transfer", .handler = http.wrapHandler(Self, transferV2), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "pay/refund/v3", .handler = http.wrapHandler(Self, refundV3), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "pay/transfer/v3", .handler = http.wrapHandler(Self, transferV3), .meta = .{ .permission = "admin" } },
+        };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64, settings: *setting_store_mod.SettingStore) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id, .settings = settings };
@@ -162,26 +179,12 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             try g.post("/pay/transfer/v3", transferV3, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
             defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
@@ -190,7 +193,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
 
         fn recharge(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(RechargeReq) catch {
@@ -215,14 +219,15 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             };
             defer row.free(self.svc.allocator);
             var d1: [128]u8 = undefined;
-            const det1 = try std.fmt.bufPrint(&d1, "创建充值订单 {s} {d}分", .{ row.order_no, row.amount });
+            const det1 = try std.fmt.bufPrint(&d1, "创建充值订单 {s} {s}分", .{ row.order_no, row.amount });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "pay.recharge", "payment", row.id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.jsonStruct(201, .{ .code = 0, .msg = "订单已创建", .data = toOrderDto(row) });
         }
 
         fn complete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const order_no = ctx.param("order_no") orelse {
@@ -245,7 +250,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
 
         fn wallet(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const account_raw = ctx.queryParam("account_id") orelse {
@@ -262,16 +267,17 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
+            defer if (row_opt) |r| r.free(self.svc.allocator);
             const row = row_opt orelse {
                 try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = WalletDto{ .account_id = account_id, .fan_id = fan_id, .balance = 0 } });
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = WalletDto{ .account_id = row.account_id, .fan_id = row.fan_id, .balance = row.balance } });
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = WalletDto{ .account_id = row.account_id, .fan_id = row.fan_id, .balance = std.fmt.parseInt(i64, row.balance, 10) catch 0 } });
         }
 
         fn orders(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const account_raw = ctx.queryParam("account_id") orelse {
@@ -294,7 +300,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
 
         fn withdraw(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(WithdrawReq) catch {
@@ -318,7 +325,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
 
         fn withdraws(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const account_raw = ctx.queryParam("account_id") orelse {
@@ -371,7 +378,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
 
         fn refundV2(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
             const cfg_opt = readPayV2Config(ctx, self, tid);
             const cfg = cfg_opt orelse {
@@ -391,7 +399,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 ctx.allocator.free(req.refund_fee);
                 if (req.refund_desc.len > 0) ctx.allocator.free(req.refund_desc);
             }
-            self.svc.refundV2(ctx.allocator, cfg, req.out_trade_no, req.out_refund_no, req.total_fee, req.refund_fee, req.refund_desc) catch |err| {                const msg = switch (err) {
+            self.svc.refundV2(ctx.allocator, cfg, req.out_trade_no, req.out_refund_no, req.total_fee, req.refund_fee, req.refund_desc) catch |err| {
+                const msg = switch (err) {
                     error.RefundFailed => "微信退款失败",
                     else => @errorName(err),
                 };
@@ -404,7 +413,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
 
         fn transferV2(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
             const cfg_opt = readPayV2Config(ctx, self, tid);
             const cfg = cfg_opt orelse {
@@ -436,7 +446,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
 
         fn refundV3(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
             const cfg_opt = readPayConfig(ctx, self, tid);
             const cfg = cfg_opt orelse {
@@ -468,7 +479,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
 
         fn transferV3(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
             const cfg_opt = readPayConfig(ctx, self, tid);
             const cfg = cfg_opt orelse {

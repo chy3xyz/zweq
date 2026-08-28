@@ -56,6 +56,20 @@ pub fn UserApi(comptime Service: type) type {
         default_tenant_id: i64,
         audit: *audit_svc.AuditService,
 
+        pub const module_name = "user";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "users", .handler = http.wrapHandler(Self, listUsers), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "users/export", .handler = http.wrapHandler(Self, exportUsers), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "users/{id}", .handler = http.wrapHandler(Self, getUser), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "users", .handler = http.wrapHandler(Self, createUser), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "users/{id}", .handler = http.wrapHandler(Self, updateUser), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "users/{id}", .handler = http.wrapHandler(Self, deleteUser), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "users/{id}/revoke-sessions", .handler = http.wrapHandler(Self, revokeSessions), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, default_tenant_id: i64, audit: *audit_svc.AuditService) Self {
             return .{ .svc = svc, .default_tenant_id = default_tenant_id, .audit = audit };
         }
@@ -72,32 +86,19 @@ pub fn UserApi(comptime Service: type) type {
             try g.post("/users/{id}/revoke-sessions", revokeSessions, @ptrCast(@alignCast(self)));
         }
 
-        /// Returns the authenticated admin user id, or null after responding.
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
+        /// Sets the `audit_actor` context attribute from the authenticated user.
+        /// Call after the route-level permission gate has verified admin access.
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
             defer row.free(self.svc.store.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn exportUsers(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             var result = self.svc.listUsers(1, 10000, null, null, null, false) catch |err| {
                 std.log.err("internal error: {s}", .{@errorName(err)});
@@ -124,7 +125,7 @@ pub fn UserApi(comptime Service: type) type {
 
         fn listUsers(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             const keyword_raw = ctx.queryParam("keyword");
@@ -147,7 +148,7 @@ pub fn UserApi(comptime Service: type) type {
 
         fn getUser(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的用户 ID");
@@ -168,7 +169,8 @@ pub fn UserApi(comptime Service: type) type {
 
         fn createUser(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const req = ctx.bindJson(CreateUserReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -202,7 +204,8 @@ pub fn UserApi(comptime Service: type) type {
 
         fn updateUser(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的用户 ID");
@@ -279,7 +282,8 @@ pub fn UserApi(comptime Service: type) type {
         /// 踢下线:递增用户凭证版本,该用户所有已签发 JWT 立即失效。
         fn revokeSessions(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的用户 ID");
@@ -306,7 +310,8 @@ pub fn UserApi(comptime Service: type) type {
 
         fn deleteUser(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的用户 ID");

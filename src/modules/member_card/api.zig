@@ -59,6 +59,19 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "member_card";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "member-cards", .handler = http.wrapHandler(Self, listLevels), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "member-cards", .handler = http.wrapHandler(Self, createLevel), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "member-cards/members", .handler = http.wrapHandler(Self, listMembers), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "member-cards/view", .handler = http.wrapHandler(Self, view), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "member-cards/open", .handler = http.wrapHandler(Self, open), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "member-cards/adjust", .handler = http.wrapHandler(Self, adjust), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -72,6 +85,14 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/member-cards/view", view, @ptrCast(@alignCast(self)));
             try g.post("/member-cards/open", open, @ptrCast(@alignCast(self)));
             try g.post("/member-cards/adjust", adjust, @ptrCast(@alignCast(self)));
+        }
+
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
+            try ctx.setAttr("audit_actor", row.name);
         }
 
         fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
@@ -102,7 +123,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
 
         fn listLevels(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -117,7 +138,8 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
 
         fn createLevel(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(CreateLevelReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -136,7 +158,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
 
         fn listMembers(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -153,7 +175,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
 
         fn view(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const openid = ctx.query.get("openid") orelse {
@@ -174,7 +196,8 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
 
         fn open(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const req = ctx.bindJson(OpenReq) catch {
@@ -198,7 +221,8 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
 
         fn adjust(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const req = ctx.bindJson(AdjustReq) catch {

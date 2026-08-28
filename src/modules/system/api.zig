@@ -28,6 +28,15 @@ pub fn SystemApi(comptime CacheT: type, comptime TaskSvcT: type) type {
         mail_console: bool,
         module_count: usize,
 
+        pub const module_name = "system";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "system/info", .handler = http.wrapHandler(Self, info), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "system/dashboard", .handler = http.wrapHandler(Self, dashboard), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(
             cache: *CacheT,
             tasks: *TaskSvcT,
@@ -67,31 +76,17 @@ pub fn SystemApi(comptime CacheT: type, comptime TaskSvcT: type) type {
             try g.get("/system/dashboard", dashboard, @ptrCast(@alignCast(self)));
         }
 
-        /// Returns the authenticated admin user id, or null after responding.
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.users_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.users_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
             defer row.free(self.users_svc.store.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
-            return uid;
+            try ctx.setAttr("audit_actor", row.name);
         }
 
         fn info(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const now = zigmodu.time.wallClockSeconds(self.io);
             const task_counts = self.tasks.counts() catch task_persist.StatusCounts{};
@@ -113,7 +108,7 @@ pub fn SystemApi(comptime CacheT: type, comptime TaskSvcT: type) type {
 
         fn dashboard(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const now = zigmodu.time.wallClockSeconds(self.io);
             const day: i64 = 24 * 3600;

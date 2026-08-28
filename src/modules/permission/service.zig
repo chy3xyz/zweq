@@ -81,4 +81,20 @@ pub const RoleService = struct {
     pub fn listRolesForUser(self: *RoleService, user_id: i64) PermissionError![]persist.UserRoleRow {
         return self.store.listRolesForUser(user_id) catch error.Unexpected;
     }
+
+    pub fn bindPermission(self: *RoleService, tenant_id: i64, role_id: i64, permission_id: i64) PermissionError!i64 {
+        return self.store.bindPermission(tenant_id, role_id, permission_id, self.now()) catch error.Unexpected;
+    }
+
+    pub fn unbindPermission(self: *RoleService, role_id: i64, permission_id: i64) PermissionError!void {
+        self.store.unbindPermission(role_id, permission_id) catch return error.Unexpected;
+    }
+
+    pub fn listPermissionsForRole(self: *RoleService, role_id: i64) PermissionError![]persist.PermissionRow {
+        return self.store.listPermissionsForRole(role_id) catch error.Unexpected;
+    }
+
+    pub fn collectPermissionCodes(self: *RoleService, allocator: std.mem.Allocator, user_id: i64) PermissionError![]u8 {
+        return self.store.collectPermissionCodes(allocator, user_id) catch error.Unexpected;
+    }
 };

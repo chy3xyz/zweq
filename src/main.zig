@@ -24,6 +24,9 @@ const metrics_mod = @import("middleware/metrics.zig");
 const real_ip_mod = @import("middleware/real_ip.zig");
 const request_log_mod = @import("middleware/request_log.zig");
 const license_mw = @import("middleware/license.zig");
+const mw_rate = @import("middleware/rate_limit.zig");
+const mw = @import("middleware/auth.zig");
+const catalog_permissions = @import("middleware/catalog_permissions.zig");
 const mail = @import("services/mail.zig");
 const cache_svc = @import("services/cache.zig");
 const jobs = @import("jobs.zig");
@@ -196,6 +199,7 @@ pub fn main(init: std.process.Init) !void {
     var account_store = account.persistence.AccountStore.init(allocator, store_env.client);
     var account_svc = account.service.AccountService.init(allocator, io, &account_store);
     var role_store = permission.persistence.RoleStore.init(allocator, store_env.client);
+    catalog_permissions.init(&role_store);
     var role_svc = permission.service.RoleService.init(allocator, io, &role_store);
     var setting_store = setting.persistence.SettingStore.init(allocator, store_env.client);
     var setting_svc = setting.service.SettingService.init(allocator, io, &setting_store);
@@ -439,16 +443,40 @@ pub fn main(init: std.process.Init) !void {
     defer dispatcher.deinit();
     std.log.info("[task] dispatcher started ({d} handlers, {d} workers)", .{ handler_registry.len, cfg.task_workers });
 
+    // ── Redis (optional) ──
+    // Enables distributed fixed-window rate limiting across multiple zweq
+    // instances. When disabled, per-IP limiting falls back to the in-process
+    // token-bucket registry.
+    var redis: zigmodu.data.redis.Redis = undefined;
+    var redis_ptr: ?*zigmodu.data.redis.Redis = null;
+    if (cfg.redis_enable) {
+        redis = try zigmodu.data.redis.Redis.new(allocator, io, .{
+            .host = cfg.redis_host,
+            .port = cfg.redis_port,
+            .pool_size = 10,
+        });
+        try redis.connect();
+        redis_ptr = &redis;
+        std.log.info("[redis] connected to {s}:{d}", .{ cfg.redis_host, cfg.redis_port });
+    }
+    defer if (redis_ptr) |_| redis.deinit();
+
     // ── HTTP API ──
     var auth_registry = zigmodu.RateLimiterRegistry.init(allocator, 20, 1);
     defer auth_registry.deinit();
+    var auth_limiter = mw_rate.PerIpLimiter{
+        .backend = if (redis_ptr) |r| .{ .redis = r } else .{ .registry = &auth_registry },
+        .max = 20,
+        .window_seconds = 60,
+        .refill_rate = 1,
+    };
     // WeChat callback flood guard (global token bucket — WeChat pushes from a
     // shared server pool, so per-IP limiting would misfire on bursts).
     var wx_limiter = try zigmodu.RateLimiter.init(allocator, "wx-callback", 1000, 20);
     defer wx_limiter.deinit();
 
     var user_api = user.api.UserApi(@TypeOf(user_svc)).init(&user_svc, default_tenant_id, &audit_svc);
-    var auth_api = auth.api.AuthApi(@TypeOf(user_svc)).init(&user_svc, cfg.app_host, &auth_registry, &mailer, &task_svc, &notify_svc, &audit_svc, &template_svc, default_tenant_id);
+    var auth_api = auth.api.AuthApi(@TypeOf(user_svc)).init(&user_svc, cfg.app_host, &auth_limiter, &mailer, &task_svc, &notify_svc, &audit_svc, &template_svc, default_tenant_id);
     var task_api = task.api.TaskApi(@TypeOf(task_svc), @TypeOf(user_svc)).init(&task_svc, &user_svc, &audit_svc);
     var file_api = file.api.FileApi(@TypeOf(file_svc), @TypeOf(user_svc)).init(&file_svc, &user_svc, &audit_svc, default_tenant_id);
     var notify_api = notify.api.NotificationApi(@TypeOf(notify_svc), @TypeOf(user_svc)).init(&notify_svc, &user_svc);
@@ -491,17 +519,18 @@ pub fn main(init: std.process.Init) !void {
                 const o_opt = s.getOrder(e.order_id) catch return;
                 const o = o_opt orelse return;
                 defer o.free(s.allocator);
+                const pay_amount_cents = std.fmt.parseInt(i64, o.pay_amount, 10) catch 0;
                 // 分销三级分佣。
                 if (s.dist_svc) |ds| {
                     const dist_mod = @import("modules/distribution/service.zig");
                     const dsvc: *dist_mod.DistributionService = @ptrCast(@alignCast(ds));
-                    _ = dsvc.distribute(e.tenant_id, e.account_id, o.openid, o.pay_amount) catch {};
+                    _ = dsvc.distribute(e.tenant_id, e.account_id, o.openid, pay_amount_cents) catch {};
                 }
                 // 会员积分累计（1 元 = 1 积分）。
                 if (s.member_svc) |ms| {
                     const mc_mod = @import("modules/member_card/service.zig");
                     const msvc: *mc_mod.MemberCardService = @ptrCast(@alignCast(ms));
-                    _ = msvc.adjust(e.tenant_id, e.account_id, o.openid, @divTrunc(o.pay_amount, 100)) catch {};
+                    _ = msvc.adjust(e.tenant_id, e.account_id, o.openid, @divTrunc(pay_amount_cents, 100)) catch {};
                 }
                 // Webhook 推送（事件开放出口）。
                 s.webhook_transport = &webhook_transport;
@@ -518,7 +547,14 @@ pub fn main(init: std.process.Init) !void {
         heap_bus.* = order_paid_bus;
         shop_svc.order_paid_bus = heap_bus;
     }
-    var shop_limiter = zigmodu.RateLimiterRegistry.init(allocator, 30, 1);
+    var shop_registry = zigmodu.RateLimiterRegistry.init(allocator, 30, 1);
+    defer shop_registry.deinit();
+    var shop_limiter = mw_rate.PerIpLimiter{
+        .backend = if (redis_ptr) |r| .{ .redis = r } else .{ .registry = &shop_registry },
+        .max = 30,
+        .window_seconds = 60,
+        .refill_rate = 1,
+    };
     var shop_api = shop.api.ShopApi(@TypeOf(shop_svc), @TypeOf(user_svc)).init(&shop_svc, &user_svc, &audit_svc, default_tenant_id, &shop_limiter, &fan_store, &setting_store);
     var menu_api = menu.api.MenuApi(@TypeOf(menu_svc), @TypeOf(user_svc)).init(&menu_svc, &user_svc, &audit_svc, default_tenant_id);
     var points_api = points.api.PointsApi(@TypeOf(points_svc), @TypeOf(user_svc)).init(&points_svc, &user_svc, &audit_svc, default_tenant_id);
@@ -562,39 +598,68 @@ pub fn main(init: std.process.Init) !void {
     try server.addMiddleware(zigmodu.http.http_middleware.cors(.{ .allow_origins = origins }));
     try server.addMiddleware(license_mw.licenseGate(&cloud_svc));
 
-    var v1 = server.group("/api/v1");
-    try auth_api.registerRoutes(&v1);
-    try user_api.registerRoutes(&v1);
-    try task_api.registerRoutes(&v1);
-    try file_api.registerRoutes(&v1);
-    try notify_api.registerRoutes(&v1);
-    try tenant_api.registerRoutes(&v1);
-    try account_api.registerRoutes(&v1);
-    try permission_api.registerRoutes(&v1);
-    try setting_api.registerRoutes(&v1);
-    try rule_api.registerRoutes(&v1);
-    try member_api.registerRoutes(&v1);
-    try message_api.registerAdminRoutes(&v1);
-    try module_api.registerRoutes(&v1);
-    try payment_api.registerRoutes(&v1);
-    try app_bff_api.registerRoutes(&v1);
-    try cloud_api.registerRoutes(&v1);
-    try material_api.registerRoutes(&v1);
-    try checkin_api.registerRoutes(&v1);
-    try lucky_draw_api.registerRoutes(&v1);
-    try coupon_api.registerRoutes(&v1);
-    try vote_api.registerRoutes(&v1);
-    try seckill_api.registerRoutes(&v1);
-    try member_card_api.registerRoutes(&v1);
-    try distribution_api.registerRoutes(&v1);
-    try shop_api.registerPublicRoutes(&v1);
-    try shop_api.registerAdminRoutes(&v1);
-    try menu_api.registerRoutes(&v1);
-    try points_api.registerRoutes(&v1);
-    try audit_api.registerRoutes(&v1);
-    try mail_template_api.registerRoutes(&v1);
-    try ai_api.registerRoutes(&v1);
-    try system_api.registerRoutes(&v1);
+    var slot: zigmodu.http.CatalogSlot = .{};
+    defer slot.deinit();
+
+    try server.addMiddleware(zigmodu.http.http_middleware.jwtAuthFromCatalogWithPermissions(
+        &sec.module,
+        &slot,
+        catalog_permissions.load,
+        .{
+            .skip_prefixes = &.{
+                "health",
+                "metrics",
+                "api/pay/v3/notify",
+                "wx",
+                "openapi.json",
+                "docs",
+                "scalar",
+            },
+        },
+    ));
+    try server.addMiddleware(zigmodu.http.http_middleware.permissionGateWith(&slot, .{ .mode = .rbac }));
+    try server.addMiddleware(mw.tokenVersionGuard(&sec, &store));
+
+    var app_state: void = {};
+    var router = zigmodu.http.Router(void).init(io, allocator, &server, &app_state);
+    defer router.deinit();
+    var v1_scope = router.scope("/api/v1");
+    var auth_limited = try v1_scope.use(mw_rate.perIpRateLimit(&auth_limiter));
+    try auth_limited.mount(auth.api.AuthApi(@TypeOf(user_svc)), &auth_api);
+    try v1_scope.mount(user.api.UserApi(@TypeOf(user_svc)), &user_api);
+
+    try v1_scope.mount(task.api.TaskApi(@TypeOf(task_svc), @TypeOf(user_svc)), &task_api);
+    try v1_scope.mount(file.api.FileApi(@TypeOf(file_svc), @TypeOf(user_svc)), &file_api);
+    try v1_scope.mount(notify.api.NotificationApi(@TypeOf(notify_svc), @TypeOf(user_svc)), &notify_api);
+    try v1_scope.mount(tenant.api.TenantApi(@TypeOf(tenant_svc), @TypeOf(user_svc)), &tenant_api);
+    try v1_scope.mount(account.api.AccountApi(@TypeOf(account_svc), @TypeOf(user_svc)), &account_api);
+    try v1_scope.mount(permission.api.PermissionApi(@TypeOf(role_svc), @TypeOf(user_svc)), &permission_api);
+    try v1_scope.mount(setting.api.SettingApi(@TypeOf(setting_svc), @TypeOf(user_svc)), &setting_api);
+    try v1_scope.mount(rule.api.RuleApi(@TypeOf(rule_svc), @TypeOf(user_svc)), &rule_api);
+    try v1_scope.mount(member.api.MemberApi(@TypeOf(member_svc), @TypeOf(user_svc)), &member_api);
+    try v1_scope.mount(message.api.MessageApi(@TypeOf(wechat_svc), @TypeOf(user_svc)), &message_api);
+    try v1_scope.mount(appmod.api.ModuleApi(@TypeOf(module_svc), @TypeOf(user_svc)), &module_api);
+    try v1_scope.mount(payment.api.PaymentApi(@TypeOf(payment_svc), @TypeOf(user_svc)), &payment_api);
+    try v1_scope.mount(app_bff.api.AppBffApi(@TypeOf(account_svc), @TypeOf(module_svc), @TypeOf(user_svc)), &app_bff_api);
+    try v1_scope.mount(cloud.api.CloudApi(@TypeOf(cloud_svc), @TypeOf(user_svc)), &cloud_api);
+    try v1_scope.mount(material.api.MaterialApi(@TypeOf(material_svc), @TypeOf(user_svc)), &material_api);
+    try v1_scope.mount(checkin.api.CheckinApi(@TypeOf(checkin_svc), @TypeOf(user_svc)), &checkin_api);
+    try v1_scope.mount(lucky_draw.api.LuckyDrawApi(@TypeOf(lucky_draw_svc), @TypeOf(user_svc)), &lucky_draw_api);
+    try v1_scope.mount(coupon.api.CouponApi(@TypeOf(coupon_svc), @TypeOf(user_svc)), &coupon_api);
+    try v1_scope.mount(vote.api.VoteApi(@TypeOf(vote_svc), @TypeOf(user_svc)), &vote_api);
+    try v1_scope.mount(seckill.api.SeckillApi(@TypeOf(seckill_svc), @TypeOf(user_svc)), &seckill_api);
+    try v1_scope.mount(member_card.api.MemberCardApi(@TypeOf(member_card_svc), @TypeOf(user_svc)), &member_card_api);
+    try v1_scope.mount(distribution.api.DistributionApi(@TypeOf(distribution_svc), @TypeOf(user_svc)), &distribution_api);
+    var shop_limited = try v1_scope.use(mw_rate.perIpRateLimit(&shop_limiter));
+    try shop_limited.mount(shop.api.ShopApi(@TypeOf(shop_svc), @TypeOf(user_svc)), &shop_api);
+    try v1_scope.mount(menu.api.MenuApi(@TypeOf(menu_svc), @TypeOf(user_svc)), &menu_api);
+    try v1_scope.mount(points.api.PointsApi(@TypeOf(points_svc), @TypeOf(user_svc)), &points_api);
+    try v1_scope.mount(audit.api.AuditApi(@TypeOf(audit_svc), @TypeOf(user_svc)), &audit_api);
+    try v1_scope.mount(mail_template.api.MailTemplateApi(@TypeOf(template_svc), @TypeOf(user_svc)), &mail_template_api);
+    try v1_scope.mount(ai.api.AiApi(@TypeOf(ai_svc), @TypeOf(user_svc)), &ai_api);
+    try v1_scope.mount(system.api.SystemApi(@TypeOf(cache), @TypeOf(task_svc)), &system_api);
+
+    slot.set(try router.finish());
 
     // Health: liveness at the server root (probe convention) and readiness
     // under the API prefix (checks the data store).

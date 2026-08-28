@@ -40,6 +40,15 @@ pub fn AuditApi(comptime AuditServiceT: type, comptime UserService: type) type {
         svc: *AuditServiceT,
         user_svc: *UserService,
 
+        pub const module_name = "audit";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "audit-logs", .handler = http.wrapHandler(Self, listLogs), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "audit-logs/export", .handler = http.wrapHandler(Self, exportLogs), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *AuditServiceT, users: *UserService) Self {
             return .{ .svc = svc, .user_svc = users };
         }
@@ -47,35 +56,22 @@ pub fn AuditApi(comptime AuditServiceT: type, comptime UserService: type) type {
         pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
             var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
+            g = try g.use(mw.adminGuard(self.user_svc.store));
             try g.get("/audit-logs", listLogs, @ptrCast(@alignCast(self)));
             try g.get("/audit-logs/export", exportLogs, @ptrCast(@alignCast(self)));
         }
 
-        /// Returns the authenticated admin user id, or null after responding.
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
-            return uid;
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
+            try ctx.setAttr("audit_actor", row.name);
         }
 
         fn exportLogs(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             var result = self.svc.list(1, 10000, .{}) catch |err| {
                 std.log.err("internal error: {s}", .{@errorName(err)});
@@ -103,7 +99,8 @@ pub fn AuditApi(comptime AuditServiceT: type, comptime UserService: type) type {
 
         fn listLogs(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             _ = admin_id;
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 200 });

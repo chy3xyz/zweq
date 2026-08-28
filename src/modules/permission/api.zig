@@ -80,6 +80,10 @@ const AssignRoleReq = struct {
     role_id: i64,
 };
 
+const BindPermissionReq = struct {
+    permission_id: i64,
+};
+
 pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
     return struct {
         const Self = @This();
@@ -88,6 +92,25 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "permission";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "roles", .handler = http.wrapHandler(Self, listRoles), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "roles", .handler = http.wrapHandler(Self, createRole), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "roles/{id}", .handler = http.wrapHandler(Self, updateRole), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "roles/{id}", .handler = http.wrapHandler(Self, deleteRole), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "permissions", .handler = http.wrapHandler(Self, listPermissions), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "permissions", .handler = http.wrapHandler(Self, grantPermission), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "permissions/{id}", .handler = http.wrapHandler(Self, revokePermission), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "users/{id}/roles", .handler = http.wrapHandler(Self, listUserRoles), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "users/{id}/roles", .handler = http.wrapHandler(Self, assignUserRole), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "roles/{id}/permissions", .handler = http.wrapHandler(Self, listRolePermissions), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "roles/{id}/permissions", .handler = http.wrapHandler(Self, bindRolePermission), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "roles/{id}/permissions", .handler = http.wrapHandler(Self, unbindRolePermission), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -95,6 +118,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
             var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
+            g = try g.use(mw.adminGuard(self.user_svc.store));
             try g.get("/roles", listRoles, @ptrCast(@alignCast(self)));
             try g.post("/roles", createRole, @ptrCast(@alignCast(self)));
             try g.put("/roles/{id}", updateRole, @ptrCast(@alignCast(self)));
@@ -104,28 +128,17 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             try g.delete("/permissions/{id}", revokePermission, @ptrCast(@alignCast(self)));
             try g.get("/users/{id}/roles", listUserRoles, @ptrCast(@alignCast(self)));
             try g.put("/users/{id}/roles", assignUserRole, @ptrCast(@alignCast(self)));
+            try g.get("/roles/{id}/permissions", listRolePermissions, @ptrCast(@alignCast(self)));
+            try g.post("/roles/{id}/permissions", bindRolePermission, @ptrCast(@alignCast(self)));
+            try g.delete("/roles/{id}/permissions", unbindRolePermission, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
@@ -134,7 +147,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
 
         fn listRoles(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -150,7 +163,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
 
         fn createRole(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(CreateRoleReq) catch {
@@ -180,7 +194,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
 
         fn updateRole(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的角色 ID");
@@ -225,7 +240,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
 
         fn deleteRole(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的角色 ID");
@@ -241,7 +257,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
 
         fn listPermissions(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -262,7 +278,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
 
         fn grantPermission(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(GrantPermissionReq) catch {
@@ -285,7 +302,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
 
         fn revokePermission(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的权限 ID");
@@ -301,7 +319,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
 
         fn listUserRoles(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const user_id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的用户 ID");
@@ -321,7 +339,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
 
         fn assignUserRole(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const user_id = ctx.paramInt(i64, "id") catch {
@@ -340,6 +359,72 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             const det1 = try std.fmt.bufPrint(&d1, "用户 #{d} 绑定角色 #{d}", .{ user_id, req.role_id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "user_role.assign", "user", user_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+        }
+
+        fn listRolePermissions(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+
+            const role_id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的角色 ID");
+                return;
+            };
+            const rows = self.svc.listPermissionsForRole(role_id) catch |err| {
+                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                return;
+            };
+            defer {
+                for (rows) |r| r.free(self.svc.allocator);
+                self.svc.allocator.free(rows);
+            }
+            const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, PermissionDto, toPermissionDto);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos } });
+        }
+
+        fn bindRolePermission(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+
+            const role_id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的角色 ID");
+                return;
+            };
+            const req = ctx.bindJson(BindPermissionReq) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            const id = self.svc.bindPermission(tid, role_id, req.permission_id) catch |err| {
+                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                return;
+            };
+            var d1: [128]u8 = undefined;
+            const det1 = try std.fmt.bufPrint(&d1, "角色 #{d} 绑定权限 #{d}", .{ role_id, req.permission_id });
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "role_permission.bind", "role", role_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+        }
+
+        fn unbindRolePermission(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+
+            const role_id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的角色 ID");
+                return;
+            };
+            const permission_id = ctx.queryInt(i64, "permission_id", 0);
+            if (permission_id <= 0) {
+                try ctx.sendErrorResponse(400, 400, "缺少 permission_id");
+                return;
+            }
+            try self.svc.unbindPermission(role_id, permission_id);
+            var d1: [128]u8 = undefined;
+            const det1 = try std.fmt.bufPrint(&d1, "角色 #{d} 解绑权限 #{d}", .{ role_id, permission_id });
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "role_permission.unbind", "role", role_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
         }
     };
 }

@@ -7,12 +7,12 @@
         // Git-tag pinned (stable releases). For local development against a
         // sibling checkout, replace with: .zent = .{ .path = "../../zig_ws/zent" }
         .zent = .{
-            .url = "git+https://github.com/chy3xyz/zent?ref=v0.29.8#386fa6ba6fe417e98f427962fe81ced30ede5db0",
-            .hash = "zent-0.29.8-oiur-zfaDgChhtPY2Tene3TDIMky5PTz9sNCLqzXriLA",
+            .url = "git+https://github.com/chy3xyz/zent?ref=v0.32.1#9a6cb0258923378257dfa71f37218f7d5ca4b47a",
+            .hash = "zent-0.32.1-oiur-3jiDwAri-0seKgLXhu7myFGCpmqzHQG69xmYeWy",
         },
         .zigmodu = .{
-            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.15.28#3b861143cb694596cc4a31bd8dcdb2dfafc9a333",
-            .hash = "zigmodu-0.15.28-U40vs-s0PwDaWMVH02Z78RXCsHXxmjbld2yFoPtfzYwd",
+            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.15.32#6e83a34db0402f93edfa386230fa6b8a714c5c58",
+            .hash = "zigmodu-0.15.32-U40vsxxLQACbhJt_Nd5ngn-u41LORRDN73fWM2H6EuEO",
         },
         .zwechat = .{
             .url = "git+https://github.com/chy3xyz/zwechat?ref=v0.4.3#7ed8f55ca3623d4d68f91d26550bfe0ef172d278",

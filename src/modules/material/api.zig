@@ -106,6 +106,25 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "material";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "materials/news", .handler = http.wrapHandler(Self, listNews), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "materials/news", .handler = http.wrapHandler(Self, createNews), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "materials/news/{id}", .handler = http.wrapHandler(Self, getNews), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "materials/news/{id}", .handler = http.wrapHandler(Self, updateNews), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "materials/news/{id}", .handler = http.wrapHandler(Self, deleteNews), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "materials/files", .handler = http.wrapHandler(Self, listFiles), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "materials/files", .handler = http.wrapHandler(Self, createFile), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "materials/files/{id}", .handler = http.wrapHandler(Self, deleteFile), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "materials/sync-news", .handler = http.wrapHandler(Self, syncNews), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "materials/sync-files", .handler = http.wrapHandler(Self, syncFiles), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "materials/count", .handler = http.wrapHandler(Self, syncCount), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "materials/news/upload", .handler = http.wrapHandler(Self, uploadNews), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -127,26 +146,13 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             try g.post("/materials/news/upload", uploadNews, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        /// Sets the `audit_actor` context attribute from the authenticated user.
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
@@ -160,7 +166,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn listNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = parseAccount(ctx) orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");
@@ -178,7 +184,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn createNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(CreateNewsReq) catch {
@@ -210,7 +217,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn getNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的素材 ID");
                 return;
@@ -229,7 +236,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn updateNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的素材 ID");
                 return;
@@ -268,7 +276,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn deleteNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的素材 ID");
                 return;
@@ -283,7 +292,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn listFiles(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = parseAccount(ctx) orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");
@@ -301,7 +310,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn createFile(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(CreateFileReq) catch {
@@ -329,7 +339,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn deleteFile(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的素材 ID");
                 return;
@@ -344,7 +355,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn syncNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const account_id = parseAccount(ctx) orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");
@@ -365,7 +377,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn syncFiles(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const account_id = parseAccount(ctx) orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");
@@ -391,7 +404,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn syncCount(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const account_id = parseAccount(ctx) orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");
                 return;
@@ -410,7 +423,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         fn uploadNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(UploadNewsReq) catch {

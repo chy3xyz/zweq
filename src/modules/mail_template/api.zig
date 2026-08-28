@@ -33,6 +33,15 @@ pub fn MailTemplateApi(comptime TemplateServiceT: type, comptime UserService: ty
         svc: *TemplateServiceT,
         user_svc: *UserService,
 
+        pub const module_name = "mail_template";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "email-templates", .handler = http.wrapHandler(Self, listTemplates), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "email-templates/{code}", .handler = http.wrapHandler(Self, upsertTemplate), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *TemplateServiceT, users: *UserService) Self {
             return .{ .svc = svc, .user_svc = users };
         }
@@ -40,34 +49,13 @@ pub fn MailTemplateApi(comptime TemplateServiceT: type, comptime UserService: ty
         pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
             var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
+            g = try g.use(mw.adminGuard(self.user_svc.store));
             try g.get("/email-templates", listTemplates, @ptrCast(@alignCast(self)));
             try g.put("/email-templates/{code}", upsertTemplate, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
-            return uid;
-        }
-
         fn listTemplates(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             var result = self.svc.list(params.page, params.page_size) catch |err| {
@@ -82,7 +70,6 @@ pub fn MailTemplateApi(comptime TemplateServiceT: type, comptime UserService: ty
 
         fn upsertTemplate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
 
             const code = ctx.param("code") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少模板 code");

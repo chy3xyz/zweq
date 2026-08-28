@@ -76,4 +76,9 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // 体积门禁：任一 src/**/*.zig 超过行数预算即失败（防巨型单体回潮）。
+    const size_check = b.addSystemCommand(&.{ "/bin/sh", "scripts/check_file_size.sh" });
+    const lint_size = b.step("lint-size", "Fail if any src/**/*.zig exceeds the line budget");
+    lint_size.dependOn(&size_check.step);
 }

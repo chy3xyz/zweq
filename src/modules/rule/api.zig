@@ -79,6 +79,24 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "rule";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "rules", .handler = http.wrapHandler(Self, listRules), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "rules", .handler = http.wrapHandler(Self, createRule), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "rules/{id}", .handler = http.wrapHandler(Self, getRule), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "rules/{id}", .handler = http.wrapHandler(Self, updateRule), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "rules/{id}", .handler = http.wrapHandler(Self, deleteRule), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "rules/{id}/keywords", .handler = http.wrapHandler(Self, listKeywords), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "rules/{id}/keywords", .handler = http.wrapHandler(Self, addKeyword), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "rules/{id}/keywords/{kid}", .handler = http.wrapHandler(Self, removeKeyword), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "rules/{id}/replies", .handler = http.wrapHandler(Self, listReplies), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "rules/{id}/replies", .handler = http.wrapHandler(Self, addReply), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "rules/{id}/replies/{rid}", .handler = http.wrapHandler(Self, removeReply), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -86,6 +104,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
             var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
+            g = try g.use(mw.adminGuard(self.user_svc.store));
             try g.get("/rules", listRules, @ptrCast(@alignCast(self)));
             try g.post("/rules", createRule, @ptrCast(@alignCast(self)));
             try g.get("/rules/{id}", getRule, @ptrCast(@alignCast(self)));
@@ -99,26 +118,12 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
             try g.delete("/rules/{id}/replies/{rid}", removeReply, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
@@ -127,7 +132,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn listRules(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const account_raw = ctx.queryParam("account_id") orelse {
@@ -151,7 +156,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn createRule(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(CreateRuleReq) catch {
@@ -175,7 +181,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn getRule(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
@@ -195,7 +201,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn updateRule(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
@@ -237,7 +244,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn deleteRule(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
@@ -253,7 +261,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn listKeywords(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const rule_id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
@@ -281,7 +289,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn addKeyword(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const rule_id = ctx.paramInt(i64, "id") catch {
@@ -322,7 +331,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn removeKeyword(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const kid = ctx.paramInt(i64, "kid") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的关键词 ID");
@@ -338,7 +348,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn listReplies(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const rule_id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
@@ -370,7 +380,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn addReply(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const rule_id = ctx.paramInt(i64, "id") catch {
@@ -422,7 +433,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn removeReply(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const rid = ctx.paramInt(i64, "rid") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的回复 ID");

@@ -1,0 +1,83 @@
+import { defineStore, PiniaStoreBase } from '@/uni_modules/x-pinia-s'
+
+export type IShopSessionState = {
+  accountId: number
+  openid: string
+  token: string
+  tokenExpireTime: number
+}
+
+const defaultState: IShopSessionState = {
+  accountId: 0,
+  openid: '',
+  token: '',
+  tokenExpireTime: 0,
+}
+
+/** 商城 C 端粉丝会话（openid + fan JWT），与后台管理 token 分离。 */
+export class ShopSessionStore extends PiniaStoreBase {
+  state: IShopSessionState = reactive<IShopSessionState>({
+    accountId: 0,
+    openid: '',
+    token: '',
+    tokenExpireTime: 0,
+  })
+
+  constructor() {
+    super()
+    this.bindState(this.state)
+  }
+
+  override _doReset(): void {
+    this.state.accountId = defaultState.accountId
+    this.state.openid = defaultState.openid
+    this.state.token = defaultState.token
+    this.state.tokenExpireTime = defaultState.tokenExpireTime
+  }
+
+  override _hydrate(_data: UTSJSONObject): void {
+    if (_data['accountId'] != null) this.state.accountId = _data['accountId'] as number
+    if (_data['openid'] != null) this.state.openid = _data['openid'] as string
+    if (_data['token'] != null) this.state.token = _data['token'] as string
+    if (_data['tokenExpireTime'] != null) this.state.tokenExpireTime = _data['tokenExpireTime'] as number
+  }
+
+  override _serialize(): UTSJSONObject {
+    return {
+      accountId: this.state.accountId,
+      openid: this.state.openid,
+      token: this.state.token,
+      tokenExpireTime: this.state.tokenExpireTime,
+    } as UTSJSONObject
+  }
+
+  setSession(accountId: number, openid: string, token: string, expiresInSec: number = 604800): void {
+    this.state.accountId = accountId
+    this.state.openid = openid
+    this.state.token = token
+    this.state.tokenExpireTime = Date.now() + expiresInSec * 1000
+  }
+
+  clearSession(): void {
+    this._doReset()
+  }
+
+  isValid(accountId: number): boolean {
+    return (
+      this.state.accountId === accountId &&
+      this.state.openid !== '' &&
+      this.state.token !== '' &&
+      Date.now() < this.state.tokenExpireTime
+    )
+  }
+
+  getOpenid(): string {
+    return this.state.openid
+  }
+
+  getToken(): string {
+    return this.state.token
+  }
+}
+
+export const useShopSessionStore = defineStore<ShopSessionStore>('shopSession', (): ShopSessionStore => new ShopSessionStore())

@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- RBAC 闭环：`RolePermission` 关联表 + `collectPermissionCodes`（user.admin / 角色 code / module:action）；`GET /auth/me` 返回 `permissions`；角色权限 API `GET|POST|DELETE /roles/{id}/permissions`；前端菜单按 `canAccessAdmin` 隐藏。
+- 小程序商城 C 端登录：`wx.login` → `miniprogram/login`（公开）→ `shop/auth/login` fan JWT；`shopSession` store 替换 `DEMO_OPENID`。
+- CI 增加 `zig build lint-size` 门禁。
+
 ### Changed
+- 巨型文件按子域拆分（正文逐字搬运，语义零变更；全部源文件 ≤ 1200 行，新增 `zig build lint-size` 门禁）：
+  - `src/tests.zig`（3962 行）→ `src/tests/` 共 10 个按域测试文件 + `common.zig` 夹具，原文件保留为聚合入口。
+  - `shop/persistence.zig`（1839 行）→ 门面（91 行，`persist.XxxRow` / `ShopStore.init` 引用面不变；方法调用迁移为 `store.<catalog|trade|marketing|content>.xxx`）+ `rows.zig` + 4 个子域 store。
+  - `shop/api.zig`（1922 行）→ 门面（~360 行：路由表/注册函数/init）+ `handlers/{catalog,trade,marketing,content}.zig` 混入式处理器 + `api_dto.zig` 统一 DTO 与映射器。适配本版 Zig 已移除的 `usingnamespace`：跨片段宿主成员经 `ApiT.` 前缀调用。
+- **修正**：上一条依赖升级在本机 `.zig-cache` 陈旧解析图下验证过一次，实际编译的仍是旧版。已清除缓存重验：构建与全量测试均在 **zent v0.32.1 + zigmodu v0.15.32** 真实通过（92/92），升级结论不变、代码无需改动。
+- 依赖升级（纯新增/修复版本，零 breaking）：zigmodu **v0.15.22 → v0.15.32**、zent **v0.29.4 → v0.32.1**。获得：zent Interceptor 运行时查询拦截、`field.Decimal` 精确金额列、`SaveOrUpdateOn`/`SaveIgnore` upsert、PreparedCache 字节级 key 防碰撞；zigmodu 读写分离（`Client.withReplica`）、HTTP header 上限（431 DoS 防护）、OTLP/Vault HTTPS。
 - 依赖切换到 git tag 引用并升级：zigmodu **v0.15.22**、zent **v0.29.4**、zwechat **v0.2.0**（内部 httpz → zhttp v0.6.0）。
 - 适配 zent v0.29.4 破坏性变更：`Query.Sum` 返回类型 `i64 → f64`（AI 配额聚合改用 `@intFromFloat`）。
 - 适配 zigmodu v0.15.22 线程安全修复：`/metrics` 渲染改用 `HttpMetricsCollector.snapshot()`（原先裸读共享字段存在数据竞争）。

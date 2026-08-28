@@ -26,7 +26,7 @@ pub const MenuError = error{
 /// JSON 友好的按钮 DTO（字段名与微信 JSON 一致，`type` 用 @"type" 规避
 /// Zig 关键字）。
 const ButtonDto = struct {
-    @"type": []const u8 = "",
+    type: []const u8 = "",
     name: []const u8 = "",
     key: []const u8 = "",
     url: []const u8 = "",
@@ -39,7 +39,7 @@ const ButtonDto = struct {
 /// 递归把 DTO 转成 zwechat `Button`（`type` → `type_`；sub_button 递归）。
 /// 所有字符串字段深拷贝，不依赖 DTO/parse 结果的生命周期。
 fn toButton(allocator: std.mem.Allocator, dto: ButtonDto) !zwechat.officialaccount.menu.Button {
-    const type_ = try allocator.dupe(u8, dto.@"type");
+    const type_ = try allocator.dupe(u8, dto.type);
     errdefer allocator.free(type_);
     const name = try allocator.dupe(u8, dto.name);
     errdefer allocator.free(name);

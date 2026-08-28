@@ -83,6 +83,19 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "message";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "message-logs", .handler = http.wrapHandler(Self, listLogs), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "messages/customer-text", .handler = http.wrapHandler(Self, sendCustomerText), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "messages/template", .handler = http.wrapHandler(Self, sendTemplate), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "messages/broadcast", .handler = http.wrapHandler(Self, sendBroadcast), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "statistics/datacube", .handler = http.wrapHandler(Self, getDatacube), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "miniprogram/login", .handler = http.wrapHandler(Self, miniLogin), .meta = .{ .auth = .public } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -102,29 +115,14 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
             try g.post("/messages/template", sendTemplate, @ptrCast(@alignCast(self)));
             try g.post("/messages/broadcast", sendBroadcast, @ptrCast(@alignCast(self)));
             try g.post("/statistics/datacube", getDatacube, @ptrCast(@alignCast(self)));
-            try g.post("/miniprogram/login", miniLogin, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
             defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn handle(ctx: *http.Context) !void {
@@ -158,7 +156,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
 
         fn listLogs(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
 
             const account_raw = ctx.queryParam("account_id") orelse {
@@ -182,7 +180,8 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
 
         fn sendCustomerText(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
 
             const req = ctx.bindJson(CustomerTextReq) catch {
@@ -208,7 +207,8 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
 
         fn sendTemplate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
 
             const req = ctx.bindJson(SendTemplateReq) catch {
@@ -251,7 +251,8 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
 
         fn sendBroadcast(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
 
             const req = ctx.bindJson(BroadcastTextReq) catch {
@@ -276,7 +277,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
 
         fn getDatacube(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const req = ctx.bindJson(DatacubeReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -306,7 +307,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
 
         fn miniLogin(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
 
             const req = ctx.bindJson(MiniLoginReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");

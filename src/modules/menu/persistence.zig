@@ -6,7 +6,7 @@ const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
-const graph = zent.codegen.graph.buildGraph(&.{ model.WechatMenu });
+const graph = zent.codegen.graph.buildGraph(&.{model.WechatMenu});
 pub const infos = graph.types;
 /// Shared, application-wide typed client (all schemas registered in schema.zig).
 pub const Client = schema.Client;

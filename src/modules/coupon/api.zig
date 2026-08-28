@@ -27,8 +27,8 @@ fn toCouponDto(row: service.CouponRow) CouponDto {
         .id = row.id,
         .account_id = row.account_id,
         .title = row.title,
-        .amount = row.amount,
-        .min_amount = row.min_amount,
+        .amount = std.fmt.parseInt(i64, row.amount, 10) catch 0,
+        .min_amount = std.fmt.parseInt(i64, row.min_amount, 10) catch 0,
         .total = row.total,
         .per_user = row.per_user,
         .start_at = row.start_at,
@@ -88,6 +88,19 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "coupon";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "coupons", .handler = http.wrapHandler(Self, listCoupons), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "coupons", .handler = http.wrapHandler(Self, createCoupon), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "coupons/{id}", .handler = http.wrapHandler(Self, deleteCoupon), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "coupons/{id}/claim", .handler = http.wrapHandler(Self, claim), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "coupons/use", .handler = http.wrapHandler(Self, useCoupon), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "coupon-users", .handler = http.wrapHandler(Self, listUsers), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -103,26 +116,13 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/coupon-users", listUsers, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        /// Sets the `audit_actor` context attribute from the authenticated user.
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
@@ -131,7 +131,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
 
         fn listCoupons(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -146,7 +146,8 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
 
         fn createCoupon(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(CreateCouponReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -169,7 +170,8 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
 
         fn deleteCoupon(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的券 ID");
                 return;
@@ -184,7 +186,8 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
 
         fn claim(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的券 ID");
@@ -214,7 +217,8 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
 
         fn useCoupon(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const req = ctx.bindJson(UseReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;
@@ -236,7 +240,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
 
         fn listUsers(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const openid = ctx.queryStr("openid", "");

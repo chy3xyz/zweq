@@ -4,15 +4,17 @@ const std = @import("std");
 const zent = @import("zent");
 const crud = zent.crud_helpers;
 const model = @import("model.zig");
+const user_persist = @import("../user/persistence.zig");
 const schema = @import("../../schema.zig");
 
-const graph = zent.codegen.graph.buildGraph(&.{ model.Role, model.Permission, model.UserRole });
+const graph = zent.codegen.graph.buildGraph(&.{ model.Role, model.Permission, model.UserRole, model.RolePermission });
 pub const infos = graph.types;
 /// Shared, application-wide typed client (all schemas registered in schema.zig).
 pub const Client = schema.Client;
 pub const RoleInfo = infos[0];
 pub const PermissionInfo = infos[1];
 pub const UserRoleInfo = infos[2];
+pub const RolePermissionInfo = infos[3];
 
 pub const RoleRow = struct {
     id: i64,
@@ -276,5 +278,118 @@ pub const RoleStore = struct {
         var q = self.client.role.Query();
         defer q.deinit();
         return @intCast(try q.Count());
+    }
+
+    // ── RolePermission ────────────────────────────────────────────
+
+    pub fn bindPermission(self: *RoleStore, tenant_id: i64, role_id: i64, permission_id: i64, now: i64) !i64 {
+        try self.unbindPermission(role_id, permission_id);
+        var row = try crud.create(self.client.role_permission, .{
+            .tenant_id = tenant_id,
+            .role_id = role_id,
+            .permission_id = permission_id,
+            .created_at = now,
+            .updated_at = now,
+        });
+        defer zent.codegen.deinitEntity(infos, RolePermissionInfo, &row, self.allocator);
+        return row.id;
+    }
+
+    pub fn unbindPermission(self: *RoleStore, role_id: i64, permission_id: i64) !void {
+        const preds = self.client.role_permission.predicates;
+        _ = try crud.delete(self.client.role_permission, .{ preds.role_idEQ(.{ .int = role_id }), preds.permission_idEQ(.{ .int = permission_id }) });
+    }
+
+    pub fn listPermissionsForRole(self: *RoleStore, role_id: i64) ![]PermissionRow {
+        var rp_q = self.client.role_permission.Query();
+        defer rp_q.deinit();
+        const rp_preds = self.client.role_permission.predicates;
+        _ = try rp_q.Where(.{rp_preds.role_idEQ(.{ .int = role_id })});
+        var rp_rows = try rp_q.All();
+        defer {
+            for (rp_rows.items) |*e| zent.codegen.deinitEntity(infos, RolePermissionInfo, e, self.allocator);
+            rp_rows.deinit();
+        }
+
+        var out = try self.allocator.alloc(PermissionRow, 0);
+        errdefer self.allocator.free(out);
+        for (rp_rows.items) |rp| {
+            const perm_opt = try self.getPermissionById(rp.permission_id) orelse continue;
+            const new_len = out.len + 1;
+            out = try self.allocator.realloc(out, new_len);
+            out[new_len - 1] = perm_opt;
+        }
+        return out;
+    }
+
+    pub fn getPermissionById(self: *RoleStore, id: i64) !?PermissionRow {
+        const preds = self.client.permission.predicates;
+        var entity = (try crud.first(self.client.permission, .{preds.idEQ(.{ .int = id })})) orelse return null;
+        defer zent.codegen.deinitEntity(infos, PermissionInfo, &entity, self.allocator);
+        return try self.dupPermission(entity);
+    }
+
+    fn appendUniqueCode(codes: *std.ArrayList([]const u8), allocator: std.mem.Allocator, code: []const u8) !void {
+        for (codes.items) |c| {
+            if (std.mem.eql(u8, c, code)) return;
+        }
+        try codes.append(allocator, try allocator.dupe(u8, code));
+    }
+
+    /// Effective permission codes for RBAC gate / frontend menu (CSV-ready).
+    /// Includes: user.admin → "admin"; role codes; role-bound module:action.
+    pub fn collectPermissionCodes(self: *RoleStore, allocator: std.mem.Allocator, user_id: i64) ![]u8 {
+        var codes = std.ArrayList([]const u8).empty;
+        defer {
+            for (codes.items) |c| allocator.free(c);
+            codes.deinit(allocator);
+        }
+
+        const user_preds = self.client.user.predicates;
+        if ((try crud.first(self.client.user, .{user_preds.idEQ(.{ .int = user_id })}))) |found| {
+            var entity = found;
+            defer zent.codegen.deinitEntity(user_persist.infos, user_persist.UserInfo, &entity, self.allocator);
+            if (entity.admin) try appendUniqueCode(&codes, allocator, "admin");
+        }
+
+        const user_roles = try self.listRolesForUser(user_id);
+        defer self.allocator.free(user_roles);
+
+        for (user_roles) |ur| {
+            const role = try self.getRoleById(ur.role_id) orelse continue;
+            defer role.free(self.allocator);
+            try appendUniqueCode(&codes, allocator, role.code);
+
+            const role_perms = try self.listPermissionsForRole(ur.role_id);
+            defer {
+                for (role_perms) |p| p.free(self.allocator);
+                self.allocator.free(role_perms);
+            }
+            for (role_perms) |perm| {
+                var buf: [128]u8 = undefined;
+                const ma = try std.fmt.bufPrint(&buf, "{s}:{s}", .{ perm.module, perm.action });
+                try appendUniqueCode(&codes, allocator, ma);
+            }
+        }
+
+        if (codes.items.len == 0) {
+            return try allocator.dupe(u8, "");
+        }
+
+        var total_len: usize = 0;
+        for (codes.items) |c| total_len += c.len;
+        total_len += codes.items.len - 1;
+
+        var out = try allocator.alloc(u8, total_len);
+        var off: usize = 0;
+        for (codes.items, 0..) |code, i| {
+            if (i > 0) {
+                out[off] = ',';
+                off += 1;
+            }
+            @memcpy(out[off..][0..code.len], code);
+            off += code.len;
+        }
+        return out;
     }
 };

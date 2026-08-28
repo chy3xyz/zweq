@@ -58,6 +58,20 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "module";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "modules", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "modules", .handler = http.wrapHandler(Self, register), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "accounts/{id}/modules", .handler = http.wrapHandler(Self, listBindings), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "accounts/{id}/modules", .handler = http.wrapHandler(Self, bind), .meta = .{ .permission = "admin" } },
+            .{ .method = .DELETE, .path = "accounts/{id}/modules/{module}", .handler = http.wrapHandler(Self, unbind), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "accounts/{id}/modules/{module}/config", .handler = http.wrapHandler(Self, getConfig), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "accounts/{id}/modules/{module}/config", .handler = http.wrapHandler(Self, setConfig), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -74,35 +88,21 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             try g.put("/accounts/{id}/modules/{module}/config", setConfig, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
-            try ctx.setAttr("audit_actor", row.name);
-            return uid;
-        }
-
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
             return mw.authTenantId(ctx) orelse self.default_tenant_id;
         }
 
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.svc.allocator);
+            try ctx.setAttr("audit_actor", row.name);
+        }
+
         fn list(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -118,7 +118,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn register(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(RegisterModuleReq) catch {
@@ -142,7 +143,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn listBindings(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const account_id = ctx.paramInt(i64, "id") catch {
@@ -166,7 +167,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn bind(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const account_id = ctx.paramInt(i64, "id") catch {
@@ -194,7 +196,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn unbind(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const account_id = ctx.paramInt(i64, "id") catch {
@@ -215,7 +218,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn getConfig(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const account_id = ctx.paramInt(i64, "id") catch {
@@ -236,7 +239,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
 
         fn setConfig(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const account_id = ctx.paramInt(i64, "id") catch {

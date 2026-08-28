@@ -545,7 +545,7 @@ pub const CloudService = struct {
         if (!allowed) return false;
         // 危险关键字拒绝（大小写不敏感子串匹配）。
         const dangerous = [_][]const u8{
-            "DROP", "DELETE", "INSERT", "UPDATE", "GRANT", "REVOKE",
+            "DROP",   "DELETE", "INSERT", "UPDATE", "GRANT",    "REVOKE",
             "PRAGMA", "ATTACH", "DETACH", "VACUUM", "TRUNCATE", "SELECT",
         };
         for (dangerous) |kw| {

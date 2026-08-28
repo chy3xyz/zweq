@@ -90,6 +90,24 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "cloud";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .POST, .path = "cloud/licenses", .handler = http.wrapHandler(Self, generateLicense), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "cloud/licenses", .handler = http.wrapHandler(Self, listLicenses), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "cloud/licenses/{id}/revoke", .handler = http.wrapHandler(Self, revokeLicense), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "cloud/licenses/verify", .handler = http.wrapHandler(Self, verifyLicense), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "cloud/market", .handler = http.wrapHandler(Self, listMarket), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "cloud/market", .handler = http.wrapHandler(Self, publishPackage), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "cloud/market/{name}/install", .handler = http.wrapHandler(Self, installPackage), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "cloud/remote/verify", .handler = http.wrapHandler(Self, remoteVerify), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "cloud/remote/sync-market", .handler = http.wrapHandler(Self, remoteSyncMarket), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "cloud/tables", .handler = http.wrapHandler(Self, listDynamicTables), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "cloud/tables/{table}/rows", .handler = http.wrapHandler(Self, queryDynamicTable), .meta = .{ .permission = "admin" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
@@ -112,26 +130,13 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/cloud/tables/{table}/rows", queryDynamicTable, @ptrCast(@alignCast(self)));
         }
 
-        fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row_opt = self.user_svc.getUserById(uid) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            const row = row_opt orelse {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return null;
-            };
-            defer row.free(self.svc.allocator);
-            if (!row.admin) {
-                try ctx.sendErrorResponse(403, 403, "需要管理员权限");
-                return null;
-            }
+        /// Sets the `audit_actor` context attribute from the authenticated user.
+        fn setAuditActor(ctx: *http.Context, self: *Self) !void {
+            const uid = mw.authUserId(ctx) orelse return;
+            const row_opt = self.user_svc.getUserById(uid) catch return;
+            const row = row_opt orelse return;
+            defer row.free(self.user_svc.store.allocator);
             try ctx.setAttr("audit_actor", row.name);
-            return uid;
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
@@ -140,7 +145,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn generateLicense(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(GenerateLicenseReq) catch {
@@ -164,7 +170,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn listLicenses(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -179,7 +185,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn revokeLicense(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的授权码 ID");
@@ -195,7 +202,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn verifyLicense(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(VerifyLicenseReq) catch {
@@ -217,7 +224,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn listMarket(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -232,7 +239,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn publishPackage(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(PublishPackageReq) catch {
@@ -259,7 +267,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn installPackage(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             const name = ctx.param("name") orelse {
@@ -289,7 +298,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn remoteVerify(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
 
             const req = ctx.bindJson(RemoteVerifyReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -316,7 +326,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn remoteSyncMarket(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const admin_id = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
             const tid = tenantScope(ctx, self);
 
             if (!self.svc.isRemote()) {
@@ -339,7 +350,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn listDynamicTables(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
 
             const tables = self.svc.listDynamicTables(tid) catch {
@@ -366,7 +377,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         fn queryDynamicTable(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = (try requireAdmin(ctx, self)) orelse return;
+            try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const table = ctx.param("table") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少表名");

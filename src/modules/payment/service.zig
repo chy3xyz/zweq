@@ -137,8 +137,9 @@ pub const PaymentService = struct {
         const row_opt = self.store.getOrderByNo(tenant_id, order_no) catch return error.Unexpected;
         const row = row_opt orelse return error.OrderNotFound;
         defer row.free(self.allocator);
-        if (row.amount > 0) {
-            _ = self.store.creditWallet(tenant_id, row.account_id, row.fan_id, row.amount, self.now()) catch return error.Unexpected;
+        const amount_cents = std.fmt.parseInt(i64, row.amount, 10) catch return error.Unexpected;
+        if (amount_cents > 0) {
+            _ = self.store.creditWallet(tenant_id, row.account_id, row.fan_id, amount_cents, self.now()) catch return error.Unexpected;
         }
         return true;
     }
@@ -161,8 +162,10 @@ pub const PaymentService = struct {
     pub fn requestWithdraw(self: *PaymentService, tenant_id: i64, account_id: i64, fan_id: i64, amount: i64) PaymentError!i64 {
         if (amount <= 0) return error.InvalidAmount;
         const wallet_opt = self.store.getWallet(tenant_id, account_id, fan_id) catch return error.Unexpected;
+        defer if (wallet_opt) |w| w.free(self.allocator);
         const wallet = wallet_opt orelse return error.WithdrawInsufficient;
-        if (wallet.balance < amount) return error.WithdrawInsufficient;
+        const balance_cents = std.fmt.parseInt(i64, wallet.balance, 10) catch return error.Unexpected;
+        if (balance_cents < amount) return error.WithdrawInsufficient;
         return self.store.createWithdraw(tenant_id, account_id, fan_id, amount, self.now()) catch error.Unexpected;
     }
 

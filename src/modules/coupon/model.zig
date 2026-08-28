@@ -14,8 +14,8 @@ pub const Coupon = Schema("Coupon", .{
         field.Int("tenant_id").Default(1),
         field.Int("account_id"),
         field.String("title"),
-        field.Int("amount").Default(0), // 面额（分）
-        field.Int("min_amount").Default(0), // 使用门槛（分），0=无门槛
+        field.Decimal("amount").Default("0"), // 面额（分）
+        field.Decimal("min_amount").Default("0"), // 使用门槛（分），0=无门槛
         field.Int("total").Default(0), // 发放总量，0=不限
         field.Int("per_user").Default(1), // 每人限领
         field.Int("start_at").Default(0), // 生效时间（秒）
