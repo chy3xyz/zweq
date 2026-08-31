@@ -24,6 +24,7 @@ import {
 import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
 import FormModal from '#ui/components/FormModal';
+import RichEditor from '#ui/components/RichEditor';
 import SearchBar, { type SearchField, type SearchValues } from '#ui/components/SearchBar';
 import { useAccountId, useFeedback, useLocalPaged, usePaged } from '#ui/hooks';
 import { formatDateTime, intParam } from '#ui/utils';
@@ -751,12 +752,7 @@ function ArticleSection() {
         </label>
         <label class="form-control">
           <span class="label-text mb-1">正文</span>
-          <textarea
-            class="textarea textarea-bordered"
-            rows={6}
-            value={content()}
-            onInput={(e) => setContent(e.currentTarget.value)}
-          />
+          <RichEditor value={content()} onInput={setContent} placeholder="支持加粗、标题、列表、链接与图片插入" />
         </label>
       </FormModal>
     </SubResource>

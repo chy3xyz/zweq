@@ -190,7 +190,8 @@ pub fn main(init: std.process.Init) !void {
     var notify_store = notify.persistence.NotificationStore.init(allocator, store_env.client);
     var notify_svc = notify.service.NotificationService.init(allocator, io, &notify_store);
     var file_store = file.persistence.FileStore.init(allocator, store_env.client);
-    var file_svc = file.service.FileService.init(allocator, io, &file_store, cfg.upload_dir, cfg.upload_max_bytes);
+    var file_group_store = file.persistence.GroupStore.init(allocator, store_env.client);
+    var file_svc = file.service.FileService.init(allocator, io, &file_store, &file_group_store, cfg.upload_dir, cfg.upload_max_bytes);
     try file_svc.ensureDir();
     var tenant_store = tenant.persistence.TenantStore.init(allocator, store_env.client);
     var tenant_svc = tenant.service.TenantService.init(allocator, io, &tenant_store);
@@ -612,9 +613,11 @@ pub fn main(init: std.process.Init) !void {
         .{
             .skip_prefixes = &.{
                 "health",
+                "api/v1/health",
                 "metrics",
                 "api/pay/v3/notify",
                 "wx",
+                "uploads",
                 "openapi.json",
                 "docs",
                 "scalar",
@@ -798,6 +801,8 @@ pub fn main(init: std.process.Init) !void {
     // A server-level middleware short-circuits routing for non-API GET paths.
     if (cfg.static_dir.len > 0) {
         StaticCtx.dir = cfg.static_dir;
+        uploads_dir = cfg.upload_dir;
+        try server.addMiddleware(uploadsStaticMiddleware());
         try server.addMiddleware(staticMiddleware());
         std.log.info("[static] serving SPA from {s}", .{cfg.static_dir});
     }
@@ -864,6 +869,10 @@ fn parseCorsOrigins(allocator: std.mem.Allocator, spec: []const u8) ![]const []c
 const StaticCtx = struct {
     var dir: []const u8 = "web/dist";
 };
+
+/// Upload directory, populated at startup so the public `/uploads/*` static
+/// middleware can read it without capturing a stack pointer.
+var uploads_dir: []const u8 = "uploads";
 
 /// Map a file extension to a Content-Type.
 fn staticContentType(rel: []const u8) []const u8 {
@@ -949,6 +958,54 @@ fn staticMiddleware() zigmodu.http.Middleware {
                 }
                 _ = try serveStaticFile(ctx, io, "index.html");
                 if (!ctx.responded) return next(ctx);
+            }
+        }.handle,
+    };
+}
+
+/// Serve uploaded files from the upload directory under `/uploads/*` as
+/// inline content (so `<img src>` works). Intentionally public — the JWT
+/// middleware skips the `uploads` prefix — and path-traversal guarded.
+fn uploadsStaticMiddleware() zigmodu.http.Middleware {
+    return .{
+        .func = struct {
+            fn handle(ctx: *zigmodu.http.Context, next: zigmodu.http.HandlerFn, _: ?*anyopaque) anyerror!void {
+                if (ctx.method != .GET) return next(ctx);
+                const raw = ctx.raw_path;
+                if (!std.mem.startsWith(u8, raw, "/uploads/")) return next(ctx);
+                const io = ctx.io orelse return next(ctx);
+                const rel = raw["/uploads/".len..];
+                if (std.mem.indexOf(u8, rel, "..") != null or std.mem.indexOf(u8, rel, "\\") != null) {
+                    try ctx.sendErrorResponse(400, 400, "Bad path");
+                    return;
+                }
+                const full = try std.fmt.allocPrint(ctx.allocator, "{s}/{s}", .{ uploads_dir, rel });
+                defer ctx.allocator.free(full);
+                var f = std.Io.Dir.cwd().openFile(io, full, .{}) catch {
+                    try ctx.sendErrorResponse(404, 404, "Not Found");
+                    return;
+                };
+                defer f.close(io);
+
+                var body = std.ArrayList(u8).empty;
+                defer body.deinit(ctx.allocator);
+                var buf: [8192]u8 = undefined;
+                while (true) {
+                    const n = f.readStreaming(io, &.{buf[0..]}) catch |err| {
+                        if (err == error.EndOfStream) break;
+                        try ctx.sendErrorResponse(500, 500, "Read error");
+                        return;
+                    };
+                    if (n == 0) break;
+                    try body.appendSlice(ctx.allocator, buf[0..n]);
+                    if (body.items.len > 50 * 1024 * 1024) {
+                        try ctx.sendErrorResponse(413, 413, "File too large");
+                        return;
+                    }
+                }
+                try ctx.text(200, body.items);
+                try ctx.setHeader("Content-Type", staticContentType(rel));
+                try ctx.setHeader("Cache-Control", "public, max-age=31536000, immutable");
             }
         }.handle,
     };

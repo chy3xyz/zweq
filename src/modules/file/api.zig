@@ -16,6 +16,8 @@ const FileDto = struct {
     size_bytes: i64,
     uploader_id: i64,
     tenant_id: i64,
+    group_id: i64,
+    storage_key: []const u8,
     created_at: i64,
 };
 
@@ -27,6 +29,8 @@ fn toDto(row: service.FileRow) FileDto {
         .size_bytes = row.size_bytes,
         .uploader_id = row.uploader_id,
         .tenant_id = row.tenant_id,
+        .group_id = row.group_id,
+        .storage_key = row.storage_key,
         .created_at = row.created_at,
     };
 }
@@ -48,6 +52,10 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             .{ .method = .GET, .path = "files", .handler = http.wrapHandler(Self, list), .meta = .{ .auth = .jwt } },
             .{ .method = .GET, .path = "files/{id}", .handler = http.wrapHandler(Self, download), .meta = .{ .auth = .jwt } },
             .{ .method = .DELETE, .path = "files/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .auth = .jwt } },
+            .{ .method = .POST, .path = "files/groups", .handler = http.wrapHandler(Self, createGroup), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "files/groups", .handler = http.wrapHandler(Self, listGroups), .meta = .{ .auth = .jwt } },
+            .{ .method = .PUT, .path = "files/groups/{id}", .handler = http.wrapHandler(Self, updateGroup), .meta = .{ .auth = .jwt } },
+            .{ .method = .DELETE, .path = "files/groups/{id}", .handler = http.wrapHandler(Self, deleteGroup), .meta = .{ .auth = .jwt } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
@@ -93,7 +101,11 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             const mime = ctx.header("Content-Type") orelse "application/octet-stream";
 
             const tenant_id = mw.authTenantId(ctx) orelse self.default_tenant_id;
-            const row = self.svc.save(actor.id, tenant_id, filename, mime, body) catch |err| switch (err) {
+            const group_id = blk: {
+                const raw = ctx.header("X-Group-Id") orelse "0";
+                break :blk std.fmt.parseInt(i64, raw, 10) catch 0;
+            };
+            const row = self.svc.save(actor.id, tenant_id, group_id, filename, mime, body) catch |err| switch (err) {
                 error.FileTooLarge => {
                     try ctx.sendErrorResponse(413, 413, "文件超过大小限制");
                     return;
@@ -125,8 +137,13 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             const sort = zigmodu.http.page.parseSort(ctx, &.{ "name", "size_bytes", "created_at" });
             const sort_col: ?[]const u8 = if (sort) |s| s.column else null;
             const sort_desc = if (sort) |s| s.desc else false;
+            const group_id: ?i64 = blk: {
+                const gid = ctx.queryInt(i64, "group_id", 0);
+                break :blk if (gid > 0) gid else null;
+            };
+            const mime_prefix: ?[]const u8 = ctx.queryParam("type");
 
-            var result = self.svc.list(params.page, params.page_size, owner, tenant_filter, sort_col, sort_desc) catch |err| {
+            var result = self.svc.list(params.page, params.page_size, owner, tenant_filter, group_id, mime_prefix, sort_col, sort_desc) catch |err| {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
@@ -197,6 +214,113 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             var d5: [96]u8 = undefined;
             const det5 = try std.fmt.bufPrint(&d5, "删除文件 #{d}", .{id});
             self.audit.log(actor.id, ctx.getAttr("audit_actor") orelse "", "file.delete", "file", id, det5, zigmodu.http.RequestUtil.getRealIp(ctx), true, row.tenant_id);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+        }
+
+        // ── Upload groups (image-manager categories) ──
+
+        const GroupInput = struct { group_name: []const u8, sort: ?f64 = null };
+
+        fn createGroup(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = try authUser(ctx, self) orelse return;
+            const raw_body = ctx.body orelse {
+                try ctx.sendErrorResponse(400, 400, "请求体不能为空");
+                return;
+            };
+            var parsed = std.json.parseFromSlice(GroupInput, self.svc.allocator, raw_body, .{}) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer parsed.deinit();
+            const name = parsed.value.group_name;
+            if (name.len == 0) {
+                try ctx.sendErrorResponse(400, 400, "分类名称不能为空");
+                return;
+            }
+            const sort = if (parsed.value.sort) |s| @as(i64, @intFromFloat(s)) else 0;
+            const tenant_id = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const id = self.svc.createGroup(name, "image", sort, tenant_id) catch |err| {
+                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                return;
+            };
+            try ctx.jsonStruct(201, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+        }
+
+        fn listGroups(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = try authUser(ctx, self) orelse return;
+            const tenant_id = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const rows = self.svc.listGroups(tenant_id) catch |err| {
+                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                return;
+            };
+            const GroupDto = struct { id: i64, group_name: []const u8, group_type: []const u8, sort: i64 };
+            var dtos = try self.svc.allocator.alloc(GroupDto, rows.len);
+            errdefer {
+                for (dtos[0..]) |d| {
+                    self.svc.allocator.free(d.group_name);
+                    self.svc.allocator.free(d.group_type);
+                }
+                self.svc.allocator.free(dtos);
+            }
+            for (rows, 0..) |r, i| {
+                dtos[i] = .{
+                    .id = r.id,
+                    .group_name = try self.svc.allocator.dupe(u8, r.group_name),
+                    .group_type = try self.svc.allocator.dupe(u8, r.group_type),
+                    .sort = r.sort,
+                };
+            }
+            for (rows) |r| r.free(self.svc.allocator);
+            self.svc.allocator.free(rows);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos } });
+        }
+
+        fn updateGroup(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = try authUser(ctx, self) orelse return;
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的分类 ID");
+                return;
+            };
+            const body_json_raw = ctx.body orelse {
+                try ctx.sendErrorResponse(400, 400, "请求体不能为空");
+                return;
+            };
+            var parsed = std.json.parseFromSlice(GroupInput, self.svc.allocator, body_json_raw, .{}) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer parsed.deinit();
+            const name = parsed.value.group_name;
+            const sort = if (parsed.value.sort) |s| @as(i64, @intFromFloat(s)) else 0;
+            self.svc.updateGroup(id, name, sort) catch |err| {
+                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                return;
+            };
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+        }
+
+        fn deleteGroup(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            _ = try authUser(ctx, self) orelse return;
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的分类 ID");
+                return;
+            };
+            const count = self.svc.countGroupFiles(id) catch |err| {
+                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                return;
+            };
+            if (count > 0) {
+                try ctx.sendErrorResponse(400, 400, "该分类下还有文件，无法删除");
+                return;
+            }
+            self.svc.deleteGroup(id) catch |err| {
+                try ctx.sendErrorResponse(500, 500, @errorName(err));
+                return;
+            };
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
         }
     };

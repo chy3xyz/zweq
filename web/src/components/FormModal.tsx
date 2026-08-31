@@ -20,17 +20,18 @@ interface Props {
 /**
  * Standard admin form dialog (the `Add.vue` / `Edit.vue` shell):
  * title + error alert + field slot + 取消/确定 footer with a submitting state.
- * Field markup stays with the caller; only the chrome is shared.
+ * Field markup goes through `FormField`; the chrome (header/body scroll/
+ * footer) is shared so every dialog looks and behaves the same.
  */
 export default function FormModal(props: Props) {
   return (
     <BaseModal open={props.open} title={props.title} onClose={props.onClose} size={props.size ?? 'md'}>
       <Show when={props.description}>
-        <p class="mb-3 text-sm text-base-content/60">{props.description}</p>
+        <p class="mb-4 text-xs leading-5 text-base-content/60">{props.description}</p>
       </Show>
 
       <Show when={props.error}>
-        <div role="alert" class="alert alert-error mb-3 py-2 text-sm">
+        <div role="alert" class="alert alert-error mb-4 py-2 text-sm">
           {props.error}
         </div>
       </Show>
@@ -40,16 +41,19 @@ export default function FormModal(props: Props) {
           e.preventDefault();
           props.onSubmit?.(e);
         }}
-        class="space-y-3"
+        class="flex flex-col gap-4"
       >
-        {props.children}
+        <div class="flex flex-col gap-4">{props.children}</div>
 
         <Show when={props.onSubmit}>
-          <div class="modal-action mt-5">
-            <button type="button" class="btn btn-sm" onClick={props.onClose} disabled={props.submitting}>
+          <div class="-mx-5 -mb-4 flex justify-end gap-2 border-t border-base-200 bg-base-200/40 px-5 py-3">
+            <button type="button" class="btn btn-ghost btn-sm" onClick={props.onClose} disabled={props.submitting}>
               {props.cancelLabel ?? '取消'}
             </button>
             <button type="submit" class="btn btn-primary btn-sm" disabled={props.submitting}>
+              <Show when={props.submitting}>
+                <span class="loading loading-spinner loading-xs" />
+              </Show>
               {props.submitting ? '提交中…' : (props.submitLabel ?? '保存')}
             </button>
           </div>

@@ -1,4 +1,4 @@
-import { Show, createSignal } from 'solid-js';
+import { For, Show, createSignal } from 'solid-js';
 
 import {
   createMaterialFile,
@@ -7,7 +7,6 @@ import {
   deleteNews,
   listMaterialFiles,
   listNews,
-  toApiError,
   updateNews,
   type MaterialFileItem,
   type MaterialKind,
@@ -15,18 +14,32 @@ import {
 } from '#ui/api';
 import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccountId } from '#ui/hooks/useAccountId';
-import { usePaged } from '#ui/hooks/usePaged';
+import FormField from '#ui/components/FormField';
+import FormModal from '#ui/components/FormModal';
+import ImageManager from '#ui/components/ImageManager';
+import RichEditor from '#ui/components/RichEditor';
+import { fileUrl as publicFileUrl } from '#ui/api/file/types';
+import { useAccountId, useFeedback, usePaged } from '#ui/hooks';
 import { formatDateTime } from '#ui/utils';
 
 const PAGE_SIZE = 20;
 const KIND_LABEL: Record<MaterialKind, string> = { image: '图片', voice: '语音', video: '视频' };
+const TABS = ['图文素材', '素材文件'] as const;
+
+const KIND_OPTIONS: { value: MaterialKind; label: string }[] = [
+  { value: 'image', label: '图片' },
+  { value: 'voice', label: '语音' },
+  { value: 'video', label: '视频' },
+];
 
 function Materials() {
   const { accountId, onAccountChange } = useAccountId();
+  const feedback = useFeedback();
+  const [tab, setTab] = createSignal<(typeof TABS)[number]>('图文素材');
   const [success, setSuccess] = createSignal<string | null>(null);
 
-  // 图文编辑
+  // 图文编辑弹窗
+  const [newsOpen, setNewsOpen] = createSignal(false);
   const [editing, setEditing] = createSignal<NewsItem | null>(null);
   const [title, setTitle] = createSignal('');
   const [author, setAuthor] = createSignal('');
@@ -35,12 +48,17 @@ function Materials() {
   const [thumbUrl, setThumbUrl] = createSignal('');
   const [linkUrl, setLinkUrl] = createSignal('');
   const [saving, setSaving] = createSignal(false);
+  const [newsError, setNewsError] = createSignal<string | null>(null);
+  const [thumbPicker, setThumbPicker] = createSignal(false);
 
-  // 素材文件
-  const [kindFilter, setKindFilter] = createSignal<MaterialKind | ''>('');
+  // 素材文件弹窗
+  const [fileOpen, setFileOpen] = createSignal(false);
   const [fileKind, setFileKind] = createSignal<MaterialKind>('image');
   const [fileMediaId, setFileMediaId] = createSignal('');
   const [fileUrl, setFileUrl] = createSignal('');
+  const [fileSaving, setFileSaving] = createSignal(false);
+  const [fileError, setFileError] = createSignal<string | null>(null);
+  const [kindFilter, setKindFilter] = createSignal<MaterialKind | ''>('');
 
   const news = usePaged<NewsItem>(
     (page, pageSize) => listNews(page, pageSize, accountId()),
@@ -54,10 +72,10 @@ function Materials() {
   );
 
   onAccountChange(() => {
-    setEditing(null);
+    setNewsOpen(false);
   });
 
-  const onNewNews = () => {
+  const openCreateNews = () => {
     setEditing(null);
     setTitle('');
     setAuthor('');
@@ -65,9 +83,11 @@ function Materials() {
     setContent('');
     setThumbUrl('');
     setLinkUrl('');
+    setNewsError(null);
+    setNewsOpen(true);
   };
 
-  const onEditNews = (n: NewsItem) => {
+  const openEditNews = (n: NewsItem) => {
     setEditing(n);
     setTitle(n.title);
     setAuthor(n.author);
@@ -75,13 +95,14 @@ function Materials() {
     setContent(n.content);
     setThumbUrl(n.thumb_url);
     setLinkUrl(n.url);
+    setNewsError(null);
+    setNewsOpen(true);
   };
 
-  const onSaveNews = async (e: SubmitEvent) => {
-    e.preventDefault();
+  const onSaveNews = async () => {
     if (saving() || accountId() === 0) return;
     setSaving(true);
-    setSuccess(null);
+    setNewsError(null);
     try {
       const body = {
         account_id: accountId(),
@@ -94,52 +115,60 @@ function Materials() {
       };
       if (editing()) {
         await updateNews(editing()!.id, body);
-        setSuccess('图文已更新');
+        feedback.toast('图文已更新');
       } else {
         await createNews(body);
-        setSuccess('图文已创建');
+        feedback.toast('图文已创建');
       }
-      onNewNews();
-      void news.reload(1);
+      setNewsOpen(false);
+      void news.refresh();
     } catch (err) {
-      window.alert(toApiError(err).message);
+      setNewsError(err instanceof Error ? err.message : '保存失败，请稍后重试');
     } finally {
       setSaving(false);
     }
   };
 
-  const onDeleteNews = async (n: NewsItem) => {
-    if (!window.confirm(`确定删除图文「${n.title}」吗？`)) return;
-    try {
-      await deleteNews(n.id);
-      if (editing()?.id === n.id) setEditing(null);
-      void news.reload();
-    } catch (err) {
-      window.alert(toApiError(err).message);
-    }
-  };
+  const onDeleteNews = (n: NewsItem) =>
+    feedback.runAction({
+      confirm: { title: '删除图文', message: `确定删除图文「${n.title}」吗？`, danger: true },
+      action: () => deleteNews(n.id),
+      onDone: () => void news.refresh(),
+    });
 
   const onAddFile = async () => {
-    if (accountId() === 0) return;
+    if (fileSaving() || accountId() === 0) return;
+    setFileSaving(true);
+    setFileError(null);
     try {
-      await createMaterialFile({ account_id: accountId(), kind: fileKind(), media_id: fileMediaId().trim(), url: fileUrl().trim() });
+      await createMaterialFile({
+        account_id: accountId(),
+        kind: fileKind(),
+        media_id: fileMediaId().trim(),
+        url: fileUrl().trim(),
+      });
+      setFileOpen(false);
       setFileMediaId('');
       setFileUrl('');
+      feedback.toast('素材文件已添加');
       void files.reload(1);
     } catch (err) {
-      window.alert(toApiError(err).message);
+      setFileError(err instanceof Error ? err.message : '添加失败，请稍后重试');
+    } finally {
+      setFileSaving(false);
     }
   };
 
-  const onDeleteFile = async (f: MaterialFileItem) => {
-    if (!window.confirm(`确定删除 ${KIND_LABEL[f.kind]} 素材吗？`)) return;
-    try {
-      await deleteMaterialFile(f.id);
-      void files.reload();
-    } catch (err) {
-      window.alert(toApiError(err).message);
-    }
-  };
+  const onDeleteFile = (f: MaterialFileItem) =>
+    feedback.runAction({
+      confirm: {
+        title: '删除素材',
+        message: `确定删除该${KIND_LABEL[f.kind]}素材吗？`,
+        danger: true,
+      },
+      action: () => deleteMaterialFile(f.id),
+      onDone: () => void files.refresh(),
+    });
 
   const newsColumns: Column<NewsItem>[] = [
     { key: 'id', title: 'ID', render: (n) => <span class="font-mono text-xs">{n.id}</span> },
@@ -172,13 +201,33 @@ function Materials() {
         </div>
       </Show>
 
-      <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* 图文素材 */}
-        <div class="lg:col-span-2">
-          <div class="mb-2 flex items-center justify-between">
-            <h3 class="text-sm font-semibold">图文素材</h3>
-            <button type="button" class="btn btn-ghost btn-xs" onClick={onNewNews}>
-              {editing() ? '取消编辑' : '新建图文'}
+      <div role="tablist" class="tabs tabs-box">
+        <For each={TABS}>
+          {(item) => (
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              classList={{ 'tab-active': tab() === item }}
+              onClick={() => setTab(item)}
+            >
+              {item}
+            </button>
+          )}
+        </For>
+      </div>
+
+      <Show when={tab() === '图文素材'}>
+        <section class="rounded-box border border-base-300 bg-base-100 p-4">
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h3 class="text-lg font-semibold">图文素材</h3>
+            <button
+              type="button"
+              class="btn btn-primary btn-sm"
+              disabled={accountId() === 0}
+              onClick={openCreateNews}
+            >
+              新建图文
             </button>
           </div>
           <DataTable
@@ -188,88 +237,200 @@ function Materials() {
             total={news.total()}
             page={news.page()}
             totalPages={news.totalPages()}
+            pageSize={news.pageSize()}
             loading={news.loading()}
             error={news.error()}
             emptyText="暂无图文素材"
             onPageChange={(p) => void news.reload(p)}
+            onPageSizeChange={(size) => news.setPageSize(size)}
             actions={(n) => (
-              <div class="flex gap-1">
-                <button type="button" class="btn btn-ghost btn-xs" onClick={() => onEditNews(n)}>
+              <>
+                <button type="button" class="btn btn-ghost btn-xs" onClick={() => openEditNews(n)}>
                   编辑
                 </button>
-                <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => onDeleteNews(n)}>
+                <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDeleteNews(n)}>
                   删除
                 </button>
-              </div>
+              </>
             )}
           />
-        </div>
+        </section>
+      </Show>
 
-        {/* 图文编辑器 */}
-        <div class="rounded-lg border border-base-300 bg-base-200/40 p-4 space-y-3">
-          <span class="text-sm font-semibold">{editing() ? `编辑图文 #${editing()!.id}` : '新建图文'}</span>
-          <form onSubmit={onSaveNews} class="space-y-2">
-            <input type="text" class="input input-bordered input-sm w-full" placeholder="标题" value={title()} onInput={(e) => setTitle(e.currentTarget.value)} required />
-            <div class="flex gap-2">
-              <input type="text" class="input input-bordered input-sm w-1/2" placeholder="作者" value={author()} onInput={(e) => setAuthor(e.currentTarget.value)} />
-              <input type="text" class="input input-bordered input-sm w-1/2" placeholder="摘要" value={digest()} onInput={(e) => setDigest(e.currentTarget.value)} />
+      <Show when={tab() === '素材文件'}>
+        <section class="rounded-box border border-base-300 bg-base-100 p-4">
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h3 class="text-lg font-semibold">素材文件</h3>
+            <div class="flex items-center gap-2">
+              <select
+                class="select select-bordered select-sm"
+                value={kindFilter()}
+                onChange={(e) => {
+                  setKindFilter(e.currentTarget.value as MaterialKind | '');
+                  void files.reload(1);
+                }}
+              >
+                <option value="">全部</option>
+                <For each={KIND_OPTIONS}>{(k) => <option value={k.value}>{k.label}</option>}</For>
+              </select>
+              <button
+                type="button"
+                class="btn btn-primary btn-sm"
+                disabled={accountId() === 0}
+                onClick={() => {
+                  setFileError(null);
+                  setFileKind('image');
+                  setFileMediaId('');
+                  setFileUrl('');
+                  setFileOpen(true);
+                }}
+              >
+                新增素材
+              </button>
             </div>
-            <textarea class="textarea textarea-bordered textarea-sm w-full" rows={3} placeholder="正文内容" value={content()} onInput={(e) => setContent(e.currentTarget.value)} />
-            <input type="text" class="input input-bordered input-sm w-full" placeholder="封面图 URL" value={thumbUrl()} onInput={(e) => setThumbUrl(e.currentTarget.value)} />
-            <input type="text" class="input input-bordered input-sm w-full" placeholder="跳转链接" value={linkUrl()} onInput={(e) => setLinkUrl(e.currentTarget.value)} />
-            <button type="submit" class="btn btn-primary btn-sm w-full" disabled={saving() || accountId() === 0}>
-              {saving() ? '保存中…' : editing() ? '保存修改' : '创建图文'}
-            </button>
-          </form>
-        </div>
-      </div>
+          </div>
+          <DataTable
+            columns={fileColumns}
+            rows={files.items()}
+            rowKey={(f) => f.id}
+            total={files.total()}
+            page={files.page()}
+            totalPages={files.totalPages()}
+            pageSize={files.pageSize()}
+            loading={files.loading()}
+            error={files.error()}
+            emptyText="暂无素材文件"
+            onPageChange={(p) => void files.reload(p)}
+            onPageSizeChange={(size) => files.setPageSize(size)}
+            actions={(f) => (
+              <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDeleteFile(f)}>
+                删除
+              </button>
+            )}
+          />
+        </section>
+      </Show>
 
-      {/* 素材文件 */}
-      <div>
-        <div class="mb-2 flex items-center justify-between">
-          <h3 class="text-sm font-semibold">素材文件</h3>
-          <select class="select select-bordered select-sm" value={kindFilter()} onChange={(e) => {
-            setKindFilter(e.currentTarget.value as MaterialKind | '');
-            void files.reload(1);
-          }}>
-            <option value="">全部</option>
-            <option value="image">图片</option>
-            <option value="voice">语音</option>
-            <option value="video">视频</option>
-          </select>
+      <FormModal
+        open={newsOpen()}
+        title={editing() ? `编辑图文 #${editing()!.id}` : '新建图文'}
+        description="正文支持在发布后于微信后台补充排版；保存后可通过「同步素材」推送至微信"
+        onSubmit={onSaveNews}
+        onClose={() => setNewsOpen(false)}
+        submitting={saving()}
+        error={newsError()}
+        submitLabel={editing() ? '保存修改' : '创建图文'}
+      >
+        <FormField label="标题" required>
+          <input
+            type="text"
+            class="input input-bordered input-sm w-full"
+            placeholder="图文标题"
+            value={title()}
+            onInput={(e) => setTitle(e.currentTarget.value)}
+          />
+        </FormField>
+        <div class="grid grid-cols-2 gap-3">
+          <FormField label="作者">
+            <input
+              type="text"
+              class="input input-bordered input-sm w-full"
+              placeholder="作者"
+              value={author()}
+              onInput={(e) => setAuthor(e.currentTarget.value)}
+            />
+          </FormField>
+          <FormField label="摘要">
+            <input
+              type="text"
+              class="input input-bordered input-sm w-full"
+              placeholder="一句话摘要"
+              value={digest()}
+              onInput={(e) => setDigest(e.currentTarget.value)}
+            />
+          </FormField>
         </div>
-        <div class="mb-2 flex items-end gap-2 rounded-lg border border-base-300 bg-base-200/40 p-3">
-          <select class="select select-bordered select-sm" value={fileKind()} onChange={(e) => setFileKind(e.currentTarget.value as MaterialKind)}>
-            <option value="image">图片</option>
-            <option value="voice">语音</option>
-            <option value="video">视频</option>
-          </select>
-          <input type="text" class="input input-bordered input-sm flex-1" placeholder="微信永久素材 MediaID" value={fileMediaId()} onInput={(e) => setFileMediaId(e.currentTarget.value)} required />
-          <input type="text" class="input input-bordered input-sm flex-1" placeholder="URL" value={fileUrl()} onInput={(e) => setFileUrl(e.currentTarget.value)} />
-          <button type="button" class="btn btn-primary btn-sm" onClick={onAddFile}>
-            添加素材
-          </button>
-        </div>
-        <DataTable
-          columns={fileColumns}
-          rows={files.items()}
-          rowKey={(f) => f.id}
-          total={files.total()}
-          page={files.page()}
-          totalPages={files.totalPages()}
-          loading={files.loading()}
-          error={files.error()}
-          emptyText="暂无素材文件"
-          onPageChange={(p) => void files.reload(p)}
-          actions={(f) => (
-            <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => onDeleteFile(f)}>
-              删除
+        <FormField label="正文内容">
+          <RichEditor value={content()} onInput={setContent} placeholder="支持加粗、标题、列表、链接与图片插入" />
+        </FormField>
+        <FormField label="封面图">
+          <div class="flex flex-wrap items-center gap-3">
+            <Show when={thumbUrl()}>
+              <img src={thumbUrl()} alt="封面" class="h-16 w-16 rounded border object-cover" />
+            </Show>
+            <button type="button" class="btn btn-outline btn-sm" onClick={() => setThumbPicker(true)}>
+              选择图片
             </button>
-          )}
-        />
-      </div>
+            <button type="button" class="btn btn-ghost btn-sm" onClick={() => setThumbUrl('')} disabled={!thumbUrl()}>
+              清除
+            </button>
+            <input
+              type="text"
+              class="input input-bordered input-sm flex-1"
+              placeholder="/uploads/... 或 https://..."
+              value={thumbUrl()}
+              onInput={(e) => setThumbUrl(e.currentTarget.value)}
+            />
+          </div>
+          <ImageManager
+            open={thumbPicker()}
+            multiple={false}
+            max={1}
+            onSelect={(items) => items[0] && setThumbUrl(publicFileUrl(items[0]))}
+            onClose={() => setThumbPicker(false)}
+          />
+        </FormField>
+        <FormField label="跳转链接">
+          <input
+            type="text"
+            class="input input-bordered input-sm w-full"
+            placeholder="https://..."
+            value={linkUrl()}
+            onInput={(e) => setLinkUrl(e.currentTarget.value)}
+          />
+        </FormField>
+      </FormModal>
+
+      <FormModal
+        open={fileOpen()}
+        title="新增素材文件"
+        description="关联微信永久素材：先在微信后台上传并复制 MediaID"
+        onSubmit={onAddFile}
+        onClose={() => setFileOpen(false)}
+        submitting={fileSaving()}
+        error={fileError()}
+        submitLabel="添加"
+        size="sm"
+      >
+        <FormField label="类型" required>
+          <select
+            class="select select-bordered select-sm w-full"
+            value={fileKind()}
+            onChange={(e) => setFileKind(e.currentTarget.value as MaterialKind)}
+          >
+            <For each={KIND_OPTIONS}>{(k) => <option value={k.value}>{k.label}</option>}</For>
+          </select>
+        </FormField>
+        <FormField label="微信永久素材 MediaID" required>
+          <input
+            type="text"
+            class="input input-bordered input-sm w-full font-mono"
+            placeholder="例如：MEDIA_ID_xxxxx"
+            value={fileMediaId()}
+            onInput={(e) => setFileMediaId(e.currentTarget.value)}
+          />
+        </FormField>
+        <FormField label="素材 URL" hint="微信返回的访问地址，可选">
+          <input
+            type="text"
+            class="input input-bordered input-sm w-full"
+            placeholder="https://..."
+            value={fileUrl()}
+            onInput={(e) => setFileUrl(e.currentTarget.value)}
+          />
+        </FormField>
+      </FormModal>
     </div>
   );
 }
-
 export default Materials;

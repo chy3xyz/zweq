@@ -1,6 +1,7 @@
 import { createEffect, createSignal, Show } from 'solid-js';
 
 import { type AuthUser, createUser, updateUser } from '#ui/api';
+import FormField from '#ui/components/FormField';
 import FormModal from '#ui/components/FormModal';
 
 export type UserFormTarget = 'create' | 'edit';
@@ -69,58 +70,53 @@ function UserFormModal(props: Props) {
     <FormModal
       open={props.open}
       title={props.mode === 'create' ? '新建用户' : `编辑用户 #${props.user?.id ?? ''}`}
+      description={props.mode === 'create' ? '创建后用户需通过邮箱验证登录' : undefined}
       onSubmit={onSubmit}
       onClose={props.onClose}
       submitting={submitting()}
       error={error()}
       submitLabel="保存"
     >
-      <label class="form-control w-full">
-        <span class="label-text mb-1">姓名</span>
+      <FormField label="姓名" required>
         <input
           type="text"
-          class="input input-bordered w-full"
+          class="input input-bordered input-sm w-full"
           value={name()}
           onInput={(e) => setName(e.currentTarget.value)}
-          required
+          placeholder="用户姓名"
         />
-      </label>
-      <label class="form-control w-full">
-        <span class="label-text mb-1">邮箱</span>
+      </FormField>
+      <FormField label="邮箱" required>
         <input
           type="email"
-          class="input input-bordered w-full"
+          class="input input-bordered input-sm w-full"
           value={email()}
           onInput={(e) => setEmail(e.currentTarget.value)}
-          required
+          placeholder="name@example.com"
         />
-      </label>
+      </FormField>
       <Show when={props.mode === 'create'}>
-        <label class="form-control w-full">
-          <span class="label-text mb-1">初始密码</span>
+        <FormField label="初始密码" required hint="至少 8 位，建议字母 + 数字组合">
           <input
             type="password"
-            class="input input-bordered w-full"
-            placeholder="至少 8 位"
+            class="input input-bordered input-sm w-full"
+            placeholder="••••••••"
             value={password()}
             onInput={(e) => setPassword(e.currentTarget.value)}
             minlength={8}
-            required
           />
-        </label>
-        <label class="form-control w-full">
-          <span class="label-text mb-1">租户 ID</span>
+        </FormField>
+        <FormField label="租户" required hint="用户数据归属的租户 ID">
           <input
             type="number"
-            class="input input-bordered input-sm"
+            class="input input-bordered input-sm w-full"
             value={tenantId()}
             onInput={(e) => setTenantId(Number(e.currentTarget.value) || 1)}
             min={1}
-            required
           />
-        </label>
+        </FormField>
       </Show>
-      <div class="flex gap-8">
+      <div class="flex gap-8 pt-1">
         <label class="flex cursor-pointer items-center gap-2">
           <input
             type="checkbox"
@@ -128,7 +124,7 @@ function UserFormModal(props: Props) {
             checked={admin()}
             onChange={(e) => setAdmin(e.currentTarget.checked)}
           />
-          <span class="label-text">管理员</span>
+          <span class="text-sm">管理员</span>
         </label>
         <Show when={props.mode === 'edit'}>
           <label class="flex cursor-pointer items-center gap-2">
@@ -138,7 +134,7 @@ function UserFormModal(props: Props) {
               checked={verified()}
               onChange={(e) => setVerified(e.currentTarget.checked)}
             />
-            <span class="label-text">已验证</span>
+            <span class="text-sm">已验证</span>
           </label>
         </Show>
       </div>

@@ -45,6 +45,7 @@ const graph = zent.codegen.graph.buildGraph(&.{
     user_model.EmailVerification,
     task_model.Task,
     file_model.File,
+    file_model.UploadGroup,
     notify_model.Notification,
     audit_model.AuditLog,
 });

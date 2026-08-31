@@ -20,11 +20,12 @@ pub const FileService = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     store: *persist.FileStore,
+    group_store: *persist.GroupStore,
     upload_dir: []const u8,
     max_bytes: usize,
 
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, store: *persist.FileStore, upload_dir: []const u8, max_bytes: usize) FileService {
-        return .{ .allocator = allocator, .io = io, .store = store, .upload_dir = upload_dir, .max_bytes = max_bytes };
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, store: *persist.FileStore, group_store: *persist.GroupStore, upload_dir: []const u8, max_bytes: usize) FileService {
+        return .{ .allocator = allocator, .io = io, .store = store, .group_store = group_store, .upload_dir = upload_dir, .max_bytes = max_bytes };
     }
 
     pub fn ensureDir(self: *FileService) !void {
@@ -58,7 +59,7 @@ pub const FileService = struct {
 
     /// Persist raw bytes to disk and record metadata. `filename` is the
     /// user-facing name; the on-disk name is a generated storage key.
-    pub fn save(self: *FileService, uploader_id: i64, tenant_id: i64, filename: []const u8, mime: []const u8, data: []const u8) !FileRow {
+    pub fn save(self: *FileService, uploader_id: i64, tenant_id: i64, group_id: i64, filename: []const u8, mime: []const u8, data: []const u8) !FileRow {
         if (data.len > self.max_bytes) return error.FileTooLarge;
         if (!validMime(mime)) return error.InvalidMime;
         try self.ensureDir();
@@ -75,7 +76,7 @@ pub const FileService = struct {
         file.close(self.io);
 
         const now = wallNow(self.io);
-        const id = self.store.create(filename, key, mime, @intCast(data.len), uploader_id, tenant_id, now) catch |err| {
+        const id = self.store.create(filename, key, mime, @intCast(data.len), uploader_id, tenant_id, group_id, now) catch |err| {
             // Roll back the orphaned disk file on metadata failure.
             std.Io.Dir.cwd().deleteFile(self.io, path) catch {};
             return err;
@@ -99,8 +100,35 @@ pub const FileService = struct {
         return .{ .row = row, .bytes = bytes };
     }
 
-    pub fn list(self: *FileService, page: usize, page_size: usize, uploader_id: ?i64, tenant_id: ?i64, sort_col: ?[]const u8, sort_desc: bool) !FileListResult {
-        return self.store.list(page, page_size, uploader_id, tenant_id, sort_col, sort_desc);
+    pub fn list(self: *FileService, page: usize, page_size: usize, uploader_id: ?i64, tenant_id: ?i64, group_id: ?i64, mime_prefix: ?[]const u8, sort_col: ?[]const u8, sort_desc: bool) !FileListResult {
+        return self.store.list(page, page_size, uploader_id, tenant_id, group_id, mime_prefix, sort_col, sort_desc);
+    }
+
+    // ── Upload groups (file-manager categories) ──
+
+    pub fn createGroup(self: *FileService, name: []const u8, group_type: []const u8, sort: i64, tenant_id: i64) !i64 {
+        const now = wallNow(self.io);
+        return self.group_store.create(name, group_type, sort, tenant_id, now);
+    }
+
+    pub fn listGroups(self: *FileService, tenant_id: i64) ![]persist.GroupRow {
+        return self.group_store.list(tenant_id);
+    }
+
+    pub fn getGroup(self: *FileService, id: i64) !?persist.GroupRow {
+        return self.group_store.getById(id);
+    }
+
+    pub fn updateGroup(self: *FileService, id: i64, name: []const u8, sort: i64) !void {
+        return self.group_store.update(id, name, sort);
+    }
+
+    pub fn deleteGroup(self: *FileService, id: i64) !void {
+        return self.group_store.delete(id);
+    }
+
+    pub fn countGroupFiles(self: *FileService, group_id: i64) !i64 {
+        return self.group_store.countFiles(group_id);
     }
 
     pub fn get(self: *FileService, id: i64) !?FileRow {

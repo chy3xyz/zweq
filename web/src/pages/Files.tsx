@@ -17,7 +17,7 @@ function Files() {
   const [uploading, setUploading] = createSignal(false);
   const [success, setSuccess] = createSignal<string | null>(null);
 
-  const paged = usePaged<FileItem>((page, pageSize) => listFiles(page, pageSize), PAGE_SIZE);
+  const paged = usePaged<FileItem>((page, pageSize) => listFiles({ page, pageSize }), PAGE_SIZE);
 
   const onUpload = async (e: Event) => {
     const input = e.currentTarget as HTMLInputElement;
@@ -95,7 +95,7 @@ function Files() {
               type="button"
               class="btn btn-ghost btn-xs"
               onClick={() => {
-                downloadFile(file.id, file.name).catch((err) => window.alert(toApiError(err).message));
+                downloadFile(file.id, file.name).catch((err: unknown) => window.alert(toApiError(err).message));
               }}
             >
               下载

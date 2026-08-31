@@ -20,6 +20,7 @@ export default defineConfig({
     port: 3001,
     proxy: {
       '/api': 'http://127.0.0.1:8000',
+      '/uploads': 'http://127.0.0.1:8000',
     },
   },
   resolve: {

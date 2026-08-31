@@ -10,6 +10,9 @@ import {
   type ShopProductItem,
 } from '#ui/api';
 import BaseModal from '#ui/components/BaseModal';
+import ImageManager from '#ui/components/ImageManager';
+import RichEditor from '#ui/components/RichEditor';
+import { fileUrl } from '#ui/api/file/types';
 import { fenToYuan, yuanToFen } from '#ui/utils/money';
 
 export type ShopProductFormMode = 'create' | 'edit';
@@ -32,6 +35,7 @@ function ShopProductFormModal(props: Props) {
   const [stock, setStock] = createSignal(0);
   const [image, setImage] = createSignal('');
   const [content, setContent] = createSignal('');
+  const [coverPicker, setCoverPicker] = createSignal(false);
   const [status, setStatus] = createSignal(1);
   const [submitting, setSubmitting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
@@ -183,22 +187,36 @@ function ShopProductFormModal(props: Props) {
             onInput={(e) => setStock(Number(e.currentTarget.value))}
           />
         </label>
-        <label class="form-control">
-          <span class="label-text mb-1">封面图 URL</span>
-          <input
-            class="input input-bordered"
-            value={image()}
-            onInput={(e) => setImage(e.currentTarget.value)}
-            placeholder="https://..."
+        <div class="form-control md:col-span-2">
+          <span class="label-text mb-1">封面图</span>
+          <div class="flex flex-wrap items-center gap-3">
+            <Show when={image()}>
+              <img src={image()} alt="封面" class="h-16 w-16 rounded border object-cover" />
+            </Show>
+            <button type="button" class="btn btn-outline btn-sm" onClick={() => setCoverPicker(true)}>
+              选择图片
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" onClick={() => setImage('')} disabled={!image()}>
+              清除
+            </button>
+            <input
+              class="input input-bordered input-sm flex-1"
+              value={image()}
+              onInput={(e) => setImage(e.currentTarget.value)}
+              placeholder="/uploads/... 或 https://..."
+            />
+          </div>
+          <ImageManager
+            open={coverPicker()}
+            multiple={false}
+            max={1}
+            onSelect={(items) => items[0] && setImage(fileUrl(items[0]))}
+            onClose={() => setCoverPicker(false)}
           />
-        </label>
+        </div>
         <label class="form-control md:col-span-2">
           <span class="label-text mb-1">详情描述</span>
-          <textarea
-            class="textarea textarea-bordered min-h-24"
-            value={content()}
-            onInput={(e) => setContent(e.currentTarget.value)}
-          />
+          <RichEditor value={content()} onInput={setContent} placeholder="支持加粗、标题、列表、链接与图片插入" />
         </label>
         <div class="flex justify-end gap-2 md:col-span-2">
           <button type="button" class="btn" onClick={props.onClose}>
