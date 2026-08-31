@@ -145,11 +145,17 @@ pub const CouponStore = struct {
         return row.id;
     }
 
-    pub fn getCoupon(self: *CouponStore, id: i64) !?CouponRow {
-        const preds = self.client.coupon.predicates;
-        var entity = (try crud.first(self.client.coupon, .{preds.idEQ(.{ .int = id })})) orelse return null;
+    /// 事务感知读取：传入 `tx.client` 时，读取发生在同一事务内（连接池下
+    /// 事务期间不能再从池里借连接，且事务外读会读到未提交前的状态）。
+    pub fn getCouponOn(self: *CouponStore, client: Client, id: i64) !?CouponRow {
+        const preds = client.coupon.predicates;
+        var entity = (try crud.first(client.coupon, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, CouponInfo, &entity, self.allocator);
         return try self.dupCoupon(entity);
+    }
+
+    pub fn getCoupon(self: *CouponStore, id: i64) !?CouponRow {
+        return self.getCouponOn(self.client, id);
     }
 
     /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
@@ -230,22 +236,32 @@ pub const CouponStore = struct {
         return row.id;
     }
 
-    pub fn getByCode(self: *CouponStore, code: []const u8) !?CouponUserRow {
-        const preds = self.client.coupon_user.predicates;
-        var entity = (try crud.first(self.client.coupon_user, .{preds.codeEQ(.{ .string = code })})) orelse return null;
+    /// 事务感知读取，见 `getCouponOn`。
+    pub fn getByCodeOn(self: *CouponStore, client: Client, code: []const u8) !?CouponUserRow {
+        const preds = client.coupon_user.predicates;
+        var entity = (try crud.first(client.coupon_user, .{preds.codeEQ(.{ .string = code })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, CouponUserInfo, &entity, self.allocator);
         return try self.dupUser(entity);
     }
 
-    pub fn setStatus(self: *CouponStore, id: i64, status: []const u8, now: i64) !void {
-        const preds = self.client.coupon_user.predicates;
-        var upd = self.client.coupon_user.Update();
+    pub fn getByCode(self: *CouponStore, code: []const u8) !?CouponUserRow {
+        return self.getByCodeOn(self.client, code);
+    }
+
+    /// 事务感知写：核销/置状态可并入下单事务，随订单一起提交或回滚。
+    pub fn setStatusOn(_: *CouponStore, client: Client, id: i64, status: []const u8, now: i64) !void {
+        const preds = client.coupon_user.predicates;
+        var upd = client.coupon_user.Update();
         defer upd.deinit();
         _ = try upd.set("status", .{ .string = status });
         _ = try upd.setFieldValue("used_at", now);
         _ = try upd.setFieldValue("updated_at", now);
         _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
         _ = try upd.Save();
+    }
+
+    pub fn setStatus(self: *CouponStore, id: i64, status: []const u8, now: i64) !void {
+        return self.setStatusOn(self.client, id, status, now);
     }
 
     /// `keyword` 同时匹配 openid 与券码；`status` 为空表示不过滤（unused/used/expired）。

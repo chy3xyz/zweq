@@ -249,12 +249,13 @@ test "cloud: manifest install runs migrations (module + SQL)" {
     const module_id = try cloud_svc.installPackage(1, "shop", 0);
     _ = module_id;
 
-    // 迁移表已创建。
+    // 迁移表已创建。注意：连接池下 Rows 独占连接直到 deinit（:memory: 池
+    // max=1），不能用 defer 拖到测试结束——遍历完立即释放，后续查询才借得到。
     const d = env.asDriver();
     var rows = try d.query("SELECT name FROM sqlite_master WHERE type='table' AND name='shop_order'", &.{});
-    defer rows.deinit();
     var row_count: usize = 0;
     while (rows.next() != null) row_count += 1;
+    rows.deinit();
     try std.testing.expectEqual(@as(usize, 1), row_count);
 
     // 模块按 manifest 元数据注册（version 2.0.0）。

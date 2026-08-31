@@ -188,11 +188,17 @@ pub const CatalogStore = struct {
         return row.id;
     }
 
-    pub fn getProduct(self: *CatalogStore, id: i64) !?ShopProductRow {
-        const preds = self.client.shop_product.predicates;
-        var entity = (try crud.first(self.client.shop_product, .{preds.idEQ(.{ .int = id })})) orelse return null;
+    /// 事务感知读取：传入 `tx.client` 时，读取发生在同一事务内（连接池下
+    /// 事务期间不能再从池里借连接，且事务外读会读到未提交前的状态）。
+    pub fn getProductOn(self: *CatalogStore, client: Client, id: i64) !?ShopProductRow {
+        const preds = client.shop_product.predicates;
+        var entity = (try crud.first(client.shop_product, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, ShopProductInfo, &entity, self.allocator);
         return try self.dupProduct(entity);
+    }
+
+    pub fn getProduct(self: *CatalogStore, id: i64) !?ShopProductRow {
+        return self.getProductOn(self.client, id);
     }
 
     pub fn updateProduct(self: *CatalogStore, id: i64, p: anytype, now: i64) !bool {
@@ -294,11 +300,16 @@ pub const CatalogStore = struct {
         return out;
     }
 
-    pub fn getSku(self: *CatalogStore, id: i64) !?ShopSkuRow {
-        const preds = self.client.shop_product_sku.predicates;
-        var entity = (try crud.first(self.client.shop_product_sku, .{preds.idEQ(.{ .int = id })})) orelse return null;
+    /// 事务感知读取，见 `getProductOn`。
+    pub fn getSkuOn(self: *CatalogStore, client: Client, id: i64) !?ShopSkuRow {
+        const preds = client.shop_product_sku.predicates;
+        var entity = (try crud.first(client.shop_product_sku, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, ShopProductSkuInfo, &entity, self.allocator);
         return try self.dupSku(entity);
+    }
+
+    pub fn getSku(self: *CatalogStore, id: i64) !?ShopSkuRow {
+        return self.getSkuOn(self.client, id);
     }
 
     pub fn deleteSkusByProduct(self: *CatalogStore, product_id: i64) !void {

@@ -301,10 +301,19 @@ pub const ShopService = struct {
 
         // 事务：扣库存 + 建单 + 明细 原子提交（SQLite/Postgres 均支持）；失败整体回滚。
         var tx = zent.codegen.beginTx(schema.infos, self.store.client) catch return error.Unexpected;
-        defer tx.deinit();
+        // 提交后须立即归还池连接（连接在 deinit 时才 release），否则提交后的
+        // 余额支付/订单明细查询在 max_connections=1（:memory:）下必然耗尽。
+        // 错误路径先显式回滚再释放（池层 rollback 幂等），避免依赖 deinit 兜底。
+        var tx_closed = false;
+        defer if (!tx_closed) {
+            tx.rollback() catch {};
+            tx.deinit();
+        };
         for (items) |it| {
             const sp = tx.client.shop_product_sku.predicates;
-            const sku_opt = self.store.catalog.getSku(it.sku_id) catch return error.Unexpected;
+            // 事务内读写必须走 tx.client：连接池下事务独占借用的连接，
+            // 再从池里借会 PoolExhausted；即便借得到，也读不到本事务未提交的写。
+            const sku_opt = self.store.catalog.getSkuOn(tx.client, it.sku_id) catch return error.Unexpected;
             const sku = sku_opt orelse return error.NotFound;
             defer sku.free(self.allocator);
             const guard = std.fmt.allocPrint(self.allocator, "stock >= {d}", .{it.quantity}) catch return error.Unexpected;
@@ -327,22 +336,23 @@ pub const ShopService = struct {
         }
 
         // 优惠券减免：code 可选，校验归属/未用/门槛后减免。
+        // 全部走 tx.client：核销标记必须随订单事务提交/回滚，否则回滚时券白扣。
         var discount: i64 = 0;
         if (coupon_code.len > 0) {
             if (self.coupon_store) |cs| {
-                const u_opt = cs.getByCode(coupon_code) catch return error.Unexpected;
+                const u_opt = cs.getByCodeOn(tx.client, coupon_code) catch return error.Unexpected;
                 const u = u_opt orelse return error.InvalidInput;
                 defer u.free(self.allocator);
                 if (!std.mem.eql(u8, u.openid, openid)) return error.InvalidInput;
                 if (!std.mem.eql(u8, u.status, "unused")) return error.InvalidInput;
-                const c_opt = cs.getCoupon(u.coupon_id) catch return error.Unexpected;
+                const c_opt = cs.getCouponOn(tx.client, u.coupon_id) catch return error.Unexpected;
                 const c = c_opt orelse return error.InvalidInput;
                 defer c.free(self.allocator);
                 const coupon_min = std.fmt.parseInt(i64, c.min_amount, 10) catch return error.Unexpected;
                 const coupon_amount = std.fmt.parseInt(i64, c.amount, 10) catch return error.Unexpected;
                 if (coupon_min > 0 and total < coupon_min) return error.InvalidInput;
                 discount = @min(coupon_amount, total);
-                cs.setStatus(u.id, "used", self.now()) catch return error.Unexpected;
+                cs.setStatusOn(tx.client, u.id, "used", self.now()) catch return error.Unexpected;
             }
         }
         const pay_amount = total - discount;
@@ -395,10 +405,10 @@ pub const ShopService = struct {
         };
 
         for (items) |it| {
-            const sku_opt = self.store.catalog.getSku(it.sku_id) catch return error.Unexpected;
+            const sku_opt = self.store.catalog.getSkuOn(tx.client, it.sku_id) catch return error.Unexpected;
             const sku = sku_opt orelse return error.NotFound;
             defer sku.free(self.allocator);
-            const p_opt = self.store.catalog.getProduct(it.product_id) catch return error.Unexpected;
+            const p_opt = self.store.catalog.getProductOn(tx.client, it.product_id) catch return error.Unexpected;
             const p = p_opt orelse return error.NotFound;
             defer p.free(self.allocator);
             const sku_price = std.fmt.parseInt(i64, sku.price, 10) catch return error.Unexpected;
@@ -427,8 +437,10 @@ pub const ShopService = struct {
             defer zent.codegen.deinitEntity(schema.infos, persist.ShopOrderProductInfo, &op_row, self.allocator);
         }
 
-        // 事务提交（原子）。
+        // 事务提交（原子）。提交后马上归还池连接，后续查询才借得到。
         tx.commit() catch return error.Unexpected;
+        tx.deinit();
+        tx_closed = true;
 
         // 余额支付：pay_type=balance → 扣买家钱包（openid → fan_id），成功即标记支付。
         if (std.mem.eql(u8, pay_type, "balance")) {
