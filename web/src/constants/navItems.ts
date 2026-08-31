@@ -46,7 +46,6 @@ export const ROUTE_PERMISSIONS: Record<string, string> = {
   '/audit-logs': 'audit:read',
   '/mail-templates': 'mail_template:read',
   '/ai-admin': 'ai:read',
-  '/ai-chat': 'ai:read',
   '/lucky-draw': 'lucky_draw:read',
   '/member-card': 'member_card:read',
   [ROUTE_PATH.aiChat]: 'ai:read',

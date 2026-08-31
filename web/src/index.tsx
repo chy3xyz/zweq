@@ -1,4 +1,5 @@
 import {
+  Navigate,
   Route,
   Router,
   useLocation,
@@ -397,6 +398,8 @@ if (root) {
               </AdminGate>
             )}
           />
+          {/* Alias: legacy /ai/admin path redirects to the canonical /ai-admin. */}
+          <Route path="/ai/admin" component={() => <Navigate href={ROUTE_PATH.aiAdmin} />} />
           <Route
             path={ROUTE_PATH.mailTemplates}
             component={() => (
