@@ -16,15 +16,16 @@ import {
   type ReplyType,
   type RuleItem,
 } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
+import { useAccountId } from '#ui/hooks/useAccountId';
 import { usePaged } from '#ui/hooks/usePaged';
 import { formatDateTime } from '#ui/utils';
 
 const PAGE_SIZE = 20;
 
 function Rules() {
-  const accounts = useAccounts();
+  const { accountId, onAccountChange } = useAccountId();
   const [success, setSuccess] = createSignal<string | null>(null);
   const [nameInput, setNameInput] = createSignal('');
   const [creating, setCreating] = createSignal(false);
@@ -41,14 +42,15 @@ function Rules() {
   const [newsDesc, setNewsDesc] = createSignal('');
   const [newsUrl, setNewsUrl] = createSignal('');
 
-  const accountId = () => accounts.selected() ?? 0;
-  const paged = usePaged<RuleItem>((page, pageSize) => listRules(page, pageSize, accountId()), PAGE_SIZE);
+  const paged = usePaged<RuleItem>(
+    (page, pageSize) => listRules(page, pageSize, accountId()),
+    PAGE_SIZE,
+    accountId,
+  );
 
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
+  onAccountChange(() => {
     setExpanded(null);
-    void paged.reload(1);
-  };
+  });
 
   const onCreate = async (e: SubmitEvent) => {
     e.preventDefault();
@@ -167,22 +169,7 @@ function Rules() {
         <p class="text-sm text-base-content/60">关键词规则 — 未命中走 AI 自动回复或默认回复</p>
       </div>
 
-      <label class="form-control w-full max-w-xs">
-        <span class="label-text mb-1">选择账号</span>
-        <select
-          class="select select-bordered select-sm"
-          value={accountId()}
-          onChange={(e) => onAccountChange(Number(e.currentTarget.value))}
-        >
-          <For each={accounts.accounts()}>
-            {(a) => (
-              <option value={a.id}>
-                {a.name}（{a.id}）
-              </option>
-            )}
-          </For>
-        </select>
-      </label>
+      <AccountRequiredBanner />
 
       <form onSubmit={onCreate} class="flex items-end gap-2">
         <label class="form-control w-full max-w-xs">

@@ -49,17 +49,23 @@ pub const MemberCardService = struct {
         return zigmodu.time.wallClockSeconds(self.io);
     }
 
-    pub fn createLevel(self: *MemberCardService, tenant_id: i64, account_id: i64, name: []const u8, level: i64, discount: i64, points_ratio: i64, threshold: i64) MemberCardError!i64 {
+    pub fn createLevel(self: *MemberCardService, tenant_id: i64, account_id: i64, name: []const u8, level: i64, discount: i64, points_ratio: i64, threshold: i64, status: i64) MemberCardError!i64 {
         if (std.mem.trim(u8, name, " \t").len == 0 or discount <= 0 or discount > 1000) return error.InvalidInput;
-        return self.store.createLevel(tenant_id, account_id, name, level, discount, points_ratio, threshold, self.now()) catch error.Unexpected;
+        return self.store.createLevel(tenant_id, account_id, name, level, discount, points_ratio, threshold, status, self.now()) catch error.Unexpected;
     }
 
-    pub fn listLevels(self: *MemberCardService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) MemberCardError!LevelListResult {
-        return self.store.listLevels(page, page_size, tenant_id, account_id) catch error.Unexpected;
+    /// `status` 为 -1 表示不过滤；0 停用 / 1 启用。
+    pub fn listLevels(self: *MemberCardService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) MemberCardError!LevelListResult {
+        return self.store.listLevels(page, page_size, tenant_id, account_id, keyword, status) catch error.Unexpected;
     }
 
-    pub fn listAccounts(self: *MemberCardService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) MemberCardError!persist.MemberAccountListResult {
-        return self.store.listAccounts(page, page_size, tenant_id, account_id) catch error.Unexpected;
+    /// 启停等级：1 启用 / 0 停用。已开卡会员的等级不受影响。
+    pub fn setLevelStatus(self: *MemberCardService, id: i64, status: i64) MemberCardError!bool {
+        return self.store.setLevelStatus(id, status, self.now()) catch error.Unexpected;
+    }
+
+    pub fn listAccounts(self: *MemberCardService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8) MemberCardError!persist.MemberAccountListResult {
+        return self.store.listAccounts(page, page_size, tenant_id, account_id, keyword) catch error.Unexpected;
     }
 
     /// 开卡：openid 一卡唯一；自动匹配最低等级（threshold 最小的等级）。
@@ -86,6 +92,8 @@ pub const MemberCardService = struct {
         const preds = self.store.client.member_card_level.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        // 停用等级不再匹配给新开卡会员（已有会员保留原等级）。
+        _ = try q.Where(.{preds.statusEQ(.{ .int = 1 })});
         _ = try q.OrderBy(&[_]zent.sql.Order{ zent.sql.OrderAsc("threshold"), zent.sql.OrderAsc("level") });
         _ = q.Limit(1);
         const entity_opt = try q.First();
@@ -101,6 +109,7 @@ pub const MemberCardService = struct {
             .discount = entity.discount,
             .points_ratio = entity.points_ratio,
             .threshold = entity.threshold,
+            .status = entity.status,
             .created_at = entity.created_at orelse 0,
         };
     }

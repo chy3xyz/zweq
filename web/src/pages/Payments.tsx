@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 
 import {
   completeRecharge,
@@ -11,31 +11,31 @@ import {
   type OrderItem,
   type WithdrawItem,
 } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
+import { useAccountId } from '#ui/hooks/useAccountId';
 import { usePaged } from '#ui/hooks/usePaged';
 import { formatDateTime } from '#ui/utils';
 
 const PAGE_SIZE = 20;
 
 function Payments() {
-  const accounts = useAccounts();
+  const { accountId, onAccountChange } = useAccountId();
   const [success, setSuccess] = createSignal<string | null>(null);
   const [fanId, setFanId] = createSignal(0);
   const [amount, setAmount] = createSignal(0);
   const [walletBalance, setWalletBalance] = createSignal<number | null>(null);
 
-  const accountId = () => accounts.selected() ?? 0;
-  const orders = usePaged<OrderItem>((page, pageSize) => listOrders(page, pageSize, accountId()), PAGE_SIZE);
-  const withdraws = usePaged<WithdrawItem>((page, pageSize) => listWithdraws(page, pageSize, accountId()), PAGE_SIZE);
-
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
-    setWalletBalance(null);
-    void orders.reload(1);
-    void withdraws.reload(1);
-    void refreshWallet(id);
-  };
+  const orders = usePaged<OrderItem>(
+    (page, pageSize) => listOrders(page, pageSize, accountId()),
+    PAGE_SIZE,
+    accountId,
+  );
+  const withdraws = usePaged<WithdrawItem>(
+    (page, pageSize) => listWithdraws(page, pageSize, accountId()),
+    PAGE_SIZE,
+    accountId,
+  );
 
   const refreshWallet = async (id: number) => {
     if (id === 0) return;
@@ -46,6 +46,11 @@ function Payments() {
       setWalletBalance(0);
     }
   };
+
+  onAccountChange(() => {
+    setWalletBalance(null);
+    void refreshWallet(accountId());
+  });
 
   const onRecharge = async (e: SubmitEvent) => {
     e.preventDefault();
@@ -114,18 +119,7 @@ function Payments() {
         <p class="text-sm text-base-content/60">会员充值（当前 channel=mock，下单即入账）与提现</p>
       </div>
 
-      <label class="form-control w-full max-w-xs">
-        <span class="label-text mb-1">选择账号</span>
-        <select class="select select-bordered select-sm" value={accountId()} onChange={(e) => onAccountChange(Number(e.currentTarget.value))}>
-          <For each={accounts.accounts()}>
-            {(a) => (
-              <option value={a.id}>
-                {a.name}（{a.id}）
-              </option>
-            )}
-          </For>
-        </select>
-      </label>
+      <AccountRequiredBanner />
 
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <form onSubmit={onRecharge} class="rounded-lg border border-base-300 bg-base-200/40 p-4 space-y-3">

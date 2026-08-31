@@ -10,15 +10,16 @@ import {
   type BindingItem,
   type ModuleItem,
 } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
+import { useAccountId } from '#ui/hooks/useAccountId';
 import { usePaged } from '#ui/hooks/usePaged';
 import { formatDateTime } from '#ui/utils';
 
 const PAGE_SIZE = 20;
 
 function Modules() {
-  const accounts = useAccounts();
+  const { accountId, onAccountChange } = useAccountId();
   const [success, setSuccess] = createSignal<string | null>(null);
   const [name, setName] = createSignal('');
   const [title, setTitle] = createSignal('');
@@ -27,7 +28,6 @@ function Modules() {
   const [moduleInput, setModuleInput] = createSignal('');
 
   const paged = usePaged<ModuleItem>((page, pageSize) => listModules(page, pageSize), PAGE_SIZE);
-  const accountId = () => accounts.selected() ?? 0;
 
   const reloadBindings = async (id: number) => {
     if (id === 0) return;
@@ -38,10 +38,9 @@ function Modules() {
     }
   };
 
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
-    void reloadBindings(id);
-  };
+  onAccountChange(() => {
+    void reloadBindings(accountId());
+  });
 
   const onRegister = async (e: SubmitEvent) => {
     e.preventDefault();
@@ -96,6 +95,8 @@ function Modules() {
         <p class="text-sm text-base-content/60">内置模块注册表 + 账号绑定（微擎 addon 安装的 Zig 等价物）</p>
       </div>
 
+      <AccountRequiredBanner />
+
       <form onSubmit={onRegister} class="flex items-end gap-2">
         <label class="form-control">
           <span class="label-text mb-1">模块名</span>
@@ -137,15 +138,6 @@ function Modules() {
         <div class="rounded-lg border border-base-300 bg-base-200/40 p-4 space-y-3">
           <div>
             <span class="text-sm font-semibold">账号模块绑定</span>
-            <select class="select select-bordered select-sm mt-2 w-full" value={accountId()} onChange={(e) => onAccountChange(Number(e.currentTarget.value))}>
-              <For each={accounts.accounts()}>
-                {(a) => (
-                  <option value={a.id}>
-                    {a.name}（{a.id}）
-                  </option>
-                )}
-              </For>
-            </select>
           </div>
           <div class="flex items-end gap-2">
             <input type="text" class="input input-bordered input-sm flex-1" placeholder="模块名" value={moduleInput()} onInput={(e) => setModuleInput(e.currentTarget.value)} />

@@ -15,10 +15,11 @@ const ProductDto = struct {
     name: []const u8,
     points: i64,
     stock: i64,
+    status: i64,
 };
 
 fn toProductDto(row: service.PointsProductRow) ProductDto {
-    return .{ .id = row.id, .account_id = row.account_id, .name = row.name, .points = row.points, .stock = row.stock };
+    return .{ .id = row.id, .account_id = row.account_id, .name = row.name, .points = row.points, .stock = row.stock, .status = row.status };
 }
 
 const ProductReq = struct {
@@ -26,6 +27,7 @@ const ProductReq = struct {
     name: []const u8,
     points: i64,
     stock: i64,
+    status: i64 = 1,
 };
 
 const RedeemReq = struct {
@@ -53,14 +55,14 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "points/products", .handler = http.wrapHandler(Self, listProducts), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "points/products", .handler = http.wrapHandler(Self, createProduct), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "points/products/{id}", .handler = http.wrapHandler(Self, getProduct), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "points/products/{id}", .handler = http.wrapHandler(Self, updateProduct), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "points/products/{id}", .handler = http.wrapHandler(Self, deleteProduct), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "points/redeem", .handler = http.wrapHandler(Self, redeem), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "points/adjust", .handler = http.wrapHandler(Self, adjust), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "points/orders", .handler = http.wrapHandler(Self, listOrders), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "points/products", .handler = http.wrapHandler(Self, listProducts), .meta = .{ .permission = "points:read" } },
+            .{ .method = .POST, .path = "points/products", .handler = http.wrapHandler(Self, createProduct), .meta = .{ .permission = "points:write" } },
+            .{ .method = .GET, .path = "points/products/{id}", .handler = http.wrapHandler(Self, getProduct), .meta = .{ .permission = "points:read" } },
+            .{ .method = .PUT, .path = "points/products/{id}", .handler = http.wrapHandler(Self, updateProduct), .meta = .{ .permission = "points:write" } },
+            .{ .method = .DELETE, .path = "points/products/{id}", .handler = http.wrapHandler(Self, deleteProduct), .meta = .{ .permission = "points:write" } },
+            .{ .method = .POST, .path = "points/redeem", .handler = http.wrapHandler(Self, redeem), .meta = .{ .permission = "points:write" } },
+            .{ .method = .POST, .path = "points/adjust", .handler = http.wrapHandler(Self, adjust), .meta = .{ .permission = "points:write" } },
+            .{ .method = .GET, .path = "points/orders", .handler = http.wrapHandler(Self, listOrders), .meta = .{ .permission = "points:read" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
@@ -104,8 +106,10 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的 account_id");
                 return;
             };
+            const keyword = ctx.queryStr("keyword", "");
+            const status = ctx.queryInt(i64, "status", -1);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listProducts(params.page, params.page_size, tid, account_id) catch {
+            var result = self.svc.listProducts(params.page, params.page_size, tid, account_id, keyword, status) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -124,7 +128,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer ctx.allocator.free(req.name);
-            const id = self.svc.createProduct(tid, req.account_id, req.name, req.points, req.stock) catch |err| {
+            const id = self.svc.createProduct(tid, req.account_id, req.name, req.points, req.stock, req.status) catch |err| {
                 const msg = switch (err) {
                     error.InvalidName => "商品名不能为空",
                     error.InvalidPoints => "积分须大于 0",
@@ -166,12 +170,12 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的商品 ID");
                 return;
             };
-            const req = ctx.bindJson(struct { name: []const u8, points: i64, stock: i64 }) catch {
+            const req = ctx.bindJson(struct { name: []const u8, points: i64, stock: i64, status: i64 = 1 }) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;
             };
             defer ctx.allocator.free(req.name);
-            self.svc.updateProduct(id, req.name, req.points, req.stock) catch |err| {
+            self.svc.updateProduct(id, req.name, req.points, req.stock, req.status) catch |err| {
                 const msg = switch (err) {
                     error.InvalidName => "商品名不能为空",
                     error.InvalidPoints => "积分须大于 0",

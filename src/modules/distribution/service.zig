@@ -68,12 +68,13 @@ pub const DistributionService = struct {
         }
     }
 
-    pub fn listDistributors(self: *DistributionService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) DistributionError!DistributorListResult {
-        return self.store.listDistributors(page, page_size, tenant_id, account_id) catch error.Unexpected;
+    pub fn listDistributors(self: *DistributionService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) DistributionError!DistributorListResult {
+        return self.store.listDistributors(page, page_size, tenant_id, account_id, keyword, status) catch error.Unexpected;
     }
 
-    pub fn listCommissions(self: *DistributionService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) DistributionError!CommissionListResult {
-        return self.store.listCommissions(page, page_size, tenant_id, account_id) catch error.Unexpected;
+    /// `level` 为 -1 表示不过滤（佣金记录的层级字段，非上下架）。
+    pub fn listCommissions(self: *DistributionService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, level: i64) DistributionError!CommissionListResult {
+        return self.store.listCommissions(page, page_size, tenant_id, account_id, keyword, level) catch error.Unexpected;
     }
 
     pub fn getDistributor(self: *DistributionService, tenant_id: i64, account_id: i64, openid: []const u8) DistributionError!?DistributorRow {

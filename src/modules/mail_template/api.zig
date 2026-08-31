@@ -38,8 +38,8 @@ pub fn MailTemplateApi(comptime TemplateServiceT: type, comptime UserService: ty
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "email-templates", .handler = http.wrapHandler(Self, listTemplates), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "email-templates/{code}", .handler = http.wrapHandler(Self, upsertTemplate), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "email-templates", .handler = http.wrapHandler(Self, listTemplates), .meta = .{ .permission = "mail_template:read" } },
+            .{ .method = .PUT, .path = "email-templates/{code}", .handler = http.wrapHandler(Self, upsertTemplate), .meta = .{ .permission = "mail_template:write" } },
         };
 
         pub fn init(svc: *TemplateServiceT, users: *UserService) Self {

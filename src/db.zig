@@ -22,17 +22,37 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
     return struct {
         allocator: std.mem.Allocator,
         kind: DriverKind,
-        sqlite: ?*zent.sql_sqlite.SQLiteDriver = null,
+        sqlite_pool: ?*SqlitePool = null,
+        sqlite_ctx: ?*SqliteCtx = null,
         pg_pool: ?*PgPool = null,
+        pg_ctx: ?*PgCtx = null,
         client: zent.codegen.client.Client(ClientInfos),
 
         const Self = @This();
+
+        const SqlitePool = zent.sql_pool.ConnPool(zent.sql_sqlite.SQLiteDriver);
+        const SqliteCtx = struct { path: []const u8 };
+        fn connectSqlite(ctx: ?*anyopaque, allocator: std.mem.Allocator) anyerror!zent.sql_sqlite.SQLiteDriver {
+            const c: *SqliteCtx = @ptrCast(@alignCast(ctx.?));
+            var driver = try zent.sql_sqlite.SQLiteDriver.open(allocator, c.path);
+            // WAL + 连接池：HTTP 多线程并发查询时单连接会 segfault。
+            _ = try driver.exec("PRAGMA journal_mode=WAL", &.{});
+            _ = try driver.exec("PRAGMA synchronous=NORMAL", &.{});
+            return driver;
+        }
 
         const PgPool = zent.sql_pool.ConnPool(zent.sql_postgres.PostgresDriver);
         const PgCtx = struct { dsn: []const u8 };
         fn connectPg(ctx: ?*anyopaque, allocator: std.mem.Allocator) anyerror!zent.sql_postgres.PostgresDriver {
             const c: *PgCtx = @ptrCast(@alignCast(ctx.?));
             return zent.sql_postgres.PostgresDriver.connect(allocator, c.dsn);
+        }
+
+        pub fn asDriver(self: *const Self) zent.sql_driver.Driver {
+            return switch (self.kind) {
+                .sqlite => self.sqlite_pool.?.asDriver(),
+                .postgres => self.pg_pool.?.asDriver(),
+            };
         }
 
         pub fn open(allocator: std.mem.Allocator, kind: DriverKind, dsn: []const u8) !Self {
@@ -43,15 +63,28 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
             };
             switch (kind) {
                 .sqlite => {
-                    const driver = try allocator.create(zent.sql_sqlite.SQLiteDriver);
-                    errdefer allocator.destroy(driver);
-                    driver.* = try zent.sql_sqlite.SQLiteDriver.open(allocator, dsn);
-                    errdefer driver.close();
+                    // 连接池（mutex + borrow）：与 Postgres 一致，避免并发请求共享单连接崩溃。
+                    const pool = try allocator.create(SqlitePool);
+                    errdefer allocator.destroy(pool);
+                    const ctx = try allocator.create(SqliteCtx);
+                    errdefer allocator.destroy(ctx);
+                    ctx.* = .{ .path = dsn };
+                    const max_conns: usize = if (std.mem.eql(u8, dsn, ":memory:")) 1 else 8;
+                    pool.* = try SqlitePool.init(allocator, .{
+                        .min_connections = 1,
+                        .max_connections = max_conns,
+                        .health_check_on_borrow = false,
+                        .connect_ctx = ctx,
+                        .connectCtx = connectSqlite,
+                    });
+                    errdefer pool.deinit();
+                    const d = pool.asDriver();
                     inline for (MigrateGroups) |gi| {
-                        try zent.sql_schema.migrateSchema(allocator, driver.asDriver(), gi);
+                        try zent.sql_schema.migrateSchema(allocator, d, gi);
                     }
-                    self.sqlite = driver;
-                    self.client = zent.codegen.client.makeClient(ClientInfos, allocator, driver.asDriver());
+                    self.sqlite_ctx = ctx;
+                    self.sqlite_pool = pool;
+                    self.client = zent.codegen.client.makeClient(ClientInfos, allocator, d);
                 },
                 .postgres => {
                     // PG 连接池（mutex + borrow）：每查询独占连接，多线程安全。
@@ -79,6 +112,7 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
                         try zent.sql_schema.migrateSchema(allocator, d, gi);
                     }
                     _ = try d.exec("SELECT pg_advisory_unlock(1515040593)", &.{});
+                    self.pg_ctx = ctx;
                     self.pg_pool = pool;
                     self.client = zent.codegen.client.makeClient(ClientInfos, allocator, d);
                 },
@@ -89,15 +123,21 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
         pub fn deinit(self: *Self) void {
             switch (self.kind) {
                 .sqlite => {
-                    if (self.sqlite) |d| {
-                        d.close();
-                        self.allocator.destroy(d);
+                    if (self.sqlite_pool) |p| {
+                        p.deinit();
+                        self.allocator.destroy(p);
+                    }
+                    if (self.sqlite_ctx) |c| {
+                        self.allocator.destroy(c);
                     }
                 },
                 .postgres => {
                     if (self.pg_pool) |p| {
                         p.deinit();
                         self.allocator.destroy(p);
+                    }
+                    if (self.pg_ctx) |c| {
+                        self.allocator.destroy(c);
                     }
                 },
             }

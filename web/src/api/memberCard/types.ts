@@ -6,6 +6,8 @@ export interface MemberCardLevelItem {
   discount: number;
   points_ratio: number;
   threshold: number;
+  /** 1 = 启用（可自动分配给新开的会员卡），0 = 停用。 */
+  status: number;
   created_at: number;
 }
 
@@ -50,4 +52,5 @@ export interface CreateLevelRequest {
   discount?: number;
   points_ratio?: number;
   threshold?: number;
+  status?: number;
 }

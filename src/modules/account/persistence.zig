@@ -101,7 +101,8 @@ pub const AccountStore = struct {
         return try self.dupAccount(entity);
     }
 
-    pub fn list(self: *AccountStore, page: usize, page_size: usize, tenant_id: ?i64, kind: ?[]const u8) !AccountListResult {
+    /// `keyword` 匹配名称；`status` 为空表示不过滤（active/disabled）。
+    pub fn list(self: *AccountStore, page: usize, page_size: usize, tenant_id: ?i64, kind: ?[]const u8, keyword: []const u8, status: []const u8) !AccountListResult {
         var q = self.client.account.Query();
         defer q.deinit();
         const preds = self.client.account.predicates;
@@ -109,6 +110,8 @@ pub const AccountStore = struct {
         if (kind) |k| {
             if (k.len > 0) _ = try q.Where(.{preds.kindEQ(.{ .string = k })});
         }
+        if (keyword.len > 0) _ = try q.Where(.{preds.nameContainsEscaped(keyword)});
+        if (status.len > 0) _ = try q.Where(.{preds.statusEQ(.{ .string = status })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("id")});
 
         var paged = try q.paged(page, page_size);

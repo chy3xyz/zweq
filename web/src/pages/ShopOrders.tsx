@@ -1,50 +1,93 @@
-import { For, Show, createSignal } from 'solid-js';
+import { For, createSignal } from 'solid-js';
 
-import {
-  listShopOrders,
-  shipShopOrder,
-  toApiError,
-  type ShopOrderItem,
-} from '#ui/api';
+import { listShopOrders, shipShopOrder, type ShopOrderItem } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
+import AdminCrudPage from '#ui/components/AdminCrudPage';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
-import { usePaged } from '#ui/hooks/usePaged';
-import { formatDateTime } from '#ui/utils';
+import FormModal from '#ui/components/FormModal';
+import SearchBar, { type SearchField, type SearchValues } from '#ui/components/SearchBar';
+import { useAccountId, useFeedback, usePaged } from '#ui/hooks';
+import { formatDateTime, intParam } from '#ui/utils';
+import { formatYuan } from '#ui/utils/money';
 
-const PAGE_SIZE = 20;
-const yuan = (fen: number) => (fen / 100).toFixed(2);
 const STATUS: Record<number, { label: string; cls: string }> = {
-  0: { label: '待支付', cls: 'text-warning' },
-  1: { label: '已支付', cls: 'text-info' },
-  2: { label: '已发货', cls: 'text-primary' },
-  3: { label: '已完成', cls: 'text-success' },
-  4: { label: '已取消', cls: 'text-base-content/50' },
+  0: { label: '待支付', cls: 'badge-warning' },
+  1: { label: '已支付', cls: 'badge-info' },
+  2: { label: '已发货', cls: 'badge-primary' },
+  3: { label: '已完成', cls: 'badge-success' },
+  4: { label: '已取消', cls: 'badge-ghost' },
 };
 
-function ShopOrders() {
-  const accounts = useAccounts();
-  const [success, setSuccess] = createSignal<string | null>(null);
-  const [error, setError] = createSignal<string | null>(null);
-  const [statusFilter, setStatusFilter] = createSignal(-1);
+const SEARCH_FIELDS: SearchField[] = [
+  { kind: 'text', key: 'openid', label: '买家 OpenID', placeholder: '精确匹配', width: 'w-64' },
+  {
+    kind: 'select',
+    key: 'status',
+    label: '订单状态',
+    options: [
+      { value: '-1', label: '全部' },
+      { value: '0', label: '待支付' },
+      { value: '1', label: '已支付' },
+      { value: '2', label: '已发货' },
+      { value: '3', label: '已完成' },
+      { value: '4', label: '已取消' },
+    ],
+  },
+];
 
-  const accountId = () => accounts.selected() ?? 0;
+function ShopOrders() {
+  const { accountId, ready, accountName } = useAccountId();
+  const feedback = useFeedback();
+  const [filters, setFilters] = createSignal<SearchValues>({});
+
+  const [detailOrder, setDetailOrder] = createSignal<ShopOrderItem | null>(null);
+  const [shipOrder, setShipOrder] = createSignal<ShopOrderItem | null>(null);
+  const [expressCompany, setExpressCompany] = createSignal('顺丰');
+  const [expressNo, setExpressNo] = createSignal('');
+  const [shipping, setShipping] = createSignal(false);
+  const [shipError, setShipError] = createSignal<string | null>(null);
+
   const paged = usePaged<ShopOrderItem>(
-    (page, pageSize) => listShopOrders(accountId(), page, pageSize, statusFilter()),
-    PAGE_SIZE,
+    (page, pageSize) =>
+      listShopOrders(
+        accountId(),
+        page,
+        pageSize,
+        intParam(filters().status, -1),
+        filters().openid?.trim() || '',
+      ),
+    20,
+    () => [accountId(), filters()],
   );
 
   const columns: Column<ShopOrderItem>[] = [
     { key: 'order_no', title: '订单号', render: (r) => <span class="font-mono text-xs">{r.order_no}</span> },
-    { key: 'openid', title: '买家', render: (r) => <span class="font-mono text-xs">{r.openid}</span> },
+    { key: 'openid', title: '买家 OpenID', render: (r) => <span class="font-mono text-xs">{r.openid}</span> },
     {
       key: 'pay_amount',
       title: '实付',
-      render: (r) => <span class="text-error font-semibold">¥{yuan(r.pay_amount)}</span>,
+      render: (r) => <span class="font-semibold text-error">{formatYuan(r.pay_amount)}</span>,
     },
     {
       key: 'status',
       title: '状态',
-      render: (r) => <span class={STATUS[r.status]?.cls ?? ''}>{STATUS[r.status]?.label ?? r.status}</span>,
+      render: (r) => (
+        <span class={`badge badge-sm ${STATUS[r.status]?.cls ?? 'badge-ghost'}`}>
+          {STATUS[r.status]?.label ?? r.status}
+        </span>
+      ),
+    },
+    {
+      key: 'express',
+      title: '物流',
+      render: (r) =>
+        r.express_no ? (
+          <span class="text-xs">
+            {r.express_company} {r.express_no}
+          </span>
+        ) : (
+          <span class="text-base-content/40">—</span>
+        ),
     },
     {
       key: 'created_at',
@@ -53,59 +96,46 @@ function ShopOrders() {
     },
   ];
 
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
-    void paged.reload(1);
+  const openShip = (row: ShopOrderItem) => {
+    setShipOrder(row);
+    setExpressCompany('顺丰');
+    setExpressNo('');
+    setShipError(null);
   };
 
-  const onShip = async (row: ShopOrderItem) => {
-    const company = prompt('快递公司', '顺丰') ?? '';
-    const no = prompt('快递单号', '') ?? '';
-    if (!no) return;
+  const onShip = async () => {
+    const row = shipOrder();
+    if (!row || shipping()) return;
+    setShipping(true);
+    setShipError(null);
     try {
-      await shipShopOrder(row.id, company, no);
-      setSuccess('已发货');
-      void paged.reload(1);
+      await shipShopOrder(row.id, expressCompany().trim(), expressNo().trim());
+      setShipOrder(null);
+      feedback.toast('已发货');
+      void paged.refresh();
     } catch (err) {
-      setError(toApiError(err).message);
+      setShipError(err instanceof Error ? err.message : '发货失败，请稍后重试');
+    } finally {
+      setShipping(false);
     }
   };
 
   return (
-    <div class="p-6 space-y-6">
-      <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold">订单管理</h1>
-        <select
-          class="select select-bordered"
-          onChange={(e) => onAccountChange(Number(e.currentTarget.value))}
-        >
-          <option value={0}>选择公众号</option>
-          <For each={accounts.accounts()}>
-            {(a) => <option value={a.id}>{a.name}</option>}
-          </For>
-        </select>
-      </div>
-
-      <Show when={success()}>
-        <div class="alert alert-success">{success()}</div>
-      </Show>
-      <Show when={error()}>
-        <div class="alert alert-error">{error()}</div>
-      </Show>
-
-      <div class="flex gap-2">
-        {[-1, 0, 1, 2, 3, 4].map((s) => (
-          <button
-            class={`btn btn-xs ${statusFilter() === s ? 'btn-primary' : 'btn-outline'}`}
-            onClick={() => {
-              setStatusFilter(s);
-              void paged.reload(1);
-            }}
-          >
-            {s === -1 ? '全部' : STATUS[s]?.label ?? s}
-          </button>
-        ))}
-      </div>
+    <AdminCrudPage
+      title="订单管理"
+      description={ready() ? `当前公众号：${accountName()}` : undefined}
+      total={paged.total()}
+      onRefresh={() => void paged.refresh()}
+      search={
+        <SearchBar
+          fields={SEARCH_FIELDS}
+          values={{ status: '-1' }}
+          loading={paged.loading()}
+          onSearch={setFilters}
+        />
+      }
+    >
+      <AccountRequiredBanner />
 
       <DataTable
         columns={columns}
@@ -114,20 +144,91 @@ function ShopOrders() {
         total={paged.total()}
         page={paged.page()}
         totalPages={paged.totalPages()}
+        pageSize={paged.pageSize()}
         loading={paged.loading()}
         error={paged.error()}
         emptyText="暂无订单"
         onPageChange={(p) => void paged.reload(p)}
+        onPageSizeChange={(size) => paged.setPageSize(size)}
         actions={(row) => (
-          <Show when={row.status === 1}>
-            <button class="btn btn-xs btn-outline btn-primary" onClick={() => void onShip(row)}>
-              发货
+          <>
+            <button type="button" class="btn btn-ghost btn-xs" onClick={() => setDetailOrder(row)}>
+              详情
             </button>
-          </Show>
+            {row.status === 1 ? (
+              <button type="button" class="btn btn-ghost btn-xs text-primary" onClick={() => openShip(row)}>
+                发货
+              </button>
+            ) : null}
+          </>
         )}
       />
-    </div>
+
+      <FormModal
+        open={detailOrder() != null}
+        title="订单详情"
+        onClose={() => setDetailOrder(null)}
+        size="md"
+      >
+        <dl class="divide-y divide-base-200 text-sm">
+          <For each={detailFields(detailOrder())}>
+            {(field) => (
+              <div class="flex justify-between gap-4 py-2">
+                <dt class="text-base-content/60">{field.label}</dt>
+                <dd class="text-right">{field.value}</dd>
+              </div>
+            )}
+          </For>
+        </dl>
+      </FormModal>
+
+      <FormModal
+        open={shipOrder() != null}
+        title="订单发货"
+        description={shipOrder() ? `订单号 ${shipOrder()!.order_no}` : undefined}
+        onSubmit={onShip}
+        onClose={() => setShipOrder(null)}
+        submitting={shipping()}
+        error={shipError()}
+        submitLabel="确认发货"
+        size="sm"
+      >
+        <label class="form-control">
+          <span class="label-text mb-1">快递公司</span>
+          <input
+            class="input input-bordered input-sm"
+            value={expressCompany()}
+            onInput={(e) => setExpressCompany(e.currentTarget.value)}
+          />
+        </label>
+        <label class="form-control">
+          <span class="label-text mb-1">快递单号</span>
+          <input
+            class="input input-bordered input-sm"
+            value={expressNo()}
+            onInput={(e) => setExpressNo(e.currentTarget.value)}
+            required
+          />
+        </label>
+      </FormModal>
+    </AdminCrudPage>
   );
+}
+
+function detailFields(order: ShopOrderItem | null): { label: string; value: string }[] {
+  if (!order) return [];
+  return [
+    { label: '订单号', value: order.order_no },
+    { label: '订单 ID', value: String(order.id) },
+    { label: '买家 OpenID', value: order.openid },
+    { label: '订单金额', value: formatYuan(order.total_amount) },
+    { label: '实付金额', value: formatYuan(order.pay_amount) },
+    { label: '状态', value: STATUS[order.status]?.label ?? String(order.status) },
+    { label: '快递公司', value: order.express_company || '—' },
+    { label: '快递单号', value: order.express_no || '—' },
+    { label: '支付时间', value: order.paid_at ? formatDateTime(order.paid_at) : '—' },
+    { label: '下单时间', value: formatDateTime(order.created_at) },
+  ];
 }
 
 export default ShopOrders;

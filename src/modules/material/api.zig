@@ -111,18 +111,18 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "materials/news", .handler = http.wrapHandler(Self, listNews), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "materials/news", .handler = http.wrapHandler(Self, createNews), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "materials/news/{id}", .handler = http.wrapHandler(Self, getNews), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "materials/news/{id}", .handler = http.wrapHandler(Self, updateNews), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "materials/news/{id}", .handler = http.wrapHandler(Self, deleteNews), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "materials/files", .handler = http.wrapHandler(Self, listFiles), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "materials/files", .handler = http.wrapHandler(Self, createFile), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "materials/files/{id}", .handler = http.wrapHandler(Self, deleteFile), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "materials/sync-news", .handler = http.wrapHandler(Self, syncNews), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "materials/sync-files", .handler = http.wrapHandler(Self, syncFiles), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "materials/count", .handler = http.wrapHandler(Self, syncCount), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "materials/news/upload", .handler = http.wrapHandler(Self, uploadNews), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "materials/news", .handler = http.wrapHandler(Self, listNews), .meta = .{ .permission = "material:read" } },
+            .{ .method = .POST, .path = "materials/news", .handler = http.wrapHandler(Self, createNews), .meta = .{ .permission = "material:write" } },
+            .{ .method = .GET, .path = "materials/news/{id}", .handler = http.wrapHandler(Self, getNews), .meta = .{ .permission = "material:read" } },
+            .{ .method = .PUT, .path = "materials/news/{id}", .handler = http.wrapHandler(Self, updateNews), .meta = .{ .permission = "material:write" } },
+            .{ .method = .DELETE, .path = "materials/news/{id}", .handler = http.wrapHandler(Self, deleteNews), .meta = .{ .permission = "material:write" } },
+            .{ .method = .GET, .path = "materials/files", .handler = http.wrapHandler(Self, listFiles), .meta = .{ .permission = "material:read" } },
+            .{ .method = .POST, .path = "materials/files", .handler = http.wrapHandler(Self, createFile), .meta = .{ .permission = "material:write" } },
+            .{ .method = .DELETE, .path = "materials/files/{id}", .handler = http.wrapHandler(Self, deleteFile), .meta = .{ .permission = "material:write" } },
+            .{ .method = .POST, .path = "materials/sync-news", .handler = http.wrapHandler(Self, syncNews), .meta = .{ .permission = "material:write" } },
+            .{ .method = .POST, .path = "materials/sync-files", .handler = http.wrapHandler(Self, syncFiles), .meta = .{ .permission = "material:write" } },
+            .{ .method = .GET, .path = "materials/count", .handler = http.wrapHandler(Self, syncCount), .meta = .{ .permission = "material:read" } },
+            .{ .method = .POST, .path = "materials/news/upload", .handler = http.wrapHandler(Self, uploadNews), .meta = .{ .permission = "material:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
@@ -173,7 +173,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listNews(params.page, params.page_size, tid, account_id) catch |err| {
+            const keyword = ctx.queryStr("keyword", "");
+            var result = self.svc.listNews(params.page, params.page_size, tid, account_id, keyword) catch |err| {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };

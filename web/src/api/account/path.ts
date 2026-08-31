@@ -8,8 +8,16 @@ export const ACCOUNT_PATH = {
 export const accountDetail = (id: number) => `${APP_CONFIG.apiPrefix}/accounts/${id}`;
 export const accountWechat = (id: number) => `${APP_CONFIG.apiPrefix}/accounts/${id}/wechat`;
 
-export const accountListQuery = (page: number, pageSize: number, kind?: string) => {
+export const accountListQuery = (
+  page: number,
+  pageSize: number,
+  kind?: string,
+  keyword = '',
+  status = '',
+) => {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
   if (kind) params.set('kind', kind);
+  if (keyword) params.set('keyword', keyword);
+  if (status) params.set('status', status);
   return `${ACCOUNT_PATH.list}?${params.toString()}`;
 };

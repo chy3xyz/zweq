@@ -15,9 +15,11 @@ export async function listMemberLevels(
   accountId: number,
   page: number,
   pageSize: number,
+  keyword = '',
+  status = -1,
 ): Promise<MemberLevelListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: MemberLevelListResult }>(
-    memberLevelsQuery(accountId, page, pageSize),
+    memberLevelsQuery(accountId, page, pageSize, keyword, status),
   );
   return unwrapEnvelope(data);
 }
@@ -30,13 +32,23 @@ export async function createMemberLevel(body: CreateLevelRequest): Promise<{ id:
   return unwrapEnvelope(data);
 }
 
+/** 启用 / 停用会员等级：停用的等级不再自动分配给新开的会员卡。 */
+export async function setMemberLevelStatus(id: number, status: number): Promise<void> {
+  const { data } = await http.put<{ code: number; msg: string; data: null }>(
+    MEMBER_CARD_PATH.levelStatus(id),
+    { status },
+  );
+  unwrapEnvelope(data);
+}
+
 export async function listMembers(
   accountId: number,
   page: number,
   pageSize: number,
+  keyword = '',
 ): Promise<MemberAccountListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: MemberAccountListResult }>(
-    membersQuery(accountId, page, pageSize),
+    membersQuery(accountId, page, pageSize, keyword),
   );
   return unwrapEnvelope(data);
 }

@@ -23,6 +23,7 @@ pub const SeckillActivityRow = struct {
     per_user: i64,
     start_at: i64,
     end_at: i64,
+    status: i64,
     created_at: i64,
 
     pub fn free(self: SeckillActivityRow, allocator: std.mem.Allocator) void {
@@ -91,6 +92,7 @@ pub const SeckillStore = struct {
             .per_user = e.per_user,
             .start_at = e.start_at,
             .end_at = e.end_at,
+            .status = e.status,
             .created_at = e.created_at orelse 0,
         };
     }
@@ -108,7 +110,7 @@ pub const SeckillStore = struct {
         };
     }
 
-    pub fn createActivity(self: *SeckillStore, tenant_id: i64, account_id: i64, title: []const u8, price: i64, original_price: i64, stock: i64, per_user: i64, start_at: i64, end_at: i64, now: i64) !i64 {
+    pub fn createActivity(self: *SeckillStore, tenant_id: i64, account_id: i64, title: []const u8, price: i64, original_price: i64, stock: i64, per_user: i64, start_at: i64, end_at: i64, status: i64, now: i64) !i64 {
         const price_str = try std.fmt.allocPrint(self.allocator, "{d}", .{price});
         defer self.allocator.free(price_str);
         const original_price_str = try std.fmt.allocPrint(self.allocator, "{d}", .{original_price});
@@ -125,11 +127,23 @@ pub const SeckillStore = struct {
         _ = try b.setFieldValue("per_user", per_user);
         _ = try b.setFieldValue("start_at", start_at);
         _ = try b.setFieldValue("end_at", end_at);
+        // 显式写入，不依赖 DB 默认值（迁移加的列在老库上是 nullable）。
+        _ = try b.setFieldValue("status", status);
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
         defer zent.codegen.deinitEntity(infos, SeckillActivityInfo, &row, self.allocator);
         return row.id;
+    }
+
+    /// 上下架：1 上架 / 0 下架。
+    pub fn setActivityStatus(self: *SeckillStore, id: i64, status: i64, now: i64) !bool {
+        const preds = self.client.seckill_activity.predicates;
+        const affected = try crud.update(self.client.seckill_activity, .{
+            .status = status,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
+        return affected > 0;
     }
 
     pub fn getActivity(self: *SeckillStore, id: i64) !?SeckillActivityRow {
@@ -140,12 +154,14 @@ pub const SeckillStore = struct {
     }
 
     /// 该账号最新一个活动（receiver 用）。
+    /// 最新活动（C 端公众号关键词回复用）：只取上架的。
     pub fn latestActivity(self: *SeckillStore, tenant_id: i64, account_id: i64) !?SeckillActivityRow {
         var q = self.client.seckill_activity.Query();
         defer q.deinit();
         const preds = self.client.seckill_activity.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        _ = try q.Where(.{preds.statusEQ(.{ .int = 1 })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         _ = q.Limit(1);
         const entity_opt = try q.First();
@@ -154,12 +170,15 @@ pub const SeckillStore = struct {
         return try self.dupActivity(entity);
     }
 
-    pub fn listActivities(self: *SeckillStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !SeckillListResult {
+    /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
+    pub fn listActivities(self: *SeckillStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) !SeckillListResult {
         var q = self.client.seckill_activity.Query();
         defer q.deinit();
         const preds = self.client.seckill_activity.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (keyword.len > 0) _ = try q.Where(.{preds.titleContainsEscaped(keyword)});
+        if (status >= 0) _ = try q.Where(.{preds.statusEQ(.{ .int = status })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();
@@ -176,12 +195,17 @@ pub const SeckillStore = struct {
         return .{ .items = out, .total = paged.total };
     }
 
-    pub fn listOrders(self: *SeckillStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !SeckillOrderListResult {
+    /// `openid` 为精确匹配；`keyword` 为 openid 模糊匹配（管理端搜索用）。
+    pub fn listOrders(self: *SeckillStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, keyword: []const u8) !SeckillOrderListResult {
         var q = self.client.seckill_order.Query();
         defer q.deinit();
         const preds = self.client.seckill_order.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (openid.len > 0) {
+            _ = try q.Where(.{preds.openidEQ(.{ .string = openid })});
+        }
+        if (keyword.len > 0) _ = try q.Where(.{preds.openidContainsEscaped(keyword)});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();

@@ -176,8 +176,9 @@ pub const ShopService = struct {
         self.store.catalog.deleteSkusByProduct(id) catch {};
     }
 
-    pub fn listProducts(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, category_id: i64, keyword: []const u8, on_sale: bool) ShopError!ProductListResult {
-        return self.store.catalog.listProducts(page, page_size, tenant_id, account_id, category_id, keyword, on_sale) catch error.Unexpected;
+    /// `status` 为 -1 表示不过滤（管理端），0/1 按下架/上架筛选。
+    pub fn listProducts(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, category_id: i64, keyword: []const u8, status: i64) ShopError!ProductListResult {
+        return self.store.catalog.listProducts(page, page_size, tenant_id, account_id, category_id, keyword, status) catch error.Unexpected;
     }
 
     // ── SKU ───────────────────────────────────────────────
@@ -227,6 +228,23 @@ pub const ShopService = struct {
         _ = self.store.trade.deleteAddress(id) catch return error.Unexpected;
     }
 
+    pub fn setAddressDefault(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64) ShopError!void {
+        self.store.trade.setDefaultAddress(tenant_id, openid, id, self.now()) catch |err| switch (err) {
+            error.AddressNotFound => return error.NotFound,
+            error.InvalidInput => return error.InvalidInput,
+            else => return error.Unexpected,
+        };
+    }
+
+    pub fn updateAddress(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64, a: anytype) ShopError!void {
+        if (std.mem.trim(u8, a.name, " \t").len == 0 or std.mem.trim(u8, a.mobile, " \t").len == 0) return error.InvalidInput;
+        self.store.trade.updateAddress(tenant_id, openid, id, a, self.now()) catch |err| switch (err) {
+            error.AddressNotFound => return error.NotFound,
+            error.InvalidInput => return error.InvalidInput,
+            else => return error.Unexpected,
+        };
+    }
+
     // ── 下单引擎 ─────────────────────────────────────────
 
     /// 自提核销码：6 位数字（PK 前缀展示用）。
@@ -252,7 +270,7 @@ pub const ShopService = struct {
 
     /// 下单：校验商品/SKU/库存 → 原子扣库存 → 生成订单号 → 写订单+明细。
     /// 返回订单 id。支付由 payment 模块承接（mock 即时入账 / v3 微信支付）。
-    pub fn createOrder(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, items: []const OrderItemInput, coupon_code: []const u8, client_trade_no: []const u8, pay_type: []const u8, pickup_store_id: i64) ShopError!i64 {
+    pub fn createOrder(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, items: []const OrderItemInput, coupon_code: []const u8, client_trade_no: []const u8, pay_type: []const u8, pickup_store_id: i64, remark: []const u8) ShopError!i64 {
         // 幂等：同 client_trade_no 已存在 → 返回原单（不重复扣库存）。
         if (client_trade_no.len > 0) {
             if (self.store.trade.getByClientTradeNo(tenant_id, client_trade_no) catch return error.Unexpected) |existing| {
@@ -270,6 +288,7 @@ pub const ShopService = struct {
             .mobile = addr.mobile,
             .region = addr.region,
             .detail = addr.detail,
+            .remark = remark,
         }, .{}) catch return error.Unexpected;
         defer self.allocator.free(address_json);
 
@@ -529,6 +548,60 @@ pub const ShopService = struct {
         return self.store.trade.listRefunds(page, page_size, tenant_id, account_id, status) catch error.Unexpected;
     }
 
+    pub fn listRefundsByOpenid(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8) ShopError!RefundListResult {
+        return self.store.trade.listRefundsByOpenid(page, page_size, tenant_id, account_id, openid) catch error.Unexpected;
+    }
+
+    pub const OrderSummary = struct {
+        order_id: i64,
+        cover_image: []const u8,
+        item_count: i64,
+        summary: []const u8,
+
+        pub fn free(self: OrderSummary, allocator: std.mem.Allocator) void {
+            allocator.free(self.cover_image);
+            allocator.free(self.summary);
+        }
+    };
+
+    pub fn orderSummaries(self: *ShopService, order_ids: []const i64) ShopError![]OrderSummary {
+        var out = std.ArrayList(OrderSummary).empty;
+        errdefer {
+            for (out.items) |s| s.free(self.allocator);
+            out.deinit(self.allocator);
+        }
+        for (order_ids) |oid| {
+            const ops = self.listOrderProducts(oid) catch return error.Unexpected;
+            defer {
+                for (ops) |op| op.free(self.allocator);
+                if (ops.len > 0) self.allocator.free(ops);
+            }
+            const cover_image = if (ops.len > 0)
+                (self.allocator.dupe(u8, ops[0].image) catch return error.Unexpected)
+            else
+                (self.allocator.dupe(u8, "") catch return error.Unexpected);
+            errdefer self.allocator.free(cover_image);
+            const summary = if (ops.len > 1)
+                std.fmt.allocPrint(self.allocator, "{s} 等{d}件", .{ ops[0].name, ops.len }) catch return error.Unexpected
+            else if (ops.len == 1)
+                (self.allocator.dupe(u8, ops[0].name) catch return error.Unexpected)
+            else
+                (self.allocator.dupe(u8, "") catch return error.Unexpected);
+            out.append(self.allocator, .{
+                .order_id = oid,
+                .cover_image = cover_image,
+                .item_count = @intCast(ops.len),
+                .summary = summary,
+            }) catch return error.Unexpected;
+        }
+        return out.toOwnedSlice(self.allocator) catch error.Unexpected;
+    }
+
+    pub fn getRefundByOrder(self: *ShopService, tenant_id: i64, order_id: i64) ShopError!?ShopRefundRow {
+        const row_opt = self.store.trade.getRefundByOrder(tenant_id, order_id) catch return error.Unexpected;
+        return row_opt;
+    }
+
     /// 退款审核：同意 → 订单置为已取消（4）+ 回滚库存与销量。
     pub fn auditRefund(self: *ShopService, order_id: i64, refund_id: i64, approve: bool) ShopError!void {
         _ = self.store.trade.auditRefund(refund_id, if (approve) 1 else 2, self.now()) catch return error.Unexpected;
@@ -551,7 +624,28 @@ pub const ShopService = struct {
         defer o.free(self.allocator);
         if (!std.mem.eql(u8, o.openid, c.openid)) return error.InvalidInput;
         if (o.status != 3) return error.OrderStateConflict;
+        if (self.store.trade.getCommentByOrderProduct(c.order_product_id) catch return error.Unexpected) |existing| {
+            existing.free(self.allocator);
+            return error.Duplicate;
+        }
         return self.store.trade.createComment(tenant_id, account_id, c, self.now()) catch error.Unexpected;
+    }
+
+    pub fn listCommentedOrderProductIds(self: *ShopService, order_id: i64) ShopError![]i64 {
+        const ops = self.store.trade.listOrderProducts(order_id) catch return error.Unexpected;
+        defer {
+            for (ops) |op| op.free(self.allocator);
+            if (ops.len > 0) self.allocator.free(ops);
+        }
+        var ids = std.ArrayList(i64).empty;
+        errdefer ids.deinit(self.allocator);
+        for (ops) |op| {
+            if (self.store.trade.getCommentByOrderProduct(op.id) catch return error.Unexpected) |existing| {
+                existing.free(self.allocator);
+                ids.append(self.allocator, op.id) catch return error.Unexpected;
+            }
+        }
+        return ids.toOwnedSlice(self.allocator) catch error.Unexpected;
     }
 
     pub fn listComments(self: *ShopService, product_id: i64) ShopError![]ShopCommentRow {
@@ -587,6 +681,24 @@ pub const ShopService = struct {
         completed: i64,
         total_sales: i64,
     };
+
+    pub const FanOrderOverview = struct {
+        pending_pay: i64,
+        pending_ship: i64,
+        shipped: i64,
+        completed: i64,
+        order_timeout_secs: i64,
+    };
+
+    pub fn fanOrderOverview(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, order_timeout_secs: i64) ShopError!FanOrderOverview {
+        return .{
+            .pending_pay = self.store.trade.countOrdersByStatusOpenid(tenant_id, account_id, openid, 0) catch return error.Unexpected,
+            .pending_ship = self.store.trade.countOrdersByStatusOpenid(tenant_id, account_id, openid, 1) catch return error.Unexpected,
+            .shipped = self.store.trade.countOrdersByStatusOpenid(tenant_id, account_id, openid, 2) catch return error.Unexpected,
+            .completed = self.store.trade.countOrdersByStatusOpenid(tenant_id, account_id, openid, 3) catch return error.Unexpected,
+            .order_timeout_secs = order_timeout_secs,
+        };
+    }
 
     pub fn orderStats(self: *ShopService, tenant_id: i64, account_id: i64) ShopError!OrderStats {
         return .{

@@ -1,23 +1,22 @@
-import { For, Show } from 'solid-js';
+import { Show } from 'solid-js';
 
 import { listLogs, type LogItem } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
+import { useAccountId } from '#ui/hooks/useAccountId';
 import { usePaged } from '#ui/hooks/usePaged';
 import { formatDateTime } from '#ui/utils';
 
 const PAGE_SIZE = 20;
 
 function Logs() {
-  const accounts = useAccounts();
-  const accountId = () => accounts.selected() ?? 0;
+  const { accountId } = useAccountId();
 
-  const paged = usePaged<LogItem>((page, pageSize) => listLogs(page, pageSize, accountId()), PAGE_SIZE);
-
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
-    void paged.reload(1);
-  };
+  const paged = usePaged<LogItem>(
+    (page, pageSize) => listLogs(page, pageSize, accountId()),
+    PAGE_SIZE,
+    accountId,
+  );
 
   const columns: Column<LogItem>[] = [
     { key: 'id', title: 'ID', render: (l) => <span class="font-mono text-xs">{l.id}</span> },
@@ -52,18 +51,7 @@ function Logs() {
         <p class="text-sm text-base-content/60">微信公众号服务器回调日志</p>
       </div>
 
-      <label class="form-control w-full max-w-xs">
-        <span class="label-text mb-1">选择账号</span>
-        <select class="select select-bordered select-sm" value={accountId()} onChange={(e) => onAccountChange(Number(e.currentTarget.value))}>
-          <For each={accounts.accounts()}>
-            {(a) => (
-              <option value={a.id}>
-                {a.name}（{a.id}）
-              </option>
-            )}
-          </For>
-        </select>
-      </label>
+      <AccountRequiredBanner />
 
       <DataTable
         columns={columns}

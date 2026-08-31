@@ -8,6 +8,8 @@ export interface CouponItem {
   per_user: number;
   start_at: number;
   end_at: number;
+  /** 1 = 上架，0 = 下架 */
+  status: number;
   created_at: number;
 }
 
@@ -45,4 +47,5 @@ export interface CreateCouponRequest {
   per_user?: number;
   start_at?: number;
   end_at?: number;
+  status?: number;
 }

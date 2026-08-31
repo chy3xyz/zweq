@@ -74,9 +74,13 @@ pub const TenantStore = struct {
         return try self.dup(entity);
     }
 
-    pub fn list(self: *TenantStore, page: usize, page_size: usize) !TenantListResult {
+    /// `keyword` 匹配名称；`status` 为空表示不过滤（active/disabled）。
+    pub fn list(self: *TenantStore, page: usize, page_size: usize, keyword: []const u8, status: []const u8) !TenantListResult {
         var q = self.client.tenant.Query();
         defer q.deinit();
+        const preds = self.client.tenant.predicates;
+        if (keyword.len > 0) _ = try q.Where(.{preds.nameContainsEscaped(keyword)});
+        if (status.len > 0) _ = try q.Where(.{preds.statusEQ(.{ .string = status })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("id")});
 
         var paged = try q.paged(page, page_size);

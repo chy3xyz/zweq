@@ -54,10 +54,10 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "votes", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "votes", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "votes/{id}/results", .handler = http.wrapHandler(Self, results), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "votes/{id}/vote", .handler = http.wrapHandler(Self, cast), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "votes", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "vote:read" } },
+            .{ .method = .POST, .path = "votes", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "vote:write" } },
+            .{ .method = .GET, .path = "votes/{id}/results", .handler = http.wrapHandler(Self, results), .meta = .{ .permission = "vote:read" } },
+            .{ .method = .POST, .path = "votes/{id}/vote", .handler = http.wrapHandler(Self, cast), .meta = .{ .permission = "vote:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {

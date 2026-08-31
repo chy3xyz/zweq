@@ -6,4 +6,5 @@ export {
   listMemberLevels,
   listMembers,
   openMemberCard,
+  setMemberLevelStatus,
 } from './query';

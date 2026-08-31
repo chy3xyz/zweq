@@ -149,7 +149,7 @@ test "tenant service: ensureDefault is idempotent, CRUD works" {
     defer disabled.free(allocator);
     try std.testing.expectEqualStrings("disabled", disabled.status);
 
-    var result = try tenant_svc.list(1, 20);
+    var result = try tenant_svc.list(1, 20, "", "");
     defer result.free(allocator);
     try std.testing.expectEqual(@as(i64, 2), result.total);
 }

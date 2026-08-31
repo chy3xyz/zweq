@@ -288,6 +288,7 @@ pub const OrderCreateReq = struct {
     client_trade_no: []const u8 = "",
     pay_type: []const u8 = "",
     pickup_store_id: i64 = 0,
+    remark: []const u8 = "",
 };
 
 pub const ShipReq = struct {
@@ -322,6 +323,13 @@ pub fn toAddressDto(row: service.ShopAddressRow) AddressDto {
     return .{ .id = row.id, .openid = row.openid, .name = row.name, .mobile = row.mobile, .region = row.region, .detail = row.detail, .is_default = row.is_default };
 }
 
+pub const OrderSummaryDto = struct {
+    order_id: i64,
+    cover_image: []const u8,
+    item_count: i64,
+    summary: []const u8,
+};
+
 pub const OrderDto = struct {
     id: i64,
     account_id: i64,
@@ -330,6 +338,7 @@ pub const OrderDto = struct {
     total_amount: i64,
     pay_amount: i64,
     status: i64,
+    address_json: []const u8,
     express_company: []const u8,
     express_no: []const u8,
     paid_at: i64,
@@ -345,6 +354,7 @@ pub fn toOrderDto(row: service.ShopOrderRow) OrderDto {
         .total_amount = std.fmt.parseInt(i64, row.total_amount, 10) catch 0,
         .pay_amount = std.fmt.parseInt(i64, row.pay_amount, 10) catch 0,
         .status = row.status,
+        .address_json = row.address_json,
         .express_company = row.express_company,
         .express_no = row.express_no,
         .paid_at = row.paid_at,

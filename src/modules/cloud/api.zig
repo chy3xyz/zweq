@@ -95,17 +95,17 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .POST, .path = "cloud/licenses", .handler = http.wrapHandler(Self, generateLicense), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "cloud/licenses", .handler = http.wrapHandler(Self, listLicenses), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "cloud/licenses/{id}/revoke", .handler = http.wrapHandler(Self, revokeLicense), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "cloud/licenses/verify", .handler = http.wrapHandler(Self, verifyLicense), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "cloud/market", .handler = http.wrapHandler(Self, listMarket), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "cloud/market", .handler = http.wrapHandler(Self, publishPackage), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "cloud/market/{name}/install", .handler = http.wrapHandler(Self, installPackage), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "cloud/remote/verify", .handler = http.wrapHandler(Self, remoteVerify), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "cloud/remote/sync-market", .handler = http.wrapHandler(Self, remoteSyncMarket), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "cloud/tables", .handler = http.wrapHandler(Self, listDynamicTables), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "cloud/tables/{table}/rows", .handler = http.wrapHandler(Self, queryDynamicTable), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "cloud/licenses", .handler = http.wrapHandler(Self, generateLicense), .meta = .{ .permission = "cloud:write" } },
+            .{ .method = .GET, .path = "cloud/licenses", .handler = http.wrapHandler(Self, listLicenses), .meta = .{ .permission = "cloud:read" } },
+            .{ .method = .POST, .path = "cloud/licenses/{id}/revoke", .handler = http.wrapHandler(Self, revokeLicense), .meta = .{ .permission = "cloud:write" } },
+            .{ .method = .POST, .path = "cloud/licenses/verify", .handler = http.wrapHandler(Self, verifyLicense), .meta = .{ .permission = "cloud:write" } },
+            .{ .method = .GET, .path = "cloud/market", .handler = http.wrapHandler(Self, listMarket), .meta = .{ .permission = "cloud:read" } },
+            .{ .method = .POST, .path = "cloud/market", .handler = http.wrapHandler(Self, publishPackage), .meta = .{ .permission = "cloud:write" } },
+            .{ .method = .POST, .path = "cloud/market/{name}/install", .handler = http.wrapHandler(Self, installPackage), .meta = .{ .permission = "cloud:write" } },
+            .{ .method = .POST, .path = "cloud/remote/verify", .handler = http.wrapHandler(Self, remoteVerify), .meta = .{ .permission = "cloud:write" } },
+            .{ .method = .POST, .path = "cloud/remote/sync-market", .handler = http.wrapHandler(Self, remoteSyncMarket), .meta = .{ .permission = "cloud:write" } },
+            .{ .method = .GET, .path = "cloud/tables", .handler = http.wrapHandler(Self, listDynamicTables), .meta = .{ .permission = "cloud:read" } },
+            .{ .method = .GET, .path = "cloud/tables/{table}/rows", .handler = http.wrapHandler(Self, queryDynamicTable), .meta = .{ .permission = "cloud:read" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {

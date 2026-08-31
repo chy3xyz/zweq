@@ -88,11 +88,11 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "message-logs", .handler = http.wrapHandler(Self, listLogs), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "messages/customer-text", .handler = http.wrapHandler(Self, sendCustomerText), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "messages/template", .handler = http.wrapHandler(Self, sendTemplate), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "messages/broadcast", .handler = http.wrapHandler(Self, sendBroadcast), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "statistics/datacube", .handler = http.wrapHandler(Self, getDatacube), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "message-logs", .handler = http.wrapHandler(Self, listLogs), .meta = .{ .permission = "message:read" } },
+            .{ .method = .POST, .path = "messages/customer-text", .handler = http.wrapHandler(Self, sendCustomerText), .meta = .{ .permission = "message:write" } },
+            .{ .method = .POST, .path = "messages/template", .handler = http.wrapHandler(Self, sendTemplate), .meta = .{ .permission = "message:write" } },
+            .{ .method = .POST, .path = "messages/broadcast", .handler = http.wrapHandler(Self, sendBroadcast), .meta = .{ .permission = "message:write" } },
+            .{ .method = .POST, .path = "statistics/datacube", .handler = http.wrapHandler(Self, getDatacube), .meta = .{ .permission = "message:write" } },
             .{ .method = .POST, .path = "miniprogram/login", .handler = http.wrapHandler(Self, miniLogin), .meta = .{ .auth = .public } },
         };
 

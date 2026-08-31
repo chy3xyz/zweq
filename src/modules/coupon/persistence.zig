@@ -22,6 +22,7 @@ pub const CouponRow = struct {
     per_user: i64,
     start_at: i64,
     end_at: i64,
+    status: i64,
     created_at: i64,
 
     pub fn free(self: CouponRow, allocator: std.mem.Allocator) void {
@@ -93,6 +94,7 @@ pub const CouponStore = struct {
             .per_user = e.per_user,
             .start_at = e.start_at,
             .end_at = e.end_at,
+            .status = e.status,
             .created_at = e.created_at orelse 0,
         };
     }
@@ -118,7 +120,7 @@ pub const CouponStore = struct {
 
     // ── 券模板 ─────────────────────────────────────────────
 
-    pub fn createCoupon(self: *CouponStore, tenant_id: i64, account_id: i64, title: []const u8, amount: i64, min_amount: i64, total: i64, per_user: i64, start_at: i64, end_at: i64, now: i64) !i64 {
+    pub fn createCoupon(self: *CouponStore, tenant_id: i64, account_id: i64, title: []const u8, amount: i64, min_amount: i64, total: i64, per_user: i64, start_at: i64, end_at: i64, status: i64, now: i64) !i64 {
         const amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{amount});
         defer self.allocator.free(amount_str);
         const min_amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{min_amount});
@@ -134,6 +136,8 @@ pub const CouponStore = struct {
         _ = try b.setFieldValue("per_user", per_user);
         _ = try b.setFieldValue("start_at", start_at);
         _ = try b.setFieldValue("end_at", end_at);
+        // 显式写入，不依赖 DB 默认值（迁移加的列在老库上是 nullable）。
+        _ = try b.setFieldValue("status", status);
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
@@ -148,12 +152,15 @@ pub const CouponStore = struct {
         return try self.dupCoupon(entity);
     }
 
-    pub fn listCoupons(self: *CouponStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !CouponListResult {
+    /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
+    pub fn listCoupons(self: *CouponStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) !CouponListResult {
         var q = self.client.coupon.Query();
         defer q.deinit();
         const preds = self.client.coupon.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (keyword.len > 0) _ = try q.Where(.{preds.titleContainsEscaped(keyword)});
+        if (status >= 0) _ = try q.Where(.{preds.statusEQ(.{ .int = status })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();
@@ -168,6 +175,16 @@ pub const CouponStore = struct {
             n += 1;
         }
         return .{ .items = out, .total = paged.total };
+    }
+
+    /// 上下架：1 上架 / 0 下架。
+    pub fn setCouponStatus(self: *CouponStore, id: i64, status: i64, now: i64) !bool {
+        const preds = self.client.coupon.predicates;
+        const affected = try crud.update(self.client.coupon, .{
+            .status = status,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
+        return affected > 0;
     }
 
     pub fn deleteCoupon(self: *CouponStore, id: i64) !void {
@@ -231,7 +248,8 @@ pub const CouponStore = struct {
         _ = try upd.Save();
     }
 
-    pub fn listUserCoupons(self: *CouponStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: ?[]const u8) !CouponUserListResult {
+    /// `keyword` 同时匹配 openid 与券码；`status` 为空表示不过滤（unused/used/expired）。
+    pub fn listUserCoupons(self: *CouponStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: ?[]const u8, keyword: []const u8, status: []const u8) !CouponUserListResult {
         var q = self.client.coupon_user.Query();
         defer q.deinit();
         const preds = self.client.coupon_user.predicates;
@@ -240,6 +258,12 @@ pub const CouponStore = struct {
         if (openid) |o| {
             if (o.len > 0) _ = try q.Where(.{preds.openidEQ(.{ .string = o })});
         }
+        if (keyword.len > 0) {
+            const p1 = preds.openidContainsEscaped(keyword);
+            const p2 = preds.codeContainsEscaped(keyword);
+            _ = try q.Where(.{zent.sql.Or(&p1, &p2)});
+        }
+        if (status.len > 0) _ = try q.Where(.{preds.statusEQ(.{ .string = status })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();

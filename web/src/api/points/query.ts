@@ -21,8 +21,12 @@ export async function listProducts(
   accountId: number,
   page: number,
   pageSize: number,
+  keyword = '',
+  status = -1,
 ): Promise<PointsProductListResult> {
-  return getEnvelope<PointsProductListResult>(productListQuery(accountId, page, pageSize));
+  return getEnvelope<PointsProductListResult>(
+    productListQuery(accountId, page, pageSize, keyword, status),
+  );
 }
 
 export async function createProduct(accountId: number, body: CreateProductRequest): Promise<{ id: number }> {

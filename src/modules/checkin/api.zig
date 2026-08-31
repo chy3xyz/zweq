@@ -42,7 +42,7 @@ pub fn CheckinApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "checkin/records", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "checkin/records", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "checkin:read" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {

@@ -88,7 +88,7 @@ test "shop: outlet CRUD + self-pickup verification code" {
     });
     const order_id = try svc.createOrder(1, 9, "o_p", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", outlet_id);
+    }, "", "", "", outlet_id, "");
     var o = (try svc.getOrder(order_id)).?;
     defer o.free(allocator);
     try std.testing.expectEqualStrings("self", o.pickup_type);
@@ -105,7 +105,7 @@ test "shop: outlet CRUD + self-pickup verification code" {
     // 快递单（pickup_store_id=0）不可核销。
     const order_delivery = try svc.createOrder(1, 9, "o_p", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
     try svc.markPaid(1, 9, order_delivery);
     try std.testing.expectError(error.OrderStateConflict, svc.pickupOrder(order_delivery, "123456"));
 
@@ -170,7 +170,7 @@ test "shop: balance plan recharge (Bonus) lifecycle" {
     });
     const order_id = try svc.createOrder(1, 9, "o_plan", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "balance", 0);
+    }, "", "", "balance", 0, "");
     const wallet2 = (try pay_svc.walletBalance(1, 9, fan_id)).?;
     defer wallet2.free(allocator);
     try std.testing.expectEqualStrings("2000", wallet2.balance);
@@ -216,7 +216,7 @@ test "shop: auto-cancel expired pending orders (production ops)" {
     // 待支付订单（扣库存 3→2）。
     const order_id = try svc.createOrder(1, 9, "o_t", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
 
     // 超时 0 秒 → 立即被清理（timeout_secs=0 表示所有待支付都过期）。
     const cancelled = try svc.autoCancelExpired(1, 9, 0);
@@ -312,7 +312,7 @@ test "shop: invite gift bind/reward lifecycle" {
     svc.member_svc = &mc_svc;
 
     // 会员卡（积分奖励前提）+ 奖励配置（邀请 2 人 → 100 积分）。
-    _ = try mc_svc.createLevel(1, 9, "普通会员", 1, 1000, 100, 0);
+    _ = try mc_svc.createLevel(1, 9, "普通会员", 1, 1000, 100, 0, 1);
     try mc_svc.openCard(1, 9, "o_inviter");
     _ = try svc.createInviteGift(1, 9, 2, "points", 100);
 
@@ -399,7 +399,7 @@ test "shop: AI assistant order-context replies" {
     });
     const oid = try svc.createOrder(1, 9, "o_ai", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
     try svc.markPaid(1, 9, oid);
     try svc.favorite(1, 9, "o_ai", pid);
 
@@ -488,7 +488,7 @@ test "shop: event-driven markPaid via OrderPaidBus" {
     });
     const oid = try svc.createOrder(1, 9, "o_ev", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
     try svc.markPaid(1, 9, oid);
     try std.testing.expectEqual(@as(usize, 1), Counter.n);
     _ = PaidCtx;
@@ -537,7 +537,7 @@ test "shop: stock rollback on order failure paths" {
     // 余额支付（钱包 0 不够）→ InsufficientBalance + 库存回滚（3 → 扣1 → 回滚 → 3）。
     try std.testing.expectError(error.InsufficientBalance, svc.createOrder(1, 9, "o_roll", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "balance", 0));
+    }, "", "", "balance", 0, ""));
     const sku_after = (try svc.getSku(skus[0].id)).?;
     defer sku_after.free(allocator);
     try std.testing.expectEqual(@as(i64, 3), sku_after.stock); // 已回滚
@@ -592,7 +592,7 @@ test "shop: webhook dispatch on order paid" {
     });
     const oid = try svc.createOrder(1, 9, "o_wh", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
     svc.dispatchWebhooks("order.paid", 1, 9, oid);
 
     // mock 收到 payload。
@@ -700,7 +700,7 @@ test "shop: order pay-params mock mode (no v3 config)" {
         .window_seconds = 60,
         .refill_rate = 1,
     };
-    var shop_api = shop.api.ShopApi(@TypeOf(svc), @TypeOf(user_svc)).init(&svc, &user_svc, &audit_svc, 1, &shop_limiter, &fan_store, &setting_store);
+    var shop_api = shop.api.ShopApi(@TypeOf(svc), @TypeOf(user_svc)).init(&svc, &user_svc, &audit_svc, 1, &shop_limiter, &fan_store, &setting_store, 1800);
 
     // 商品 + 待支付订单。
     const pid = try svc.createProduct(1, 9, .{
@@ -729,7 +729,7 @@ test "shop: order pay-params mock mode (no v3 config)" {
     });
     const oid = try svc.createOrder(1, 9, "o_pay", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
 
     // 走 HTTP：GET pay-params（无 v3 配置 → mock 模式）。
     var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
@@ -765,7 +765,7 @@ test "shop: mock pay-complete with C-token ownership" {
         .window_seconds = 60,
         .refill_rate = 1,
     };
-    var shop_api = shop.api.ShopApi(@TypeOf(svc), @TypeOf(user_svc)).init(&svc, &user_svc, &audit_svc, 1, &shop_limiter, &fan_store, &setting_store);
+    var shop_api = shop.api.ShopApi(@TypeOf(svc), @TypeOf(user_svc)).init(&svc, &user_svc, &audit_svc, 1, &shop_limiter, &fan_store, &setting_store, 1800);
 
     // 粉丝 + 商品 + 待支付订单。
     const now_ts = zigmodu.time.wallClockSeconds(std.testing.io);
@@ -796,7 +796,7 @@ test "shop: mock pay-complete with C-token ownership" {
     });
     const oid = try svc.createOrder(1, 9, "o_pc", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
 
     // 无 C-token → 401。
     var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);

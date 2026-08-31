@@ -18,6 +18,7 @@ pub const MemberCardLevel = Schema("MemberCardLevel", .{
         field.Int("discount").Default(1000), // 千分比折扣
         field.Int("points_ratio").Default(100), // 积分倍率
         field.Int("threshold").Default(0), // 升级所需累计积分
+        field.Int("status").Default(1), // 1=启用 0=停用（停用后新开卡不再匹配该等级，已有会员保留）
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

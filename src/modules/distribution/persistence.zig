@@ -196,12 +196,15 @@ pub const DistributionStore = struct {
         return row.id;
     }
 
-    pub fn listDistributors(self: *DistributionStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !DistributorListResult {
+    /// `keyword` 匹配分销员 openid；`status` 为 -1 表示不过滤（1=启用）。
+    pub fn listDistributors(self: *DistributionStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) !DistributorListResult {
         var q = self.client.distributor.Query();
         defer q.deinit();
         const preds = self.client.distributor.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (keyword.len > 0) _ = try q.Where(.{preds.openidContainsEscaped(keyword)});
+        if (status >= 0) _ = try q.Where(.{preds.statusEQ(.{ .int = status })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();
@@ -218,12 +221,19 @@ pub const DistributionStore = struct {
         return .{ .items = out, .total = paged.total };
     }
 
-    pub fn listCommissions(self: *DistributionStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !CommissionListResult {
+    /// `keyword` 同时匹配受益分销员与购买者 openid；`level` 为 -1 表示不过滤。
+    pub fn listCommissions(self: *DistributionStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, level: i64) !CommissionListResult {
         var q = self.client.commission_record.Query();
         defer q.deinit();
         const preds = self.client.commission_record.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (keyword.len > 0) {
+            const p1 = preds.openidContainsEscaped(keyword);
+            const p2 = preds.source_openidContainsEscaped(keyword);
+            _ = try q.Where(.{zent.sql.Or(&p1, &p2)});
+        }
+        if (level >= 0) _ = try q.Where(.{preds.levelEQ(.{ .int = level })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();

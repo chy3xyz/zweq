@@ -169,12 +169,14 @@ pub const MaterialStore = struct {
         return try self.dupNews(entity);
     }
 
-    pub fn listNews(self: *MaterialStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !MaterialNewsListResult {
+    /// `keyword` 匹配图文标题。
+    pub fn listNews(self: *MaterialStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8) !MaterialNewsListResult {
         var q = self.client.material_news.Query();
         defer q.deinit();
         const preds = self.client.material_news.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (keyword.len > 0) _ = try q.Where(.{preds.titleContainsEscaped(keyword)});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("id")});
 
         var paged = try q.paged(page, page_size);

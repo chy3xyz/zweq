@@ -1,11 +1,11 @@
-import { For, Show, createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 
 import { deleteRemoteMenu, fetchMenu, getMenu, publishMenu, saveMenu } from '#ui/api';
-import { useAccounts } from '#ui/hooks/useAccounts';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
+import { useAccountId } from '#ui/hooks/useAccountId';
 
 function Menu() {
-  const accounts = useAccounts();
-  const accountId = () => accounts.selected() ?? 0;
+  const { accountId, onAccountChange } = useAccountId();
   const [menuJson, setMenuJson] = createSignal('[]');
   const [success, setSuccess] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
@@ -23,10 +23,9 @@ function Menu() {
     }
   };
 
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
-    void load(id);
-  };
+  onAccountChange(() => {
+    void load(accountId());
+  });
 
   const onSave = async () => {
     if (accountId() === 0) return;
@@ -76,18 +75,8 @@ function Menu() {
 
   return (
     <div class="p-6 space-y-6">
-      <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold">公众号菜单</h1>
-        <select
-          class="select select-bordered"
-          onChange={(e) => onAccountChange(Number(e.currentTarget.value))}
-        >
-          <option value={0}>选择公众号</option>
-          <For each={accounts.accounts()}>
-            {(a) => <option value={a.id}>{a.name}</option>}
-          </For>
-        </select>
-      </div>
+      <h1 class="text-2xl font-bold">公众号菜单</h1>
+      <AccountRequiredBanner />
 
       <Show when={success()}>
         <div class="alert alert-success">{success()}</div>

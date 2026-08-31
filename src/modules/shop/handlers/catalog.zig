@@ -97,7 +97,8 @@ pub fn Mixin(comptime ApiT: type) type {
             const category_id = ctx.queryInt(i64, "category_id", 0);
             const keyword = ctx.query.get("keyword") orelse "";
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 50 });
-            var result = self.svc.listProducts(params.page, params.page_size, tid, account_id, category_id, keyword, true) catch {
+            // C 端只暴露上架商品。
+            var result = self.svc.listProducts(params.page, params.page_size, tid, account_id, category_id, keyword, 1) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -270,8 +271,10 @@ pub fn Mixin(comptime ApiT: type) type {
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const category_id = ctx.queryInt(i64, "category_id", 0);
             const keyword = ctx.query.get("keyword") orelse "";
+            // -1 = 全部，管理端可通过 status=0/1 按下架/上架筛选。
+            const status = ctx.queryInt(i64, "status", -1);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listProducts(params.page, params.page_size, tid, account_id, category_id, keyword, false) catch {
+            var result = self.svc.listProducts(params.page, params.page_size, tid, account_id, category_id, keyword, status) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };

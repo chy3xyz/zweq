@@ -24,8 +24,8 @@ pub const TenantService = struct {
         return self.store.getById(id);
     }
 
-    pub fn list(self: *TenantService, page: usize, page_size: usize) !TenantListResult {
-        return self.store.list(page, page_size);
+    pub fn list(self: *TenantService, page: usize, page_size: usize, keyword: []const u8, status: []const u8) !TenantListResult {
+        return self.store.list(page, page_size, keyword, status);
     }
 
     pub fn update(self: *TenantService, id: i64, name: []const u8, status: []const u8) !bool {
@@ -36,7 +36,7 @@ pub const TenantService = struct {
     /// the default tenant id — every user/row without an explicit tenant
     /// context lands here (single-tenant compatibility).
     pub fn ensureDefault(self: *TenantService) !i64 {
-        var result = try self.store.list(1, 1);
+        var result = try self.store.list(1, 1, "", "");
         defer result.free(self.allocator);
         if (result.items.len > 0) return result.items[0].id;
         return self.store.create("Default", "active", zigmodu.time.wallClockSeconds(self.io));

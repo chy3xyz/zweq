@@ -26,11 +26,11 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "accounts/{id}/menu", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "accounts/{id}/menu", .handler = http.wrapHandler(Self, save), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "accounts/{id}/menu/publish", .handler = http.wrapHandler(Self, publish), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "accounts/{id}/menu/fetch", .handler = http.wrapHandler(Self, fetchMenu), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "accounts/{id}/menu", .handler = http.wrapHandler(Self, deleteRemote), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "accounts/{id}/menu", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "menu:read" } },
+            .{ .method = .PUT, .path = "accounts/{id}/menu", .handler = http.wrapHandler(Self, save), .meta = .{ .permission = "menu:write" } },
+            .{ .method = .POST, .path = "accounts/{id}/menu/publish", .handler = http.wrapHandler(Self, publish), .meta = .{ .permission = "menu:write" } },
+            .{ .method = .GET, .path = "accounts/{id}/menu/fetch", .handler = http.wrapHandler(Self, fetchMenu), .meta = .{ .permission = "menu:read" } },
+            .{ .method = .DELETE, .path = "accounts/{id}/menu", .handler = http.wrapHandler(Self, deleteRemote), .meta = .{ .permission = "menu:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {

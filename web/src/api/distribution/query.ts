@@ -16,9 +16,11 @@ export async function listDistributors(
   accountId: number,
   page: number,
   pageSize: number,
+  keyword = '',
+  status = -1,
 ): Promise<DistributorListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: DistributorListResult }>(
-    distributorsQuery(accountId, page, pageSize),
+    distributorsQuery(accountId, page, pageSize, keyword, status),
   );
   return unwrapEnvelope(data);
 }
@@ -27,9 +29,11 @@ export async function listCommissions(
   accountId: number,
   page: number,
   pageSize: number,
+  keyword = '',
+  level = -1,
 ): Promise<CommissionListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: CommissionListResult }>(
-    commissionsQuery(accountId, page, pageSize),
+    commissionsQuery(accountId, page, pageSize, keyword, level),
   );
   return unwrapEnvelope(data);
 }

@@ -9,6 +9,7 @@ export interface SeckillActivityItem {
   per_user: number;
   start_at: number;
   end_at: number;
+  status: number;
   created_at: number;
 }
 
@@ -37,4 +38,5 @@ export interface CreateSeckillRequest {
   per_user?: number;
   start_at?: number;
   end_at?: number;
+  status?: number;
 }

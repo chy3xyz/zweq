@@ -18,15 +18,18 @@ import { render } from 'solid-js/web';
 import '#ui/App.css';
 
 import { ROUTE_PATH } from '#ui/constants';
+import { ROUTE_PERMISSIONS } from '#ui/constants/navItems';
 import { useAuth } from '#ui/hooks';
+import { hasPermission } from '#ui/utils/permissions';
 import { AuthLayout, MainLayout } from '#ui/layouts';
-import { AuthProvider } from '#ui/providers';
+import { AuthProvider, AccountProvider, FeedbackProvider } from '#ui/providers';
 
 const SignIn = lazy(() => import('#ui/pages/SignIn'));
 const SignUp = lazy(() => import('#ui/pages/SignUp'));
 const ForgotPassword = lazy(() => import('#ui/pages/ForgotPassword'));
 const ResetPassword = lazy(() => import('#ui/pages/ResetPassword'));
 const VerifyEmail = lazy(() => import('#ui/pages/VerifyEmail'));
+const Roles = lazy(() => import('#ui/pages/Roles'));
 const Users = lazy(() => import('#ui/pages/Users'));
 const Accounts = lazy(() => import('#ui/pages/Accounts'));
 const Rules = lazy(() => import('#ui/pages/Rules'));
@@ -84,18 +87,31 @@ function Protected(props: { children?: JSX.Element }) {
   );
 }
 
-/** Redirects non-admin users away from admin-only pages. */
-function AdminGate(props: { children?: JSX.Element }) {
+/** Redirects users without the required permission away from protected pages. */
+function PermissionGate(props: { permission?: string; children?: JSX.Element }) {
   const [auth] = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const required = () => props.permission ?? ROUTE_PERMISSIONS[location.pathname];
 
   createEffect(() => {
-    if (auth.status === 'verified' && !auth.user?.admin) {
+    if (auth.status !== 'verified') return;
+    const perm = required();
+    if (!perm) return;
+    const ok =
+      auth.user?.admin ||
+      hasPermission(auth.user?.permissions, perm);
+    if (!ok) {
       navigate(ROUTE_PATH.profile, { replace: true });
     }
   });
 
   return <>{props.children}</>;
+}
+
+function AdminGate(props: { children?: JSX.Element }) {
+  return <PermissionGate>{props.children}</PermissionGate>;
 }
 
 function Root(props: { children?: JSX.Element }) {
@@ -110,8 +126,10 @@ function Root(props: { children?: JSX.Element }) {
   });
 
   return (
-    <AuthProvider>
-      <ErrorBoundary
+      <AuthProvider>
+        <FeedbackProvider>
+        <AccountProvider>
+        <ErrorBoundary
         fallback={(err, reset) => (
           <div class="flex min-h-screen flex-col items-center justify-center gap-4 p-6">
             <p class="text-error">页面出错了。</p>
@@ -126,7 +144,9 @@ function Root(props: { children?: JSX.Element }) {
       >
         <Suspense fallback={<BootFallback />}>{props.children}</Suspense>
       </ErrorBoundary>
-    </AuthProvider>
+        </AccountProvider>
+        </FeedbackProvider>
+      </AuthProvider>
   );
 }
 
@@ -182,6 +202,14 @@ if (root) {
               <AdminGate>
                 <Dashboard />
               </AdminGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.roles}
+            component={() => (
+              <PermissionGate permission="permission:read">
+                <Roles />
+              </PermissionGate>
             )}
           />
           <Route
@@ -326,6 +354,30 @@ if (root) {
               <AdminGate>
                 <Distribution />
               </AdminGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.shop}
+            component={() => (
+              <PermissionGate permission="shop:read">
+                <Shop />
+              </PermissionGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.shopOrders}
+            component={() => (
+              <PermissionGate permission="shop:read">
+                <ShopOrders />
+              </PermissionGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.shopAdmin}
+            component={() => (
+              <PermissionGate permission="shop:write">
+                <ShopAdmin />
+              </PermissionGate>
             )}
           />
           <Route

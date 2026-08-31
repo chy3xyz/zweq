@@ -55,13 +55,13 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "tasks/stats", .handler = http.wrapHandler(Self, stats), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "tasks", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "tasks/{id}", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "tasks/{id}/retry", .handler = http.wrapHandler(Self, retry), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "tasks/{id}/cancel", .handler = http.wrapHandler(Self, cancel), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "tasks/purge", .handler = http.wrapHandler(Self, purge), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "tasks/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "tasks/stats", .handler = http.wrapHandler(Self, stats), .meta = .{ .permission = "task:read" } },
+            .{ .method = .GET, .path = "tasks", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "task:read" } },
+            .{ .method = .GET, .path = "tasks/{id}", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "task:read" } },
+            .{ .method = .POST, .path = "tasks/{id}/retry", .handler = http.wrapHandler(Self, retry), .meta = .{ .permission = "task:write" } },
+            .{ .method = .POST, .path = "tasks/{id}/cancel", .handler = http.wrapHandler(Self, cancel), .meta = .{ .permission = "task:write" } },
+            .{ .method = .POST, .path = "tasks/purge", .handler = http.wrapHandler(Self, purge), .meta = .{ .permission = "task:write" } },
+            .{ .method = .DELETE, .path = "tasks/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "task:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService) Self {

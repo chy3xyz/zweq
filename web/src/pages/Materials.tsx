@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 
 import {
   createMaterialFile,
@@ -13,8 +13,9 @@ import {
   type MaterialKind,
   type NewsItem,
 } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
+import { useAccountId } from '#ui/hooks/useAccountId';
 import { usePaged } from '#ui/hooks/usePaged';
 import { formatDateTime } from '#ui/utils';
 
@@ -22,7 +23,7 @@ const PAGE_SIZE = 20;
 const KIND_LABEL: Record<MaterialKind, string> = { image: '图片', voice: '语音', video: '视频' };
 
 function Materials() {
-  const accounts = useAccounts();
+  const { accountId, onAccountChange } = useAccountId();
   const [success, setSuccess] = createSignal<string | null>(null);
 
   // 图文编辑
@@ -41,19 +42,20 @@ function Materials() {
   const [fileMediaId, setFileMediaId] = createSignal('');
   const [fileUrl, setFileUrl] = createSignal('');
 
-  const accountId = () => accounts.selected() ?? 0;
-  const news = usePaged<NewsItem>((page, pageSize) => listNews(page, pageSize, accountId()), PAGE_SIZE);
+  const news = usePaged<NewsItem>(
+    (page, pageSize) => listNews(page, pageSize, accountId()),
+    PAGE_SIZE,
+    accountId,
+  );
   const files = usePaged<MaterialFileItem>(
     (page, pageSize) => listMaterialFiles(page, pageSize, accountId(), kindFilter() || undefined),
     PAGE_SIZE,
+    () => [accountId(), kindFilter()],
   );
 
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
+  onAccountChange(() => {
     setEditing(null);
-    void news.reload(1);
-    void files.reload(1);
-  };
+  });
 
   const onNewNews = () => {
     setEditing(null);
@@ -162,18 +164,7 @@ function Materials() {
         <p class="text-sm text-base-content/60">图文素材 + 图片/语音/视频素材（关联微信永久素材 media_id）</p>
       </div>
 
-      <label class="form-control w-full max-w-xs">
-        <span class="label-text mb-1">选择账号</span>
-        <select class="select select-bordered select-sm" value={accountId()} onChange={(e) => onAccountChange(Number(e.currentTarget.value))}>
-          <For each={accounts.accounts()}>
-            {(a) => (
-              <option value={a.id}>
-                {a.name}（{a.id}）
-              </option>
-            )}
-          </For>
-        </select>
-      </label>
+      <AccountRequiredBanner />
 
       <Show when={success()}>
         <div role="alert" class="alert alert-success py-2 text-sm">

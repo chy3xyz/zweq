@@ -33,8 +33,8 @@ pub fn SystemApi(comptime CacheT: type, comptime TaskSvcT: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "system/info", .handler = http.wrapHandler(Self, info), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "system/dashboard", .handler = http.wrapHandler(Self, dashboard), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "system/info", .handler = http.wrapHandler(Self, info), .meta = .{ .permission = "system:read" } },
+            .{ .method = .GET, .path = "system/dashboard", .handler = http.wrapHandler(Self, dashboard), .meta = .{ .permission = "system:read" } },
         };
 
         pub fn init(

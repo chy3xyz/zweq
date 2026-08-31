@@ -151,8 +151,8 @@ pub const MaterialService = struct {
         return self.store.getNews(id) catch error.Unexpected;
     }
 
-    pub fn listNews(self: *MaterialService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) MaterialError!MaterialNewsListResult {
-        return self.store.listNews(page, page_size, tenant_id, account_id) catch error.Unexpected;
+    pub fn listNews(self: *MaterialService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8) MaterialError!MaterialNewsListResult {
+        return self.store.listNews(page, page_size, tenant_id, account_id, keyword) catch error.Unexpected;
     }
 
     pub fn updateNews(self: *MaterialService, id: i64, title: []const u8, author: []const u8, digest: []const u8, content: []const u8, thumb_media_id: []const u8, thumb_url: []const u8, url: []const u8) MaterialError!void {

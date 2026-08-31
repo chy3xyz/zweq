@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RBAC 闭环：`RolePermission` 关联表 + `collectPermissionCodes`（user.admin / 角色 code / module:action）；`GET /auth/me` 返回 `permissions`；角色权限 API `GET|POST|DELETE /roles/{id}/permissions`；前端菜单按 `canAccessAdmin` 隐藏。
 - 小程序商城 C 端登录：`wx.login` → `miniprogram/login`（公开）→ `shop/auth/login` fan JWT；`shopSession` store 替换 `DEMO_OPENID`。
 - CI 增加 `zig build lint-size` 门禁。
+- 权限目录种子（`permission_catalog` + `permission_seed`）：启动时写入全部 `module:action` 权限码，founder/admin 全绑，operator 默认只读。
+- 管理后台「角色权限」页（`/roles`）：角色 CRUD、权限码管理、角色授权勾选、用户绑角色。
+- 侧栏菜单细粒度映射（`navItems.ts` + `PermissionGate`）；后端路由 `admin` 改为 `{module}:read|write`。
 
 ### Changed
 - 巨型文件按子域拆分（正文逐字搬运，语义零变更；全部源文件 ≤ 1200 行，新增 `zig build lint-size` 门禁）：

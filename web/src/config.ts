@@ -12,5 +12,6 @@ export const APP_CONFIG = {
   storage: {
     token: 'zweq.token',
     user: 'zweq.user',
+    accountId: 'zweq.accountId',
   },
 } as const;

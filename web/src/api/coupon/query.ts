@@ -14,11 +14,21 @@ export async function listCoupons(
   accountId: number,
   page: number,
   pageSize: number,
+  keyword = '',
+  status = -1,
 ): Promise<CouponListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: CouponListResult }>(
-    couponListQuery(accountId, page, pageSize),
+    couponListQuery(accountId, page, pageSize, keyword, status),
   );
   return unwrapEnvelope(data);
+}
+
+export async function setCouponStatus(id: number, status: number): Promise<void> {
+  const { data } = await http.put<{ code: number; msg: string; data: null }>(
+    `${COUPON_PATH.coupon(id)}/status`,
+    { status },
+  );
+  unwrapEnvelope(data);
 }
 
 export async function createCoupon(body: CreateCouponRequest): Promise<{ id: number }> {
@@ -51,9 +61,11 @@ export async function listCouponUsers(
   accountId: number,
   page: number,
   pageSize: number,
+  keyword = '',
+  status = '',
 ): Promise<CouponUserListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: CouponUserListResult }>(
-    couponUsersQuery(accountId, page, pageSize),
+    couponUsersQuery(accountId, page, pageSize, keyword, status),
   );
   return unwrapEnvelope(data);
 }

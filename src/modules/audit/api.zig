@@ -45,8 +45,8 @@ pub fn AuditApi(comptime AuditServiceT: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "audit-logs", .handler = http.wrapHandler(Self, listLogs), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "audit-logs/export", .handler = http.wrapHandler(Self, exportLogs), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "audit-logs", .handler = http.wrapHandler(Self, listLogs), .meta = .{ .permission = "audit:read" } },
+            .{ .method = .GET, .path = "audit-logs/export", .handler = http.wrapHandler(Self, exportLogs), .meta = .{ .permission = "audit:read" } },
         };
 
         pub fn init(svc: *AuditServiceT, users: *UserService) Self {

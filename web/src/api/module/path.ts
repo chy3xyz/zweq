@@ -3,6 +3,7 @@ import { APP_CONFIG } from '#ui/config';
 export const MODULE_PATH = {
   list: `${APP_CONFIG.apiPrefix}/modules`,
   create: `${APP_CONFIG.apiPrefix}/modules`,
+  adminNav: `${APP_CONFIG.apiPrefix}/admin/nav`,
 } as const;
 
 export const accountModules = (accountId: number) => `${APP_CONFIG.apiPrefix}/accounts/${accountId}/modules`;

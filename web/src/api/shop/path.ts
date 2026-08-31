@@ -14,6 +14,8 @@ export const shopProductsQuery = (
   page: number,
   pageSize: number,
   keyword = '',
+  categoryId = 0,
+  status = -1,
 ) => {
   const params = new URLSearchParams({
     account_id: String(accountId),
@@ -21,6 +23,9 @@ export const shopProductsQuery = (
     page_size: String(pageSize),
   });
   if (keyword) params.set('keyword', keyword);
+  if (categoryId) params.set('category_id', String(categoryId));
+  // -1 = 全部（后端约定），0 下架 / 1 上架。
+  if (status >= 0) params.set('status', String(status));
   return `${SHOP_PATH.adminProducts}?${params.toString()}`;
 };
 

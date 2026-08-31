@@ -85,7 +85,7 @@ test "shop: category CRUD + product lifecycle (Phase1)" {
     try std.testing.expectEqualStrings("9900", skus[0].price);
 
     // C 端列表（仅上架）含商品。
-    var list = try svc.listProducts(1, 20, 1, 9, 0, "", true);
+    var list = try svc.listProducts(1, 20, 1, 9, 0, "", 1);
     defer list.free(allocator);
     try std.testing.expectEqual(@as(i64, 1), list.total);
 
@@ -101,7 +101,7 @@ test "shop: category CRUD + product lifecycle (Phase1)" {
         .status = 0,
         .skus = &.{},
     });
-    var list2 = try svc.listProducts(1, 20, 1, 9, 0, "", true);
+    var list2 = try svc.listProducts(1, 20, 1, 9, 0, "", 1);
     defer list2.free(allocator);
     try std.testing.expectEqual(@as(i64, 0), list2.total);
 
@@ -198,7 +198,7 @@ test "shop: cart/address/order trade lifecycle (Phase2)" {
     // 下单：数量 5 → 扣库存 10→5；金额 5000*5。
     const order_id = try svc.createOrder(1, 9, "o_buyer", addr_id, &.{
         .{ .product_id = pid, .sku_id = sku_id, .quantity = 5 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
     var o = (try svc.getOrder(order_id)).?;
     defer o.free(allocator);
     try std.testing.expectEqualStrings("25000", o.total_amount);
@@ -221,7 +221,7 @@ test "shop: cart/address/order trade lifecycle (Phase2)" {
     // 超库存下单 → OutOfStock。
     try std.testing.expectError(error.OutOfStock, svc.createOrder(1, 9, "o_buyer", addr_id, &.{
         .{ .product_id = pid, .sku_id = sku_id, .quantity = 99 },
-    }, "", "", "", 0));
+    }, "", "", "", 0, ""));
 
     // 状态流转：支付 → 发货 → 确认收货；待支付取消 → 冲突。
     try svc.markPaid(1, 9, order_id);
@@ -280,7 +280,7 @@ test "shop: refund apply/audit + comment + distribution hookup (Phase3)" {
     });
     const order_id = try svc.createOrder(1, 9, "o_B", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
     try svc.markPaid(1, 9, order_id);
 
     // 分佣：B 的一级上级 A 得 10% = 1000。
@@ -316,7 +316,7 @@ test "shop: refund apply/audit + comment + distribution hookup (Phase3)" {
     // 完整订单（支付→发货→收货）后可评价；非买家不可评。
     const order2 = try svc.createOrder(1, 9, "o_B", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
     try svc.markPaid(1, 9, order2);
     try svc.shipOrder(order2, "顺丰", "SF2");
     try svc.confirmOrder(order2);
@@ -389,18 +389,18 @@ test "shop: coupon deduction + member points accrual on payment" {
     });
 
     // 会员卡（支付后积分累计的前提）：先建等级，开卡自动绑定。
-    _ = try mc_svc.createLevel(1, 9, "普通会员", 1, 1000, 100, 0);
+    _ = try mc_svc.createLevel(1, 9, "普通会员", 1, 1000, 100, 0, 1);
     try mc_svc.openCard(1, 9, "o_m");
 
     // 领券：满 50 减 10（1000 分）。
-    const coupon_id = try coupon_svc.createCoupon(1, 9, "满50减10", 1000, 5000, 100, 1, 0, 0);
+    const coupon_id = try coupon_svc.createCoupon(1, 9, "满50减10", 1000, 5000, 100, 1, 0, 0, 1);
     const code = try coupon_svc.claimCoupon(allocator, 1, 9, "o_m", coupon_id);
     defer allocator.free(code);
 
     // 下单用券：100 元 - 10 元 = 90 元实付。
     const order_id = try svc.createOrder(1, 9, "o_m", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, code, "", "", 0);
+    }, code, "", "", 0, "");
     var o = (try svc.getOrder(order_id)).?;
     defer o.free(allocator);
     try std.testing.expectEqualStrings("10000", o.total_amount);
@@ -422,7 +422,7 @@ test "shop: coupon deduction + member points accrual on payment" {
     defer allocator.free(code_b);
     try std.testing.expectError(error.InvalidInput, svc.createOrder(1, 9, "o_m", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, code_b, "", "", 0));
+    }, code_b, "", "", 0, ""));
 }
 
 test "shop: idempotency + stock restore on cancel (production hardening)" {
@@ -459,8 +459,8 @@ test "shop: idempotency + stock restore on cancel (production hardening)" {
     const items: []const shop.service.OrderItemInput = &.{.{ .product_id = pid, .sku_id = skus[0].id, .quantity = 3 }};
 
     // 幂等：同 client_trade_no 重复下单 → 返回同一订单，库存只扣一次（10→7）。
-    const o1 = try svc.createOrder(1, 9, "o_r", addr_id, items, "", "CTN-001", "", 0);
-    const o2 = try svc.createOrder(1, 9, "o_r", addr_id, items, "", "CTN-001", "", 0);
+    const o1 = try svc.createOrder(1, 9, "o_r", addr_id, items, "", "CTN-001", "", 0, "");
+    const o2 = try svc.createOrder(1, 9, "o_r", addr_id, items, "", "CTN-001", "", 0, "");
     try std.testing.expectEqual(o1, o2);
     const sku_after = (try svc.getSku(skus[0].id)).?;
     defer sku_after.free(allocator);
@@ -539,15 +539,15 @@ test "shop: favorite + order stats (production extras)" {
     });
     const o1 = try svc.createOrder(1, 9, "o_s", addr_id, &.{
         .{ .product_id = pid1, .sku_id = s1[0].id, .quantity = 2 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
     try svc.markPaid(1, 9, o1); // 已支付 2000
     const o2 = try svc.createOrder(1, 9, "o_s", addr_id, &.{
         .{ .product_id = pid2, .sku_id = s1[0].id, .quantity = 1 },
-    }, "", "", "", 0);
+    }, "", "", "", 0, "");
     try svc.cancelOrder(o2); // 取消
     _ = try svc.createOrder(1, 9, "o_s", addr_id, &.{
         .{ .product_id = pid1, .sku_id = s1[0].id, .quantity = 1 },
-    }, "", "", "", 0); // 待支付
+    }, "", "", "", 0, ""); // 待支付
 
     const stats = try svc.orderStats(1, 9);
     try std.testing.expectEqual(@as(i64, 1), stats.pending_pay);
@@ -601,7 +601,7 @@ test "shop: balance payment via wallet (production extras)" {
     // 余额支付下单：钱包 20000 → 15000，订单已支付。
     const order_id = try svc.createOrder(1, 9, "o_balance", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "balance", 0);
+    }, "", "", "balance", 0, "");
     var o = (try svc.getOrder(order_id)).?;
     defer o.free(allocator);
     try std.testing.expectEqual(@as(i64, 1), o.status); // 已支付
@@ -612,5 +612,5 @@ test "shop: balance payment via wallet (production extras)" {
     // 余额不足（仅 5000）→ 再下单 100 元 → InsufficientBalance。
     try std.testing.expectError(error.InsufficientBalance, svc.createOrder(1, 9, "o_balance", addr_id, &.{
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
-    }, "", "", "balance", 0));
+    }, "", "", "balance", 0, ""));
 }

@@ -34,23 +34,29 @@ pub const SeckillService = struct {
         return zigmodu.time.wallClockSeconds(self.io);
     }
 
-    pub fn createActivity(self: *SeckillService, tenant_id: i64, account_id: i64, title: []const u8, price: i64, original_price: i64, stock: i64, per_user: i64, start_at: i64, end_at: i64) SeckillError!i64 {
+    pub fn createActivity(self: *SeckillService, tenant_id: i64, account_id: i64, title: []const u8, price: i64, original_price: i64, stock: i64, per_user: i64, start_at: i64, end_at: i64, status: i64) SeckillError!i64 {
         if (std.mem.trim(u8, title, " \t").len == 0 or stock <= 0) return error.InvalidInput;
         if (per_user <= 0) return error.InvalidInput;
         if (start_at > 0 and end_at > 0 and start_at >= end_at) return error.InvalidInput;
-        return self.store.createActivity(tenant_id, account_id, title, price, original_price, stock, per_user, start_at, end_at, self.now()) catch error.Unexpected;
+        return self.store.createActivity(tenant_id, account_id, title, price, original_price, stock, per_user, start_at, end_at, status, self.now()) catch error.Unexpected;
     }
 
-    pub fn listActivities(self: *SeckillService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) SeckillError!SeckillListResult {
-        return self.store.listActivities(page, page_size, tenant_id, account_id) catch error.Unexpected;
+    /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
+    pub fn listActivities(self: *SeckillService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) SeckillError!SeckillListResult {
+        return self.store.listActivities(page, page_size, tenant_id, account_id, keyword, status) catch error.Unexpected;
+    }
+
+    /// 上下架：1 上架 / 0 下架。
+    pub fn setActivityStatus(self: *SeckillService, id: i64, status: i64) SeckillError!bool {
+        return self.store.setActivityStatus(id, status, self.now()) catch error.Unexpected;
     }
 
     pub fn getActivity(self: *SeckillService, id: i64) SeckillError!?SeckillActivityRow {
         return self.store.getActivity(id) catch error.Unexpected;
     }
 
-    pub fn listOrders(self: *SeckillService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) SeckillError!persist.SeckillOrderListResult {
-        return self.store.listOrders(page, page_size, tenant_id, account_id) catch error.Unexpected;
+    pub fn listOrders(self: *SeckillService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, keyword: []const u8) SeckillError!persist.SeckillOrderListResult {
+        return self.store.listOrders(page, page_size, tenant_id, account_id, openid, keyword) catch error.Unexpected;
     }
 
     /// 抢购：时间窗 → 限购 → 原子库存 → 落单。
@@ -60,6 +66,8 @@ pub const SeckillService = struct {
         const a = a_opt orelse return error.NotFound;
         defer a.free(self.allocator);
         const now_secs = self.now();
+        // 下架活动不可抢：C 端列表与抢购入口都必须挡住。
+        if (a.status != 1) return error.NotFound;
         if (a.start_at > 0 and now_secs < a.start_at) return error.NotStarted;
         if (a.end_at > 0 and now_secs > a.end_at) return error.Ended;
 

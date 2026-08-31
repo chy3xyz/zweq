@@ -8,6 +8,7 @@ const user_svc = @import("../user/service.zig");
 const audit_svc = @import("../audit/service.zig");
 
 const service = @import("service.zig");
+const admin_nav = @import("../../admin_nav.zig");
 
 const ModuleDto = struct {
     id: i64,
@@ -63,13 +64,14 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "modules", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "modules", .handler = http.wrapHandler(Self, register), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "accounts/{id}/modules", .handler = http.wrapHandler(Self, listBindings), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "accounts/{id}/modules", .handler = http.wrapHandler(Self, bind), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "accounts/{id}/modules/{module}", .handler = http.wrapHandler(Self, unbind), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "accounts/{id}/modules/{module}/config", .handler = http.wrapHandler(Self, getConfig), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "accounts/{id}/modules/{module}/config", .handler = http.wrapHandler(Self, setConfig), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "modules", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "module:read" } },
+            .{ .method = .POST, .path = "modules", .handler = http.wrapHandler(Self, register), .meta = .{ .permission = "module:write" } },
+            .{ .method = .GET, .path = "accounts/{id}/modules", .handler = http.wrapHandler(Self, listBindings), .meta = .{ .permission = "module:read" } },
+            .{ .method = .PUT, .path = "accounts/{id}/modules", .handler = http.wrapHandler(Self, bind), .meta = .{ .permission = "module:write" } },
+            .{ .method = .DELETE, .path = "accounts/{id}/modules/{module}", .handler = http.wrapHandler(Self, unbind), .meta = .{ .permission = "module:write" } },
+            .{ .method = .GET, .path = "accounts/{id}/modules/{module}/config", .handler = http.wrapHandler(Self, getConfig), .meta = .{ .permission = "module:read" } },
+            .{ .method = .PUT, .path = "accounts/{id}/modules/{module}/config", .handler = http.wrapHandler(Self, setConfig), .meta = .{ .permission = "module:write" } },
+            .{ .method = .GET, .path = "admin/nav", .handler = http.wrapHandler(Self, adminNav), .meta = .{ .permission = "module:read" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
@@ -86,6 +88,13 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             try g.delete("/accounts/{id}/modules/{module}", unbind, @ptrCast(@alignCast(self)));
             try g.get("/accounts/{id}/modules/{module}/config", getConfig, @ptrCast(@alignCast(self)));
             try g.put("/accounts/{id}/modules/{module}/config", setConfig, @ptrCast(@alignCast(self)));
+            try g.get("/admin/nav", adminNav, @ptrCast(@alignCast(self)));
+        }
+
+        fn adminNav(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            try admin_nav.handleAdminNav(ctx, self.svc, self.default_tenant_id, self.user_svc);
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {

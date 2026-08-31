@@ -2,7 +2,7 @@ import { http } from '#ui/api/client';
 import { unwrapEnvelope } from '#ui/api/envelope';
 
 import { accountModule, accountModules, MODULE_PATH, moduleListQuery } from './path';
-import type { BindingItem, BindModuleRequest, ModuleItem, ModuleListResult, RegisterModuleRequest } from './types';
+import type { AdminNavItem, BindingItem, BindModuleRequest, ModuleItem, ModuleListResult, RegisterModuleRequest } from './types';
 
 async function getEnvelope<T>(path: string): Promise<T> {
   const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
@@ -33,4 +33,13 @@ export async function unbindModule(accountId: number, module: string): Promise<v
   unwrapEnvelope(data);
 }
 
-export type { BindingItem, ModuleItem, ModuleListResult };
+export async function getAdminNav(accountId?: number | null): Promise<AdminNavItem[]> {
+  const params = new URLSearchParams();
+  if (accountId != null && accountId > 0) params.set('account_id', String(accountId));
+  const qs = params.toString();
+  const path = qs ? `${MODULE_PATH.adminNav}?${qs}` : MODULE_PATH.adminNav;
+  const res = await getEnvelope<{ items: AdminNavItem[] }>(path);
+  return res.items;
+}
+
+export type { AdminNavItem, BindingItem, ModuleItem, ModuleListResult };

@@ -1,5 +1,7 @@
 import { For, Show, type JSX } from 'solid-js';
 
+import Pagination from './Pagination';
+
 export interface Column<T> {
   key: string;
   title: string;
@@ -19,6 +21,8 @@ interface DataTableProps<T> {
   error: string | null;
   emptyText?: string;
   onPageChange: (page: number) => void;
+  pageSize?: number;
+  onPageSizeChange?: (size: number) => void;
   actions?: (row: T) => JSX.Element;
   actionsTitle?: string;
 }
@@ -38,17 +42,13 @@ export default function DataTable<T>(props: DataTableProps<T>) {
         </div>
       </Show>
 
-      <div class="overflow-x-auto rounded-lg border border-base-300">
-        <table class="table">
+      <div class="relative overflow-x-auto rounded-lg border border-base-300">
+        <table class="table" classList={{ 'opacity-50': props.loading }}>
           <thead>
             <tr>
-              <For each={props.columns}>
-                {(col) => (
-                  <th class={col.headerClass}>{col.title}</th>
-                )}
-              </For>
+              <For each={props.columns}>{(col) => <th class={col.headerClass}>{col.title}</th>}</For>
               <Show when={props.actions}>
-                <th class="text-right">{props.actionsTitle ?? '操作'}</th>
+                <th class="sticky right-0 bg-base-100 text-right">{props.actionsTitle ?? '操作'}</th>
               </Show>
             </tr>
           </thead>
@@ -62,12 +62,10 @@ export default function DataTable<T>(props: DataTableProps<T>) {
             </Show>
             <For each={props.rows}>
               {(row) => (
-                <tr>
-                  <For each={props.columns}>
-                    {(col) => <td class={col.class}>{col.render(row)}</td>}
-                  </For>
+                <tr class="hover">
+                  <For each={props.columns}>{(col) => <td class={col.class}>{col.render(row)}</td>}</For>
                   <Show when={props.actions}>
-                    <td class="text-right">
+                    <td class="sticky right-0 bg-base-100 text-right">
                       <div class="flex justify-end gap-1">{props.actions!(row)}</div>
                     </td>
                   </Show>
@@ -76,31 +74,23 @@ export default function DataTable<T>(props: DataTableProps<T>) {
             </For>
           </tbody>
         </table>
+
+        <Show when={props.loading}>
+          <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-base-100/40">
+            <span class="loading loading-spinner loading-md text-primary" />
+          </div>
+        </Show>
       </div>
 
-      <div class="flex items-center justify-between">
-        <span class="text-sm text-base-content/60">
-          第 {props.page} / {props.totalPages} 页 · 共 {props.total} 条
-        </span>
-        <div class="join">
-          <button
-            type="button"
-            class="btn btn-sm join-item"
-            disabled={props.page <= 1 || props.loading}
-            onClick={() => props.onPageChange(props.page - 1)}
-          >
-            上一页
-          </button>
-          <button
-            type="button"
-            class="btn btn-sm join-item"
-            disabled={props.page >= props.totalPages || props.loading}
-            onClick={() => props.onPageChange(props.page + 1)}
-          >
-            下一页
-          </button>
-        </div>
-      </div>
+      <Pagination
+        page={props.page}
+        totalPages={props.totalPages}
+        total={props.total}
+        pageSize={props.pageSize ?? 20}
+        loading={props.loading}
+        onPageChange={props.onPageChange}
+        onPageSizeChange={props.onPageSizeChange}
+      />
     </div>
   );
 }

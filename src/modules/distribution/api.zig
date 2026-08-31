@@ -85,11 +85,11 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "distributions", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "distributions/commissions", .handler = http.wrapHandler(Self, commissions), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "distributions/join", .handler = http.wrapHandler(Self, join), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "distributions/distribute", .handler = http.wrapHandler(Self, distribute), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "distributions/withdraw", .handler = http.wrapHandler(Self, withdraw), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "distributions", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "distribution:read" } },
+            .{ .method = .GET, .path = "distributions/commissions", .handler = http.wrapHandler(Self, commissions), .meta = .{ .permission = "distribution:read" } },
+            .{ .method = .POST, .path = "distributions/join", .handler = http.wrapHandler(Self, join), .meta = .{ .permission = "distribution:write" } },
+            .{ .method = .POST, .path = "distributions/distribute", .handler = http.wrapHandler(Self, distribute), .meta = .{ .permission = "distribution:write" } },
+            .{ .method = .POST, .path = "distributions/withdraw", .handler = http.wrapHandler(Self, withdraw), .meta = .{ .permission = "distribution:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
@@ -145,8 +145,10 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
             try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
+            const keyword = ctx.queryStr("keyword", "");
+            const status = ctx.queryInt(i64, "status", -1);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listDistributors(params.page, params.page_size, tid, account_id) catch {
+            var result = self.svc.listDistributors(params.page, params.page_size, tid, account_id, keyword, status) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -160,8 +162,10 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
             try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
+            const keyword = ctx.queryStr("keyword", "");
+            const level = ctx.queryInt(i64, "level", -1);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listCommissions(params.page, params.page_size, tid, account_id) catch {
+            var result = self.svc.listCommissions(params.page, params.page_size, tid, account_id, keyword, level) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };

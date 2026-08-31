@@ -72,13 +72,13 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "accounts", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "accounts", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "accounts/{id}", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "accounts/{id}", .handler = http.wrapHandler(Self, update), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "accounts/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "accounts/{id}/wechat", .handler = http.wrapHandler(Self, getWechat), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "accounts/{id}/wechat", .handler = http.wrapHandler(Self, setWechat), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "accounts", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "account:read" } },
+            .{ .method = .POST, .path = "accounts", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "account:write" } },
+            .{ .method = .GET, .path = "accounts/{id}", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "account:read" } },
+            .{ .method = .PUT, .path = "accounts/{id}", .handler = http.wrapHandler(Self, update), .meta = .{ .permission = "account:write" } },
+            .{ .method = .DELETE, .path = "accounts/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "account:write" } },
+            .{ .method = .GET, .path = "accounts/{id}/wechat", .handler = http.wrapHandler(Self, getWechat), .meta = .{ .permission = "account:read" } },
+            .{ .method = .PUT, .path = "accounts/{id}/wechat", .handler = http.wrapHandler(Self, setWechat), .meta = .{ .permission = "account:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
@@ -117,7 +117,9 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             const kind_raw = ctx.queryParam("kind");
-            var result = self.svc.list(params.page, params.page_size, tid, kind_raw) catch |err| {
+            const keyword = ctx.queryStr("keyword", "");
+            const status = ctx.queryStr("status", "");
+            var result = self.svc.list(params.page, params.page_size, tid, kind_raw, keyword, status) catch |err| {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };

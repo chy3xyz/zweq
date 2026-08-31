@@ -39,15 +39,21 @@ pub const CouponService = struct {
         return zigmodu.time.wallClockSeconds(self.io);
     }
 
-    pub fn createCoupon(self: *CouponService, tenant_id: i64, account_id: i64, title: []const u8, amount: i64, min_amount: i64, total: i64, per_user: i64, start_at: i64, end_at: i64) CouponError!i64 {
+    pub fn createCoupon(self: *CouponService, tenant_id: i64, account_id: i64, title: []const u8, amount: i64, min_amount: i64, total: i64, per_user: i64, start_at: i64, end_at: i64, status: i64) CouponError!i64 {
         if (std.mem.trim(u8, title, " \t").len == 0) return error.InvalidInput;
         if (amount < 0 or min_amount < 0 or total < 0) return error.InvalidInput;
         if (per_user < 1) return error.InvalidInput;
-        return self.store.createCoupon(tenant_id, account_id, title, amount, min_amount, total, @max(1, per_user), start_at, end_at, self.now()) catch error.Unexpected;
+        return self.store.createCoupon(tenant_id, account_id, title, amount, min_amount, total, @max(1, per_user), start_at, end_at, status, self.now()) catch error.Unexpected;
     }
 
-    pub fn listCoupons(self: *CouponService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) CouponError!CouponListResult {
-        return self.store.listCoupons(page, page_size, tenant_id, account_id) catch error.Unexpected;
+    /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
+    pub fn listCoupons(self: *CouponService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) CouponError!CouponListResult {
+        return self.store.listCoupons(page, page_size, tenant_id, account_id, keyword, status) catch error.Unexpected;
+    }
+
+    /// 上下架：1 上架 / 0 下架。
+    pub fn setCouponStatus(self: *CouponService, id: i64, status: i64) CouponError!bool {
+        return self.store.setCouponStatus(id, status, self.now()) catch error.Unexpected;
     }
 
     pub fn getCoupon(self: *CouponService, id: i64) CouponError!?CouponRow {
@@ -65,6 +71,8 @@ pub const CouponService = struct {
         defer c.free(self.allocator);
 
         const now_secs = self.now();
+        // 下架券不可领取：管理端下架后，C 端列表与领取入口都必须挡住。
+        if (c.status != 1) return error.Expired;
         if (c.start_at > 0 and now_secs < c.start_at) return error.NotStarted;
         if (c.end_at > 0 and now_secs > c.end_at) return error.Expired;
 
@@ -93,8 +101,8 @@ pub const CouponService = struct {
         self.store.setStatus(u.id, "used", self.now()) catch return error.Unexpected;
     }
 
-    pub fn listUserCoupons(self: *CouponService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: ?[]const u8) CouponError!CouponUserListResult {
-        return self.store.listUserCoupons(page, page_size, tenant_id, account_id, openid) catch error.Unexpected;
+    pub fn listUserCoupons(self: *CouponService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: ?[]const u8, keyword: []const u8, status: []const u8) CouponError!CouponUserListResult {
+        return self.store.listUserCoupons(page, page_size, tenant_id, account_id, openid, keyword, status) catch error.Unexpected;
     }
 
     /// 生成券码 `CP-XXXXXXXX`（8 字节 hex）。
@@ -121,8 +129,8 @@ pub fn receiverHandle(ctx: ?*anyopaque, allocator: std.mem.Allocator, msg: messa
     if (!std.mem.eql(u8, msg.msg_type, "text")) return null;
     if (!std.mem.eql(u8, msg.content, "领券")) return null;
 
-    // 取该账号下第一个可领的券（按创建倒序）。
-    var coupons = c.coupon_svc.listCoupons(1, 10, msg.tenant_id, msg.account_id) catch return null;
+    // 取该账号下第一个可领的券（仅上架，按创建倒序）。
+    var coupons = c.coupon_svc.listCoupons(1, 10, msg.tenant_id, msg.account_id, "", 1) catch return null;
     defer coupons.free(allocator);
     if (coupons.items.len == 0) return null;
 

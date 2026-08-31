@@ -27,6 +27,7 @@ const license_mw = @import("middleware/license.zig");
 const mw_rate = @import("middleware/rate_limit.zig");
 const mw = @import("middleware/auth.zig");
 const catalog_permissions = @import("middleware/catalog_permissions.zig");
+const permission_seed = @import("permission_seed.zig");
 const mail = @import("services/mail.zig");
 const cache_svc = @import("services/cache.zig");
 const jobs = @import("jobs.zig");
@@ -201,6 +202,7 @@ pub fn main(init: std.process.Init) !void {
     var role_store = permission.persistence.RoleStore.init(allocator, store_env.client);
     catalog_permissions.init(&role_store);
     var role_svc = permission.service.RoleService.init(allocator, io, &role_store);
+    try permission_seed.seedDefaults(allocator, io, &role_store, default_tenant_id);
     var setting_store = setting.persistence.SettingStore.init(allocator, store_env.client);
     var setting_svc = setting.service.SettingService.init(allocator, io, &setting_store);
     var rule_store = rule.persistence.RuleStore.init(allocator, store_env.client);
@@ -226,7 +228,7 @@ pub fn main(init: std.process.Init) !void {
     var cloud_store = cloud.persistence.CloudStore.init(allocator, store_env.client);
     var cloud_svc = cloud.service.CloudService.init(allocator, io, &cloud_store, &module_svc, cfg.cloud_remote_url);
     // 注入原始 SQL 执行器（市场包 manifest 迁移 SQL 用）。
-    cloud_svc.setDriver(if (kind == .postgres) store_env.pg_pool.?.asDriver() else store_env.sqlite.?.asDriver());
+    cloud_svc.setDriver(store_env.asDriver());
     // 动态表元数据存储（manifest tables 注册 + 通用查询网关）。
     var dyn_table_store = cloud.persistence.DynamicTableStore.init(allocator, store_env.client);
     cloud_svc.setDynamicTableStore(&dyn_table_store);
@@ -490,6 +492,8 @@ pub fn main(init: std.process.Init) !void {
     var module_api = appmod.api.ModuleApi(@TypeOf(module_svc), @TypeOf(user_svc)).init(&module_svc, &user_svc, &audit_svc, default_tenant_id);
     var payment_api = payment.api.PaymentApi(@TypeOf(payment_svc), @TypeOf(user_svc)).init(&payment_svc, &user_svc, &audit_svc, default_tenant_id, &setting_store);
     var app_bff_api = app_bff.api.AppBffApi(@TypeOf(account_svc), @TypeOf(module_svc), @TypeOf(user_svc)).init(&account_svc, &module_svc, &user_svc, default_tenant_id);
+    var fan_app_api = app_bff.fan_api.FanAppApi(@TypeOf(user_svc), @TypeOf(fan_store), @TypeOf(points_svc), @TypeOf(coupon_svc), @TypeOf(lucky_draw_svc), @TypeOf(module_svc)).init(&user_svc, &fan_store, &points_svc, &coupon_svc, &lucky_draw_svc, &module_svc, default_tenant_id);
+    var fan_scene_api = app_bff.fan_scene_api.FanSceneApi(@TypeOf(user_svc), @TypeOf(checkin_svc), @TypeOf(vote_svc), @TypeOf(seckill_svc), @TypeOf(member_card_svc), @TypeOf(distribution_svc), @TypeOf(module_svc)).init(&user_svc, &checkin_svc, &vote_svc, &seckill_svc, &member_card_svc, &distribution_svc, &module_svc, default_tenant_id);
     var cloud_api = cloud.api.CloudApi(@TypeOf(cloud_svc), @TypeOf(user_svc)).init(&cloud_svc, &user_svc, &audit_svc, default_tenant_id);
     var material_api = material.api.MaterialApi(@TypeOf(material_svc), @TypeOf(user_svc)).init(&material_svc, &user_svc, &audit_svc, default_tenant_id);
     var checkin_api = checkin.api.CheckinApi(@TypeOf(checkin_svc), @TypeOf(user_svc)).init(&checkin_svc, &user_svc, &audit_svc, default_tenant_id);
@@ -555,7 +559,7 @@ pub fn main(init: std.process.Init) !void {
         .window_seconds = 60,
         .refill_rate = 1,
     };
-    var shop_api = shop.api.ShopApi(@TypeOf(shop_svc), @TypeOf(user_svc)).init(&shop_svc, &user_svc, &audit_svc, default_tenant_id, &shop_limiter, &fan_store, &setting_store);
+    var shop_api = shop.api.ShopApi(@TypeOf(shop_svc), @TypeOf(user_svc)).init(&shop_svc, &user_svc, &audit_svc, default_tenant_id, &shop_limiter, &fan_store, &setting_store, cfg.shop_order_timeout);
     var menu_api = menu.api.MenuApi(@TypeOf(menu_svc), @TypeOf(user_svc)).init(&menu_svc, &user_svc, &audit_svc, default_tenant_id);
     var points_api = points.api.PointsApi(@TypeOf(points_svc), @TypeOf(user_svc)).init(&points_svc, &user_svc, &audit_svc, default_tenant_id);
     var audit_api = audit.api.AuditApi(@TypeOf(audit_svc), @TypeOf(user_svc)).init(&audit_svc, &user_svc);
@@ -641,6 +645,8 @@ pub fn main(init: std.process.Init) !void {
     try v1_scope.mount(appmod.api.ModuleApi(@TypeOf(module_svc), @TypeOf(user_svc)), &module_api);
     try v1_scope.mount(payment.api.PaymentApi(@TypeOf(payment_svc), @TypeOf(user_svc)), &payment_api);
     try v1_scope.mount(app_bff.api.AppBffApi(@TypeOf(account_svc), @TypeOf(module_svc), @TypeOf(user_svc)), &app_bff_api);
+    try v1_scope.mount(app_bff.fan_api.FanAppApi(@TypeOf(user_svc), @TypeOf(fan_store), @TypeOf(points_svc), @TypeOf(coupon_svc), @TypeOf(lucky_draw_svc), @TypeOf(module_svc)), &fan_app_api);
+    try v1_scope.mount(app_bff.fan_scene_api.FanSceneApi(@TypeOf(user_svc), @TypeOf(checkin_svc), @TypeOf(vote_svc), @TypeOf(seckill_svc), @TypeOf(member_card_svc), @TypeOf(distribution_svc), @TypeOf(module_svc)), &fan_scene_api);
     try v1_scope.mount(cloud.api.CloudApi(@TypeOf(cloud_svc), @TypeOf(user_svc)), &cloud_api);
     try v1_scope.mount(material.api.MaterialApi(@TypeOf(material_svc), @TypeOf(user_svc)), &material_api);
     try v1_scope.mount(checkin.api.CheckinApi(@TypeOf(checkin_svc), @TypeOf(user_svc)), &checkin_api);

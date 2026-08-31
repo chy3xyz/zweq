@@ -50,8 +50,8 @@ pub fn LuckyDrawApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "lucky-draw/records", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "lucky-draw/draw", .handler = http.wrapHandler(Self, draw), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "lucky-draw/records", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "lucky_draw:read" } },
+            .{ .method = .POST, .path = "lucky-draw/draw", .handler = http.wrapHandler(Self, draw), .meta = .{ .permission = "lucky_draw:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {

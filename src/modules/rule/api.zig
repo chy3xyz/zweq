@@ -84,17 +84,17 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "rules", .handler = http.wrapHandler(Self, listRules), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "rules", .handler = http.wrapHandler(Self, createRule), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "rules/{id}", .handler = http.wrapHandler(Self, getRule), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "rules/{id}", .handler = http.wrapHandler(Self, updateRule), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "rules/{id}", .handler = http.wrapHandler(Self, deleteRule), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "rules/{id}/keywords", .handler = http.wrapHandler(Self, listKeywords), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "rules/{id}/keywords", .handler = http.wrapHandler(Self, addKeyword), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "rules/{id}/keywords/{kid}", .handler = http.wrapHandler(Self, removeKeyword), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "rules/{id}/replies", .handler = http.wrapHandler(Self, listReplies), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "rules/{id}/replies", .handler = http.wrapHandler(Self, addReply), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "rules/{id}/replies/{rid}", .handler = http.wrapHandler(Self, removeReply), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "rules", .handler = http.wrapHandler(Self, listRules), .meta = .{ .permission = "rule:read" } },
+            .{ .method = .POST, .path = "rules", .handler = http.wrapHandler(Self, createRule), .meta = .{ .permission = "rule:write" } },
+            .{ .method = .GET, .path = "rules/{id}", .handler = http.wrapHandler(Self, getRule), .meta = .{ .permission = "rule:read" } },
+            .{ .method = .PUT, .path = "rules/{id}", .handler = http.wrapHandler(Self, updateRule), .meta = .{ .permission = "rule:write" } },
+            .{ .method = .DELETE, .path = "rules/{id}", .handler = http.wrapHandler(Self, deleteRule), .meta = .{ .permission = "rule:write" } },
+            .{ .method = .GET, .path = "rules/{id}/keywords", .handler = http.wrapHandler(Self, listKeywords), .meta = .{ .permission = "rule:read" } },
+            .{ .method = .POST, .path = "rules/{id}/keywords", .handler = http.wrapHandler(Self, addKeyword), .meta = .{ .permission = "rule:write" } },
+            .{ .method = .DELETE, .path = "rules/{id}/keywords/{kid}", .handler = http.wrapHandler(Self, removeKeyword), .meta = .{ .permission = "rule:write" } },
+            .{ .method = .GET, .path = "rules/{id}/replies", .handler = http.wrapHandler(Self, listReplies), .meta = .{ .permission = "rule:read" } },
+            .{ .method = .POST, .path = "rules/{id}/replies", .handler = http.wrapHandler(Self, addReply), .meta = .{ .permission = "rule:write" } },
+            .{ .method = .DELETE, .path = "rules/{id}/replies/{rid}", .handler = http.wrapHandler(Self, removeReply), .meta = .{ .permission = "rule:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {

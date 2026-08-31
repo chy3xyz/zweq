@@ -86,16 +86,16 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .POST, .path = "pay/recharge", .handler = http.wrapHandler(Self, recharge), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "pay/recharge/{order_no}/complete", .handler = http.wrapHandler(Self, complete), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "pay/wallet", .handler = http.wrapHandler(Self, wallet), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "pay/orders", .handler = http.wrapHandler(Self, orders), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "pay/withdraws", .handler = http.wrapHandler(Self, withdraw), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "pay/withdraws", .handler = http.wrapHandler(Self, withdraws), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "pay/refund", .handler = http.wrapHandler(Self, refundV2), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "pay/transfer", .handler = http.wrapHandler(Self, transferV2), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "pay/refund/v3", .handler = http.wrapHandler(Self, refundV3), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "pay/transfer/v3", .handler = http.wrapHandler(Self, transferV3), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "pay/recharge", .handler = http.wrapHandler(Self, recharge), .meta = .{ .permission = "payment:write" } },
+            .{ .method = .POST, .path = "pay/recharge/{order_no}/complete", .handler = http.wrapHandler(Self, complete), .meta = .{ .permission = "payment:write" } },
+            .{ .method = .GET, .path = "pay/wallet", .handler = http.wrapHandler(Self, wallet), .meta = .{ .permission = "payment:read" } },
+            .{ .method = .GET, .path = "pay/orders", .handler = http.wrapHandler(Self, orders), .meta = .{ .permission = "payment:read" } },
+            .{ .method = .POST, .path = "pay/withdraws", .handler = http.wrapHandler(Self, withdraw), .meta = .{ .permission = "payment:write" } },
+            .{ .method = .GET, .path = "pay/withdraws", .handler = http.wrapHandler(Self, withdraws), .meta = .{ .permission = "payment:read" } },
+            .{ .method = .POST, .path = "pay/refund", .handler = http.wrapHandler(Self, refundV2), .meta = .{ .permission = "payment:write" } },
+            .{ .method = .POST, .path = "pay/transfer", .handler = http.wrapHandler(Self, transferV2), .meta = .{ .permission = "payment:write" } },
+            .{ .method = .POST, .path = "pay/refund/v3", .handler = http.wrapHandler(Self, refundV3), .meta = .{ .permission = "payment:write" } },
+            .{ .method = .POST, .path = "pay/transfer/v3", .handler = http.wrapHandler(Self, transferV3), .meta = .{ .permission = "payment:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64, settings: *setting_store_mod.SettingStore) Self {

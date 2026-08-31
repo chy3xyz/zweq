@@ -32,3 +32,13 @@ export interface BindModuleRequest {
   module: string;
   status?: 'active' | 'disabled';
 }
+
+export interface AdminNavItem {
+  module: string;
+  group: string;
+  subgroup: string;
+  href: string;
+  label: string;
+  permission: string;
+  order: number;
+}

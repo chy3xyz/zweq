@@ -225,16 +225,18 @@ pub const CatalogStore = struct {
         return affected > 0;
     }
 
-    /// 商品列表：account 过滤 + 分类过滤 + 关键词 + 仅上架 + 分页（on_sale=true 用于 C 端）。
-    pub fn listProducts(self: *CatalogStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, category_id: i64, keyword: []const u8, on_sale: bool) !ProductListResult {
+    /// 商品列表：account 过滤 + 分类过滤 + 关键词 + 上下架 + 分页。
+    /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
+    pub fn listProducts(self: *CatalogStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, category_id: i64, keyword: []const u8, status: i64) !ProductListResult {
         var q = self.client.shop_product.Query();
         defer q.deinit();
         const preds = self.client.shop_product.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         if (category_id > 0) _ = try q.Where(.{preds.category_idEQ(.{ .int = category_id })});
-        if (on_sale) _ = try q.Where(.{preds.statusEQ(.{ .int = 1 })});
-        if (keyword.len > 0) _ = try q.Where(.{preds.nameContains(keyword)});
+        if (status >= 0) _ = try q.Where(.{preds.statusEQ(.{ .int = status })});
+        // ContainsEscaped 会补 %…% 并转义 LIKE 通配符；Contains 是等值匹配，不能用于搜索。
+        if (keyword.len > 0) _ = try q.Where(.{preds.nameContainsEscaped(keyword)});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();

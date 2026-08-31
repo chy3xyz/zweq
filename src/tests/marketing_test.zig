@@ -58,7 +58,7 @@ test "points: redeem deducts points + stock, rejects insufficient/out-of-stock" 
     try std.testing.expectEqual(@as(i64, 100), newp);
 
     // 商品（100 积分，库存 5）。
-    const pid = try svc.createProduct(1, 5, "马克杯", 100, 5);
+    const pid = try svc.createProduct(1, 5, "马克杯", 100, 5, 1);
 
     // 兑换成功：积分 100→0，库存 5→4，订单 1 条。
     const order_id = try svc.redeem(1, 5, "o_p", pid);
@@ -82,11 +82,11 @@ test "points: redeem deducts points + stock, rejects insufficient/out-of-stock" 
 
     // 库存清空 → OutOfStock。
     _ = try svc.adjustPoints(1, 5, "o_p", 100);
-    try svc.updateProduct(pid, "马克杯", 100, 0);
+    try svc.updateProduct(pid, "马克杯", 100, 0, 1);
     try std.testing.expectError(error.OutOfStock, svc.redeem(1, 5, "o_p", pid));
 
     // 粉丝不存在 → FanNotFound（用有库存的商品）。
-    const pid2 = try svc.createProduct(1, 5, "新商品", 50, 1);
+    const pid2 = try svc.createProduct(1, 5, "新商品", 50, 1, 1);
     try std.testing.expectError(error.FanNotFound, svc.redeem(1, 5, "o_nobody", pid2));
 }
 
@@ -248,7 +248,7 @@ test "coupon: create/claim/use lifecycle + stock/limit" {
     var svc = coupon.service.CouponService.init(allocator, std.testing.io, &store);
 
     // 建券：总量 2，每人限领 1。
-    const cid = try svc.createCoupon(1, 9, "满100减20", 2000, 10000, 2, 1, 0, 0);
+    const cid = try svc.createCoupon(1, 9, "满100减20", 2000, 10000, 2, 1, 0, 0, 1);
     const c = (try svc.getCoupon(cid)).?;
     defer c.free(allocator);
     try std.testing.expectEqualStrings("满100减20", c.title);
@@ -272,12 +272,12 @@ test "coupon: create/claim/use lifecycle + stock/limit" {
     try std.testing.expectError(error.AlreadyUsed, svc.useCoupon(code1));
 
     // 领取记录落库。
-    var list = try svc.listUserCoupons(1, 20, 1, 9, null);
+    var list = try svc.listUserCoupons(1, 20, 1, 9, null, "", "");
     defer list.free(allocator);
     try std.testing.expectEqual(@as(i64, 2), list.total);
 
     // 过期券：end_at 已过 → Expired。
-    const cid2 = try svc.createCoupon(1, 9, "过期券", 100, 0, 0, 1, 0, 1000);
+    const cid2 = try svc.createCoupon(1, 9, "过期券", 100, 0, 0, 1, 0, 1000, 1);
     try std.testing.expectError(error.Expired, svc.claimCoupon(allocator, 1, 9, "o_d", cid2));
 }
 
@@ -307,7 +307,7 @@ test "coupon: module receiver handles 领券" {
     const account_id = try account_svc.create(1, "券测试号", "wechat");
     _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokcp", .encoding_aes_key = "", .verified = false });
     _ = try module_svc.bind(1, account_id, "coupon", "active");
-    _ = try coupon_svc.createCoupon(1, account_id, "新人券", 500, 0, 10, 1, 0, 0);
+    _ = try coupon_svc.createCoupon(1, account_id, "新人券", 500, 0, 10, 1, 0, 0, 1);
 
     const token = "tokcp";
     var ts_buf: [16]u8 = undefined;
@@ -466,7 +466,7 @@ test "seckill: rush lifecycle + atomic stock + dedup" {
     var store = seckill.persistence.SeckillStore.init(allocator, env.client);
     var svc = seckill.service.SeckillService.init(allocator, std.testing.io, &store);
 
-    const aid = try svc.createActivity(1, 9, "限时特惠", 9900, 19900, 2, 1, 0, 0);
+    const aid = try svc.createActivity(1, 9, "限时特惠", 9900, 19900, 2, 1, 0, 0, 1);
 
     // 抢 1 件成功，sold=1。
     _ = try svc.rush(1, 9, "o_a", aid, 1);
@@ -516,7 +516,7 @@ test "seckill: module receiver handles 秒杀 + 抢N" {
     const account_id = try account_svc.create(1, "秒杀测试号", "wechat");
     _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "toks", .encoding_aes_key = "", .verified = false });
     _ = try module_svc.bind(1, account_id, "seckill", "active");
-    _ = try seckill_svc.createActivity(1, account_id, "周年庆秒杀", 100, 500, 10, 1, 0, 0);
+    _ = try seckill_svc.createActivity(1, account_id, "周年庆秒杀", 100, 500, 10, 1, 0, 0, 1);
 
     const token = "toks";
     var ts_buf: [16]u8 = undefined;
@@ -552,8 +552,8 @@ test "member_card: open/view/adjust lifecycle + auto level-up" {
     var svc = member_card.service.MemberCardService.init(allocator, std.testing.io, &store);
 
     // 建两个等级：普通（0 积分 9.5 折）+ 黄金（1000 积分 9 折）。
-    const normal_id = try svc.createLevel(1, 9, "普通会员", 1, 950, 100, 0);
-    const gold_id = try svc.createLevel(1, 9, "黄金会员", 2, 900, 200, 1000);
+    const normal_id = try svc.createLevel(1, 9, "普通会员", 1, 950, 100, 0, 1);
+    const gold_id = try svc.createLevel(1, 9, "黄金会员", 2, 900, 200, 1000, 1);
 
     // 开卡 → 默认普通等级。
     try svc.openCard(1, 9, "o_m");
@@ -616,7 +616,7 @@ test "member_card: module receiver handles 办卡 + 查卡" {
     const account_id = try account_svc.create(1, "会员卡测试号", "wechat");
     _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "tokm", .encoding_aes_key = "", .verified = false });
     _ = try module_svc.bind(1, account_id, "member_card", "active");
-    _ = try mc_svc.createLevel(1, account_id, "普通会员", 1, 950, 100, 0);
+    _ = try mc_svc.createLevel(1, account_id, "普通会员", 1, 950, 100, 0, 1);
 
     const token = "tokm";
     var ts_buf: [16]u8 = undefined;

@@ -395,7 +395,7 @@ pub const AiService = struct {
     fn skillTenantList(ctx: *ai.SkillContext, _: std.json.Value) anyerror!std.json.Value {
         try ctx.checkDeadline();
         const refs = try refsOf(ctx);
-        var result = try refs.tenant_store.list(1, 100);
+        var result = try refs.tenant_store.list(1, 100, "", "");
         defer result.free(ctx.allocator);
 
         var arr = std.json.Array.init(ctx.allocator);

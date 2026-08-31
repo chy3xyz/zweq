@@ -20,6 +20,7 @@ pub const SeckillActivity = Schema("SeckillActivity", .{
         field.Int("per_user").Default(1), // 每人限购
         field.Int("start_at").Default(0),
         field.Int("end_at").Default(0),
+        field.Int("status").Default(1), // 1=上架 0=下架（下架后不可抢购）
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

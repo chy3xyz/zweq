@@ -20,6 +20,7 @@ pub const Coupon = Schema("Coupon", .{
         field.Int("per_user").Default(1), // 每人限领
         field.Int("start_at").Default(0), // 生效时间（秒）
         field.Int("end_at").Default(0), // 失效时间（秒），0=永不过期
+        field.Int("status").Default(1), // 1=上架 0=下架（下架后不可领取）
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

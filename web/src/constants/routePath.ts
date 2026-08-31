@@ -7,6 +7,7 @@ export const ROUTE_PATH = {
   resetPassword: '/reset-password',
   verifyEmail: '/verify-email',
   users: '/users',
+  roles: '/roles',
   accounts: '/accounts',
   rules: '/rules',
   fans: '/fans',

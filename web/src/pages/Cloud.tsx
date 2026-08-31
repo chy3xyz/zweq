@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 
 import {
   generateLicense,
@@ -12,15 +12,16 @@ import {
   type LicenseItem,
   type MarketItem,
 } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
+import { useAccountId } from '#ui/hooks/useAccountId';
 import { usePaged } from '#ui/hooks/usePaged';
 import { formatDateTime } from '#ui/utils';
 
 const PAGE_SIZE = 20;
 
 function Cloud() {
-  const accounts = useAccounts();
+  const { accountId, ready } = useAccountId();
   const [success, setSuccess] = createSignal<string | null>(null);
   const [days, setDays] = createSignal(365);
   const [verifyKey, setVerifyKey] = createSignal('');
@@ -33,7 +34,6 @@ function Cloud() {
 
   const licenses = usePaged<LicenseItem>((page, pageSize) => listLicenses(page, pageSize), PAGE_SIZE);
   const market = usePaged<MarketItem>((page, pageSize) => listMarket(page, pageSize), PAGE_SIZE);
-  const accountId = () => accounts.selected() ?? 0;
 
   const onGenerate = async (e: SubmitEvent) => {
     e.preventDefault();
@@ -89,8 +89,8 @@ function Cloud() {
   };
 
   const onInstall = async (pkg: MarketItem) => {
-    if (accountId() === 0) {
-      window.alert('请先选择账号');
+    if (!ready()) {
+      window.alert('请先在右上角选择公众号');
       return;
     }
     if (!window.confirm(`安装市场包「${pkg.title}」到账号 ${accountId()} 吗？`)) return;
@@ -133,18 +133,7 @@ function Cloud() {
         <p class="text-sm text-base-content/60">站点授权码 + 应用市场</p>
       </div>
 
-      <label class="form-control w-full max-w-xs">
-        <span class="label-text mb-1">安装目标账号</span>
-        <select class="select select-bordered select-sm" value={accountId()} onChange={(e) => accounts.setSelected(Number(e.currentTarget.value))}>
-          <For each={accounts.accounts()}>
-            {(a) => (
-              <option value={a.id}>
-                {a.name}（{a.id}）
-              </option>
-            )}
-          </For>
-        </select>
-      </label>
+      <AccountRequiredBanner />
 
       <Show when={success()}>
         <div role="alert" class="alert alert-success py-2 text-sm">

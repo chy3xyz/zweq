@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 
 import {
   getConfig,
@@ -8,8 +8,9 @@ import {
   toApiError,
   type DrawRecord,
 } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
+import { useAccountId } from '#ui/hooks/useAccountId';
 import { usePaged } from '#ui/hooks/usePaged';
 import { formatDateTime } from '#ui/utils';
 
@@ -30,15 +31,18 @@ const DEFAULT_CONFIG = JSON.stringify(
 );
 
 function LuckyDraw() {
-  const accounts = useAccounts();
+  const { accountId, onAccountChange } = useAccountId();
   const [success, setSuccess] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [configJson, setConfigJson] = createSignal(DEFAULT_CONFIG);
   const [openidInput, setOpenidInput] = createSignal('');
   const [lastDraw, setLastDraw] = createSignal<string | null>(null);
 
-  const accountId = () => accounts.selected() ?? 0;
-  const paged = usePaged<DrawRecord>((page, pageSize) => listDrawRecords(accountId(), page, pageSize), PAGE_SIZE);
+  const paged = usePaged<DrawRecord>(
+    (page, pageSize) => listDrawRecords(accountId(), page, pageSize),
+    PAGE_SIZE,
+    accountId,
+  );
 
   const columns: Column<DrawRecord>[] = [
     { key: 'openid', title: '粉丝', render: (r) => <span class="font-mono text-xs">{r.openid}</span> },
@@ -51,12 +55,6 @@ function LuckyDraw() {
     },
   ];
 
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
-    void paged.reload(1);
-    void loadConfig(id);
-  };
-
   const loadConfig = async (id: number) => {
     if (id === 0) return;
     try {
@@ -66,6 +64,10 @@ function LuckyDraw() {
       setConfigJson(DEFAULT_CONFIG);
     }
   };
+
+  onAccountChange(() => {
+    void loadConfig(accountId());
+  });
 
   const onSaveConfig = async () => {
     if (accountId() === 0) return;
@@ -96,18 +98,8 @@ function LuckyDraw() {
 
   return (
     <div class="p-6 space-y-6">
-      <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold">大转盘抽奖</h1>
-        <select
-          class="select select-bordered"
-          onChange={(e) => onAccountChange(Number(e.currentTarget.value))}
-        >
-          <option value={0}>选择公众号</option>
-          <For each={accounts.accounts()}>
-            {(a) => <option value={a.id}>{a.name}</option>}
-          </For>
-        </select>
-      </div>
+      <h1 class="text-2xl font-bold">大转盘抽奖</h1>
+      <AccountRequiredBanner />
 
       <Show when={success()}>
         <div class="alert alert-success">{success()}</div>

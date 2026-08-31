@@ -20,6 +20,7 @@ pub const MemberCardLevelRow = struct {
     discount: i64,
     points_ratio: i64,
     threshold: i64,
+    status: i64,
     created_at: i64,
 
     pub fn free(self: MemberCardLevelRow, allocator: std.mem.Allocator) void {
@@ -80,6 +81,7 @@ pub const MemberCardStore = struct {
             .discount = e.discount,
             .points_ratio = e.points_ratio,
             .threshold = e.threshold,
+            .status = e.status,
             .created_at = e.created_at orelse 0,
         };
     }
@@ -100,7 +102,7 @@ pub const MemberCardStore = struct {
 
     // ── 卡等级 ───────────────────────────────────────────────
 
-    pub fn createLevel(self: *MemberCardStore, tenant_id: i64, account_id: i64, name: []const u8, level: i64, discount: i64, points_ratio: i64, threshold: i64, now: i64) !i64 {
+    pub fn createLevel(self: *MemberCardStore, tenant_id: i64, account_id: i64, name: []const u8, level: i64, discount: i64, points_ratio: i64, threshold: i64, status: i64, now: i64) !i64 {
         var row = try crud.create(self.client.member_card_level, .{
             .tenant_id = tenant_id,
             .account_id = account_id,
@@ -109,11 +111,23 @@ pub const MemberCardStore = struct {
             .discount = discount,
             .points_ratio = points_ratio,
             .threshold = threshold,
+            // 显式写入，不依赖 DB 默认值（迁移加的列在老库上是 nullable）。
+            .status = status,
             .created_at = now,
             .updated_at = now,
         });
         defer zent.codegen.deinitEntity(infos, MemberCardLevelInfo, &row, self.allocator);
         return row.id;
+    }
+
+    /// 启停等级：1 启用 / 0 停用。
+    pub fn setLevelStatus(self: *MemberCardStore, id: i64, status: i64, now: i64) !bool {
+        const preds = self.client.member_card_level.predicates;
+        const affected = try crud.update(self.client.member_card_level, .{
+            .status = status,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
+        return affected > 0;
     }
 
     pub fn getLevel(self: *MemberCardStore, id: i64) !?MemberCardLevelRow {
@@ -139,12 +153,15 @@ pub const MemberCardStore = struct {
         return try self.dupLevel(entity);
     }
 
-    pub fn listLevels(self: *MemberCardStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !LevelListResult {
+    /// `status` 为 -1 表示不过滤；0 停用 / 1 启用。
+    pub fn listLevels(self: *MemberCardStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) !LevelListResult {
         var q = self.client.member_card_level.Query();
         defer q.deinit();
         const preds = self.client.member_card_level.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (keyword.len > 0) _ = try q.Where(.{preds.nameContainsEscaped(keyword)});
+        if (status >= 0) _ = try q.Where(.{preds.statusEQ(.{ .int = status })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("level")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();
@@ -215,12 +232,13 @@ pub const MemberCardStore = struct {
         _ = try upd.Save();
     }
 
-    pub fn listAccounts(self: *MemberCardStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !MemberAccountListResult {
+    pub fn listAccounts(self: *MemberCardStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8) !MemberAccountListResult {
         var q = self.client.member_account.Query();
         defer q.deinit();
         const preds = self.client.member_account.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (keyword.len > 0) _ = try q.Where(.{preds.openidContainsEscaped(keyword)});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();

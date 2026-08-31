@@ -61,13 +61,13 @@ pub fn UserApi(comptime Service: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "users", .handler = http.wrapHandler(Self, listUsers), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "users/export", .handler = http.wrapHandler(Self, exportUsers), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "users/{id}", .handler = http.wrapHandler(Self, getUser), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "users", .handler = http.wrapHandler(Self, createUser), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "users/{id}", .handler = http.wrapHandler(Self, updateUser), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "users/{id}", .handler = http.wrapHandler(Self, deleteUser), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "users/{id}/revoke-sessions", .handler = http.wrapHandler(Self, revokeSessions), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "users", .handler = http.wrapHandler(Self, listUsers), .meta = .{ .permission = "user:read" } },
+            .{ .method = .GET, .path = "users/export", .handler = http.wrapHandler(Self, exportUsers), .meta = .{ .permission = "user:read" } },
+            .{ .method = .GET, .path = "users/{id}", .handler = http.wrapHandler(Self, getUser), .meta = .{ .permission = "user:read" } },
+            .{ .method = .POST, .path = "users", .handler = http.wrapHandler(Self, createUser), .meta = .{ .permission = "user:write" } },
+            .{ .method = .PUT, .path = "users/{id}", .handler = http.wrapHandler(Self, updateUser), .meta = .{ .permission = "user:write" } },
+            .{ .method = .DELETE, .path = "users/{id}", .handler = http.wrapHandler(Self, deleteUser), .meta = .{ .permission = "user:write" } },
+            .{ .method = .POST, .path = "users/{id}/revoke-sessions", .handler = http.wrapHandler(Self, revokeSessions), .meta = .{ .permission = "user:write" } },
         };
 
         pub fn init(svc: *Service, default_tenant_id: i64, audit: *audit_svc.AuditService) Self {

@@ -231,7 +231,7 @@ test "cloud: manifest install runs migrations (module + SQL)" {
     var dyn_table_store = cloud.persistence.DynamicTableStore.init(allocator, env.client);
     var cloud_svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "");
     // 注入 sqlite in-memory driver（执行迁移 SQL）。
-    cloud_svc.setDriver(env.sqlite.?.asDriver());
+    cloud_svc.setDriver(env.asDriver());
     cloud_svc.setDynamicTableStore(&dyn_table_store);
 
     // 发布一个带 manifest 的市场包（download_url 为空时用 pkg 元数据注册）。
@@ -250,7 +250,7 @@ test "cloud: manifest install runs migrations (module + SQL)" {
     _ = module_id;
 
     // 迁移表已创建。
-    const d = env.sqlite.?.asDriver();
+    const d = env.asDriver();
     var rows = try d.query("SELECT name FROM sqlite_master WHERE type='table' AND name='shop_order'", &.{});
     defer rows.deinit();
     var row_count: usize = 0;

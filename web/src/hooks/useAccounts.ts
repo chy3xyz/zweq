@@ -1,26 +1,15 @@
-import { createSignal, onMount } from 'solid-js';
+import { useAccount } from '#ui/hooks/useAccount';
 
-import { listAccounts, type AccountItem } from '#ui/api';
-
-/** Loads site accounts and exposes a selected account id (first by default). */
+/**
+ * Reads the global top-bar account context (legacy name kept for existing pages).
+ * Do not render per-page account selectors — use the header switcher.
+ */
 export function useAccounts() {
-  const [accounts, setAccounts] = createSignal<AccountItem[]>([]);
-  const [loading, setLoading] = createSignal(true);
-  const [selected, setSelected] = createSignal<number | null>(null);
-
-  const reload = async () => {
-    try {
-      const res = await listAccounts(1, 100);
-      setAccounts(res.list);
-      setSelected((cur) => cur ?? (res.list.length > 0 ? res.list[0].id : null));
-    } catch {
-      // keep previous state on transient errors
-    } finally {
-      setLoading(false);
-    }
+  const [state, actions] = useAccount();
+  return {
+    accounts: () => state.accounts,
+    selected: () => state.selectedId,
+    setSelected: actions.setSelectedId,
+    loading: () => state.loading,
   };
-
-  onMount(() => void reload());
-
-  return { accounts, selected, setSelected, loading };
 }

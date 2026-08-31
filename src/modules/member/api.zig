@@ -48,11 +48,11 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "fans", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "fans/{id}", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "accounts/{id}/fans/tags", .handler = http.wrapHandler(Self, listTags), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "accounts/{id}/fans/tags", .handler = http.wrapHandler(Self, createTag), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "fans/tag", .handler = http.wrapHandler(Self, tagFan), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "fans", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "member:read" } },
+            .{ .method = .GET, .path = "fans/{id}", .handler = http.wrapHandler(Self, get), .meta = .{ .permission = "member:read" } },
+            .{ .method = .GET, .path = "accounts/{id}/fans/tags", .handler = http.wrapHandler(Self, listTags), .meta = .{ .permission = "member:read" } },
+            .{ .method = .POST, .path = "accounts/{id}/fans/tags", .handler = http.wrapHandler(Self, createTag), .meta = .{ .permission = "member:write" } },
+            .{ .method = .POST, .path = "fans/tag", .handler = http.wrapHandler(Self, tagFan), .meta = .{ .permission = "member:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {

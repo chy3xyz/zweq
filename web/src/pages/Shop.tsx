@@ -1,72 +1,150 @@
-import { For, Show, createSignal } from 'solid-js';
+import { createSignal } from 'solid-js';
 
 import {
-  createShopCategory,
-  createShopProduct,
-  deleteShopCategory,
   deleteShopProduct,
   listShopCategories,
   listShopProducts,
-  toApiError,
   type ShopCategoryItem,
   type ShopProductItem,
 } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
+import AdminCrudPage from '#ui/components/AdminCrudPage';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
-import { usePaged } from '#ui/hooks/usePaged';
-import { formatDateTime } from '#ui/utils';
-
-const PAGE_SIZE = 20;
-const yuan = (fen: number) => (fen / 100).toFixed(2);
+import SearchBar, { type SearchField, type SearchValues } from '#ui/components/SearchBar';
+import ShopCategoryModal from '#ui/components/ShopCategoryModal';
+import ShopProductFormModal, { type ShopProductFormMode } from '#ui/components/ShopProductFormModal';
+import { useAccountId, useFeedback, usePaged } from '#ui/hooks';
+import { formatDateTime, intParam } from '#ui/utils';
+import { formatYuan } from '#ui/utils/money';
 
 function Shop() {
-  const accounts = useAccounts();
-  const [success, setSuccess] = createSignal<string | null>(null);
-  const [error, setError] = createSignal<string | null>(null);
-  const [keyword, setKeyword] = createSignal('');
+  const { accountId, ready, accountName, onAccountChange } = useAccountId();
+  const feedback = useFeedback();
+  const [filters, setFilters] = createSignal<SearchValues>({});
   const [categories, setCategories] = createSignal<ShopCategoryItem[]>([]);
-  // 新建表单
-  const [name, setName] = createSignal('');
-  const [price, setPrice] = createSignal(0);
-  const [originalPrice, setOriginalPrice] = createSignal(0);
-  const [stock, setStock] = createSignal(0);
-  const [categoryId, setCategoryId] = createSignal(0);
-  const [newCategory, setNewCategory] = createSignal('');
 
-  const accountId = () => accounts.selected() ?? 0;
+  const [productModalOpen, setProductModalOpen] = createSignal(false);
+  const [productModalMode, setProductModalMode] = createSignal<ShopProductFormMode>('create');
+  const [editingProduct, setEditingProduct] = createSignal<ShopProductItem | null>(null);
+  const [categoryModalOpen, setCategoryModalOpen] = createSignal(false);
+
   const paged = usePaged<ShopProductItem>(
-    (page, pageSize) => listShopProducts(accountId(), page, pageSize, keyword()),
-    PAGE_SIZE,
+    (page, pageSize) =>
+      listShopProducts(
+        accountId(),
+        page,
+        pageSize,
+        filters().keyword?.trim() ?? '',
+        Number(filters().category_id ?? 0),
+        intParam(filters().status, -1),
+      ),
+    20,
+    () => [accountId(), filters()],
   );
+
+  const searchFields = (): SearchField[] => [
+    { kind: 'text', key: 'keyword', label: '商品名称', placeholder: '搜索商品名' },
+    {
+      kind: 'select',
+      key: 'category_id',
+      label: '分类',
+      options: [
+        { value: '0', label: '全部分类' },
+        ...categories().map((c) => ({ value: String(c.id), label: c.name })),
+      ],
+    },
+    {
+      kind: 'select',
+      key: 'status',
+      label: '状态',
+      options: [
+        { value: '', label: '全部' },
+        { value: '1', label: '上架' },
+        { value: '0', label: '下架' },
+      ],
+    },
+  ];
+
+  const reloadCategories = async () => {
+    if (!ready()) return;
+    try {
+      setCategories(await listShopCategories(accountId()));
+    } catch {
+      setCategories([]);
+    }
+  };
+
+  onAccountChange(() => {
+    void reloadCategories();
+  });
+
+  const categoryName = (id: number) => categories().find((c) => c.id === id)?.name ?? '未分类';
+
+  const openCreate = () => {
+    setProductModalMode('create');
+    setEditingProduct(null);
+    setProductModalOpen(true);
+  };
+
+  const openEdit = (product: ShopProductItem) => {
+    setProductModalMode('edit');
+    setEditingProduct(product);
+    setProductModalOpen(true);
+  };
+
+  const onDelete = (product: ShopProductItem) =>
+    feedback.runAction({
+      confirm: {
+        title: '删除商品',
+        message: `确定删除商品「${product.name}」吗？`,
+        danger: true,
+      },
+      action: () => deleteShopProduct(product.id),
+      success: '商品已删除',
+      onDone: () => void paged.refresh(),
+    });
 
   const columns: Column<ShopProductItem>[] = [
     {
       key: 'image',
-      title: '图',
+      title: '封面',
       render: (r) =>
         r.image ? (
-          <img src={r.image} alt="" class="w-10 h-10 rounded object-cover" />
+          <img src={r.image} alt="" class="h-12 w-12 rounded object-cover" />
         ) : (
-          <span class="text-base-content/30">无</span>
+          <div class="flex h-12 w-12 items-center justify-center rounded bg-base-200 text-xs text-base-content/40">
+            无图
+          </div>
         ),
     },
-    { key: 'name', title: '商品名', render: (r) => <span class="font-medium">{r.name}</span> },
     {
-      key: 'price',
-      title: '售价',
-      render: (r) => <span class="text-error font-semibold">¥{yuan(r.price)}</span>,
+      key: 'name',
+      title: '商品',
+      render: (r) => (
+        <div>
+          <p class="font-medium">{r.name}</p>
+          <p class="text-xs text-base-content/50">
+            ID {r.id} · {categoryName(r.category_id)}
+          </p>
+        </div>
+      ),
     },
     {
-      key: 'original_price',
-      title: '原价',
-      render: (r) => <span class="line-through text-base-content/50">¥{yuan(r.original_price)}</span>,
+      key: 'price',
+      title: '售价 / 原价',
+      render: (r) => (
+        <div>
+          <p class="font-semibold text-error">{formatYuan(r.price)}</p>
+          <p class="text-xs text-base-content/50 line-through">{formatYuan(r.original_price)}</p>
+        </div>
+      ),
     },
     {
       key: 'stock',
-      title: '库存/销量',
+      title: '库存 / 销量',
       render: (r) => (
         <span>
-          {r.stock} / {r.sales}
+          {r.stock} / <span class="text-base-content/60">{r.sales}</span>
         </span>
       ),
     },
@@ -74,7 +152,7 @@ function Shop() {
       key: 'status',
       title: '状态',
       render: (r) => (
-        <span class={r.status === 1 ? 'text-success' : 'text-base-content/50'}>
+        <span class={`badge badge-sm ${r.status === 1 ? 'badge-success' : 'badge-ghost'}`}>
           {r.status === 1 ? '上架' : '下架'}
         </span>
       ),
@@ -86,176 +164,34 @@ function Shop() {
     },
   ];
 
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
-    void paged.reload(1);
-    void reloadCategories();
-  };
-
-  const reloadCategories = async () => {
-    if (accountId() === 0) return;
-    try {
-      setCategories(await listShopCategories(accountId()));
-    } catch {
-      setCategories([]);
-    }
-  };
-
-  const onCreateCategory = async () => {
-    const n = newCategory().trim();
-    if (!n) return;
-    try {
-      await createShopCategory(accountId(), n);
-      setNewCategory('');
-      setSuccess('分类已创建');
-      void reloadCategories();
-    } catch (err) {
-      setError(toApiError(err).message);
-    }
-  };
-
-  const onCreate = async (e: SubmitEvent) => {
-    e.preventDefault();
-    if (accountId() === 0) return;
-    setError(null);
-    setSuccess(null);
-    try {
-      await createShopProduct({
-        account_id: accountId(),
-        category_id: categoryId(),
-        name: name().trim(),
-        price: price(),
-        original_price: originalPrice(),
-        stock: stock(),
-      });
-      setName('');
-      setSuccess('商品已创建');
-      void paged.reload(1);
-    } catch (err) {
-      setError(toApiError(err).message);
-    }
-  };
-
-  const onDelete = async (id: number) => {
-    try {
-      await deleteShopProduct(id);
-      setSuccess('已删除');
-      void paged.reload(1);
-    } catch (err) {
-      setError(toApiError(err).message);
-    }
-  };
-
   return (
-    <div class="p-6 space-y-6">
-      <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold">商城</h1>
-        <select
-          class="select select-bordered"
-          onChange={(e) => onAccountChange(Number(e.currentTarget.value))}
+    <AdminCrudPage
+      title="商品管理"
+      description={ready() ? `当前公众号：${accountName()}` : undefined}
+      total={paged.total()}
+      onCreate={ready() ? openCreate : undefined}
+      createLabel="新增商品"
+      onRefresh={() => void paged.refresh()}
+      extra={
+        <button
+          type="button"
+          class="btn btn-outline btn-sm"
+          disabled={!ready()}
+          onClick={() => setCategoryModalOpen(true)}
         >
-          <option value={0}>选择公众号</option>
-          <For each={accounts.accounts()}>
-            {(a) => <option value={a.id}>{a.name}</option>}
-          </For>
-        </select>
-      </div>
-
-      <Show when={success()}>
-        <div class="alert alert-success">{success()}</div>
-      </Show>
-      <Show when={error()}>
-        <div class="alert alert-error">{error()}</div>
-      </Show>
-
-      <div class="grid md:grid-cols-2 gap-4">
-        <form onSubmit={onCreate} class="card bg-base-200 p-4 space-y-2">
-          <h2 class="font-semibold">新建商品</h2>
-          <input
-            class="input input-bordered"
-            placeholder="商品名"
-            value={name()}
-            onInput={(e) => setName(e.currentTarget.value)}
-          />
-          <select
-            class="select select-bordered"
-            value={categoryId()}
-            onChange={(e) => setCategoryId(Number(e.currentTarget.value))}
-          >
-            <option value={0}>未分类</option>
-            <For each={categories()}>
-              {(c) => <option value={c.id}>{c.name}</option>}
-            </For>
-          </select>
-          <div class="flex gap-2">
-            <input
-              class="input input-bordered flex-1"
-              type="number"
-              placeholder="售价(分)"
-              value={price()}
-              onInput={(e) => setPrice(Number(e.currentTarget.value))}
-            />
-            <input
-              class="input input-bordered flex-1"
-              type="number"
-              placeholder="原价(分)"
-              value={originalPrice()}
-              onInput={(e) => setOriginalPrice(Number(e.currentTarget.value))}
-            />
-            <input
-              class="input input-bordered w-24"
-              type="number"
-              placeholder="库存"
-              value={stock()}
-              onInput={(e) => setStock(Number(e.currentTarget.value))}
-            />
-          </div>
-          <button class="btn btn-primary" type="submit">
-            创建
-          </button>
-        </form>
-
-        <div class="card bg-base-200 p-4 space-y-2">
-          <h2 class="font-semibold">分类管理</h2>
-          <div class="flex gap-2">
-            <input
-              class="input input-bordered flex-1"
-              placeholder="新分类名"
-              value={newCategory()}
-              onInput={(e) => setNewCategory(e.currentTarget.value)}
-            />
-            <button class="btn btn-secondary" onClick={() => void onCreateCategory()}>
-              添加
-            </button>
-          </div>
-          <div class="flex flex-wrap gap-2">
-            <For each={categories()}>
-              {(c) => (
-                <span class="badge badge-outline gap-2">
-                  {c.name}
-                  <button
-                    class="text-error"
-                    onClick={() => void deleteShopCategory(c.id).then(() => void reloadCategories())}
-                  >
-                    ✕
-                  </button>
-                </span>
-              )}
-            </For>
-          </div>
-          <div class="flex gap-2 pt-2">
-            <input
-              class="input input-bordered flex-1"
-              placeholder="搜索商品名"
-              value={keyword()}
-              onInput={(e) => setKeyword(e.currentTarget.value)}
-            />
-            <button class="btn btn-outline" onClick={() => void paged.reload(1)}>
-              搜索
-            </button>
-          </div>
-        </div>
-      </div>
+          分类管理
+        </button>
+      }
+      search={
+        <SearchBar
+          fields={searchFields()}
+          values={{ category_id: '0', status: '' }}
+          loading={paged.loading()}
+          onSearch={setFilters}
+        />
+      }
+    >
+      <AccountRequiredBanner />
 
       <DataTable
         columns={columns}
@@ -264,17 +200,42 @@ function Shop() {
         total={paged.total()}
         page={paged.page()}
         totalPages={paged.totalPages()}
+        pageSize={paged.pageSize()}
         loading={paged.loading()}
         error={paged.error()}
         emptyText="暂无商品"
         onPageChange={(p) => void paged.reload(p)}
+        onPageSizeChange={(size) => paged.setPageSize(size)}
         actions={(row) => (
-          <button class="btn btn-xs btn-outline btn-error" onClick={() => void onDelete(row.id)}>
-            删除
-          </button>
+          <>
+            <button type="button" class="btn btn-ghost btn-xs" onClick={() => openEdit(row)}>
+              编辑
+            </button>
+            <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDelete(row)}>
+              删除
+            </button>
+          </>
         )}
       />
-    </div>
+
+      <ShopProductFormModal
+        open={productModalOpen()}
+        mode={productModalMode()}
+        accountId={accountId()}
+        product={editingProduct()}
+        onClose={() => setProductModalOpen(false)}
+        onSaved={() => {
+          feedback.toast(productModalMode() === 'create' ? '商品已创建' : '商品已更新');
+          void paged.refresh();
+        }}
+      />
+      <ShopCategoryModal
+        open={categoryModalOpen()}
+        accountId={accountId()}
+        onClose={() => setCategoryModalOpen(false)}
+        onChanged={() => void reloadCategories()}
+      />
+    </AdminCrudPage>
   );
 }
 

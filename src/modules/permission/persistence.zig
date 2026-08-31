@@ -6,6 +6,7 @@ const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const user_persist = @import("../user/persistence.zig");
 const schema = @import("../../schema.zig");
+const catalog = @import("../../permission_catalog.zig");
 
 const graph = zent.codegen.graph.buildGraph(&.{ model.Role, model.Permission, model.UserRole, model.RolePermission });
 pub const infos = graph.types;
@@ -346,10 +347,14 @@ pub const RoleStore = struct {
         }
 
         const user_preds = self.client.user.predicates;
+        var superuser = false;
         if ((try crud.first(self.client.user, .{user_preds.idEQ(.{ .int = user_id })}))) |found| {
             var entity = found;
             defer zent.codegen.deinitEntity(user_persist.infos, user_persist.UserInfo, &entity, self.allocator);
-            if (entity.admin) try appendUniqueCode(&codes, allocator, "admin");
+            if (entity.admin) {
+                try appendUniqueCode(&codes, allocator, "admin");
+                superuser = true;
+            }
         }
 
         const user_roles = try self.listRolesForUser(user_id);
@@ -359,6 +364,9 @@ pub const RoleStore = struct {
             const role = try self.getRoleById(ur.role_id) orelse continue;
             defer role.free(self.allocator);
             try appendUniqueCode(&codes, allocator, role.code);
+            if (std.mem.eql(u8, role.code, "founder") or std.mem.eql(u8, role.code, "admin")) {
+                superuser = true;
+            }
 
             const role_perms = try self.listPermissionsForRole(ur.role_id);
             defer {
@@ -368,6 +376,19 @@ pub const RoleStore = struct {
             for (role_perms) |perm| {
                 var buf: [128]u8 = undefined;
                 const ma = try std.fmt.bufPrint(&buf, "{s}:{s}", .{ perm.module, perm.action });
+                try appendUniqueCode(&codes, allocator, ma);
+                if (std.mem.eql(u8, perm.action, "write")) {
+                    var rb: [128]u8 = undefined;
+                    const read_code = try std.fmt.bufPrint(&rb, "{s}:read", .{perm.module});
+                    try appendUniqueCode(&codes, allocator, read_code);
+                }
+            }
+        }
+
+        if (superuser) {
+            for (catalog.entries) |entry| {
+                var buf: [128]u8 = undefined;
+                const ma = try std.fmt.bufPrint(&buf, "{s}:{s}", .{ entry.module, entry.action });
                 try appendUniqueCode(&codes, allocator, ma);
             }
         }

@@ -14,6 +14,7 @@ pub const PointsProduct = Schema("PointsProduct", .{
         field.String("name").Default(""),
         field.Int("points").Default(0),
         field.Int("stock").Default(0),
+        field.Int("status").Default(1), // 1=上架 0=下架（下架后不可兑换）
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

@@ -51,9 +51,11 @@ export async function listShopProducts(
   page: number,
   pageSize: number,
   keyword = '',
+  categoryId = 0,
+  status = -1,
 ): Promise<ShopProductListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: ShopProductListResult }>(
-    shopProductsQuery(accountId, page, pageSize, keyword),
+    shopProductsQuery(accountId, page, pageSize, keyword, categoryId, status),
   );
   return unwrapEnvelope(data);
 }
@@ -93,6 +95,7 @@ export async function listShopOrders(
   page: number,
   pageSize: number,
   status = -1,
+  openid = '',
 ): Promise<ShopOrderListResult> {
   const params = new URLSearchParams({
     account_id: String(accountId),
@@ -100,6 +103,7 @@ export async function listShopOrders(
     page_size: String(pageSize),
     status: String(status),
   });
+  if (openid) params.set('openid', openid);
   const { data } = await http.get<{ code: number; msg: string; data: ShopOrderListResult }>(
     `${SHOP_PATH.adminProducts.replace('/products', '/admin/orders')}?${params.toString()}`,
   );

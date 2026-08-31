@@ -63,7 +63,7 @@ pub fn tokenVersionGuard(sec: *zigmodu.security.AppSecurity, user_store: *user_p
                     try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                     return;
                 };
-                defer row.free(ctx.allocator);
+                defer row.free(S.stored_store.allocator);
                 if (payload.ver != row.token_version) {
                     try ctx.sendErrorResponse(401, 401, "登录已失效,请重新登录");
                     return;

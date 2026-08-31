@@ -302,11 +302,15 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            const fan = fan_opt orelse {
-                try ctx.sendErrorResponse(400, 400, "粉丝不存在，请先在公众号互动");
-                return;
-            };
-            defer fan.free(self.svc.allocator);
+            if (fan_opt == null) {
+                const now = zigmodu.time.wallClockSeconds(self.svc.io);
+                _ = self.fan_store.upsert(tid, req.account_id, req.openid, "", "小程序用户", "", true, now, now) catch {
+                    try ctx.sendErrorResponse(500, 500, "创建粉丝失败");
+                    return;
+                };
+            } else {
+                fan_opt.?.free(self.svc.allocator);
+            }
             const token = self.user_svc.sec.module.generateTokenWithTenant(req.openid, &.{"fan"}, "0") catch {
                 try ctx.sendErrorResponse(500, 500, "签发失败");
                 return;

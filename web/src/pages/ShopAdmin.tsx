@@ -1,80 +1,172 @@
-import { For, Show, createSignal } from 'solid-js';
+import { For, Show, createSignal, type JSX } from 'solid-js';
 
 import {
   auditShopRefund,
   createArticle,
   createInviteGift,
   createShopBalancePlan,
-  createShopGroupon,
   createShopOutlet,
   deleteArticle,
   deleteInviteGift,
   deleteShopBalancePlan,
   deleteShopOutlet,
+  listInviteGifts,
+  listShopArticles,
   listShopBalancePlans,
   listShopOutlets,
   listShopRefunds,
-  toApiError,
   type ShopArticleItem,
   type ShopBalancePlanItem,
   type ShopInviteGiftItem,
   type ShopOutletItem,
   type ShopRefundItem,
 } from '#ui/api';
+import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
-import { useAccounts } from '#ui/hooks/useAccounts';
-import { usePaged } from '#ui/hooks/usePaged';
-import { formatDateTime } from '#ui/utils';
+import FormModal from '#ui/components/FormModal';
+import SearchBar, { type SearchField, type SearchValues } from '#ui/components/SearchBar';
+import { useAccountId, useFeedback, useLocalPaged, usePaged } from '#ui/hooks';
+import { formatDateTime, intParam } from '#ui/utils';
+import { fenToYuan, formatYuan, yuanToFen } from '#ui/utils/money';
 
-const PAGE_SIZE = 20;
-const yuan = (fen: number) => (fen / 100).toFixed(2);
+const TABS = ['退款审核', '门店自提', '储值套餐', '邀请有礼', '文章内容'] as const;
 
 function ShopAdmin() {
-  const accounts = useAccounts();
-  const [success, setSuccess] = createSignal<string | null>(null);
-  const [error, setError] = createSignal<string | null>(null);
-  // 套餐表单
-  const [planName, setPlanName] = createSignal('');
-  const [planAmount, setPlanAmount] = createSignal(0);
-  const [planBonus, setPlanBonus] = createSignal(0);
-  // 门店表单
-  const [outletName, setOutletName] = createSignal('');
-  const [outletAddress, setOutletAddress] = createSignal('');
-  const [outletMobile, setOutletMobile] = createSignal('');
-  // 拼团表单
-  const [grouponProduct, setGrouponProduct] = createSignal(0);
-  const [grouponPrice, setGrouponPrice] = createSignal(0);
-  const [grouponSize, setGrouponSize] = createSignal(2);
-  // 邀请奖励
-  const [inviteCount, setInviteCount] = createSignal(1);
-  const [inviteType, setInviteType] = createSignal('points');
-  const [inviteValue, setInviteValue] = createSignal(0);
-  // 文章
-  const [articleTitle, setArticleTitle] = createSignal('');
-  const [articleContent, setArticleContent] = createSignal('');
+  const { accountId, accountName, ready } = useAccountId();
+  const [tab, setTab] = createSignal<(typeof TABS)[number]>('退款审核');
 
-  const accountId = () => accounts.selected() ?? 0;
-  const refunds = usePaged<ShopRefundItem>(
-    (page, pageSize) => listShopRefunds(accountId(), page, pageSize),
-    PAGE_SIZE,
+  return (
+    <div class="space-y-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-xl font-semibold">商城运营</h2>
+          <p class="text-sm text-base-content/60">
+            {ready() ? `当前公众号：${accountName()}` : '请先选择公众号'}
+          </p>
+        </div>
+      </div>
+
+      <AccountRequiredBanner />
+
+      <div role="tablist" class="tabs tabs-box">
+        <For each={TABS}>
+          {(item) => (
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              classList={{ 'tab-active': tab() === item }}
+              onClick={() => setTab(item)}
+            >
+              {item}
+            </button>
+          )}
+        </For>
+      </div>
+
+      <Show when={tab() === '退款审核'}>
+        <RefundSection />
+      </Show>
+      <Show when={tab() === '门店自提'}>
+        <OutletSection />
+      </Show>
+      <Show when={tab() === '储值套餐'}>
+        <PlanSection />
+      </Show>
+      <Show when={tab() === '邀请有礼'}>
+        <InviteGiftSection />
+      </Show>
+      <Show when={tab() === '文章内容'}>
+        <ArticleSection />
+      </Show>
+    </div>
   );
-  const [plans, setPlans] = createSignal<ShopBalancePlanItem[]>([]);
-  const [outlets, setOutlets] = createSignal<ShopOutletItem[]>([]);
-  const [inviteGifts, setInviteGifts] = createSignal<ShopInviteGiftItem[]>([]);
-  const [articles, setArticles] = createSignal<ShopArticleItem[]>([]);
+}
 
-  const refundColumns: Column<ShopRefundItem>[] = [
+/** Shared shell for the small sub-resources: header + search + table + pager. */
+function SubResource(props: {
+  title: string;
+  hint?: string;
+  onCreate: () => void;
+  createLabel: string;
+  onRefresh: () => void;
+  search?: SearchField[];
+  onSearch?: (values: SearchValues) => void;
+  loading: boolean;
+  children: JSX.Element;
+}) {
+  return (
+    <section class="rounded-box border border-base-300 bg-base-100 p-4">
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 class="text-lg font-semibold">{props.title}</h3>
+          <Show when={props.hint}>
+            <p class="text-xs text-base-content/50">{props.hint}</p>
+          </Show>
+        </div>
+        <div class="flex items-center gap-2">
+          <button type="button" class="btn btn-ghost btn-sm" onClick={props.onRefresh}>
+            刷新
+          </button>
+          <button type="button" class="btn btn-primary btn-sm" onClick={props.onCreate}>
+            {props.createLabel}
+          </button>
+        </div>
+      </div>
+      <Show when={props.search && props.onSearch}>
+        <div class="mb-4">
+          <SearchBar fields={props.search!} loading={props.loading} onSearch={props.onSearch!} />
+        </div>
+      </Show>
+      {props.children}
+    </section>
+  );
+}
+
+function RefundSection() {
+  const { accountId, ready } = useAccountId();
+  const feedback = useFeedback();
+  const [filters, setFilters] = createSignal<SearchValues>({});
+
+  const paged = usePaged<ShopRefundItem>(
+    (page, pageSize) => listShopRefunds(accountId(), page, pageSize, intParam(filters().status, -1)),
+    20,
+    () => [accountId(), filters()],
+  );
+
+  const rows = () => {
+    const kw = filters().keyword?.trim().toLowerCase() ?? '';
+    return kw
+      ? paged.items().filter((r) => r.openid.toLowerCase().includes(kw))
+      : paged.items();
+  };
+
+  const onAudit = (row: ShopRefundItem, approve: boolean) =>
+    feedback.runAction({
+      confirm: {
+        title: approve ? '同意退款' : '拒绝退款',
+        message: `确定${approve ? '同意' : '拒绝'}该笔 ${formatYuan(row.amount)} 的退款申请吗？`,
+        danger: !approve,
+      },
+      action: () => auditShopRefund(row.id, row.order_id, approve),
+      success: approve ? '已同意退款' : '已拒绝退款',
+      onDone: () => void paged.refresh(),
+    });
+
+  const columns: Column<ShopRefundItem>[] = [
     { key: 'order_id', title: '订单', render: (r) => <span class="font-mono text-xs">#{r.order_id}</span> },
     { key: 'openid', title: '买家', render: (r) => <span class="font-mono text-xs">{r.openid}</span> },
-    { key: 'reason', title: '原因', render: (r) => <span class="text-sm">{r.reason}</span> },
-    { key: 'amount', title: '金额', render: (r) => <span class="text-error font-semibold">¥{yuan(r.amount)}</span> },
+    { key: 'reason', title: '原因', render: (r) => <span class="text-sm">{r.reason || '—'}</span> },
+    {
+      key: 'amount',
+      title: '退款金额',
+      render: (r) => <span class="font-semibold text-error">{formatYuan(r.amount)}</span>,
+    },
     {
       key: 'status',
       title: '状态',
       render: (r) => (
-        <span class={r.status === 0 ? 'text-warning' : r.status === 1 ? 'text-success' : 'text-base-content/50'}>
-          {r.status === 0 ? '待审核' : r.status === 1 ? '已同意' : '已拒绝'}
-        </span>
+        <span class={`badge badge-sm ${refundClass(r.status)}`}>{refundLabel(r.status)}</span>
       ),
     },
     {
@@ -84,367 +176,599 @@ function ShopAdmin() {
     },
   ];
 
-  const onAccountChange = (id: number) => {
-    accounts.setSelected(id);
-    void refunds.reload(1);
-    void reloadPlans();
-    void reloadOutlets();
-  };
-
-  const reloadPlans = async () => {
-    if (accountId() === 0) return;
-    try {
-      setPlans(await listShopBalancePlans(accountId()));
-    } catch {
-      setPlans([]);
-    }
-  };
-
-  const reloadOutlets = async () => {
-    if (accountId() === 0) return;
-    try {
-      setOutlets(await listShopOutlets(accountId()));
-    } catch {
-      setOutlets([]);
-    }
-  };
-
-  const reloadInviteGifts = async () => {
-    if (accountId() === 0) return;
-    try {
-      const { listInviteGifts: listGifts } = await import('#ui/api/shop');
-      const rows = await listGifts(accountId());
-      setInviteGifts(rows as ShopInviteGiftItem[]);
-    } catch {
-      setInviteGifts([]);
-    }
-  };
-
-  const reloadArticles = async () => {
-    if (accountId() === 0) return;
-    try {
-      const { listShopArticles } = await import('#ui/api/shop');
-      const rows = await listShopArticles(accountId(), 1, 50);
-      setArticles(rows.list as ShopArticleItem[]);
-    } catch {
-      setArticles([]);
-    }
-  };
-
-  const onAudit = async (row: ShopRefundItem, approve: boolean) => {
-    try {
-      await auditShopRefund(row.id, row.order_id, approve);
-      setSuccess(approve ? '已同意退款' : '已拒绝');
-      void refunds.reload(1);
-    } catch (err) {
-      setError(toApiError(err).message);
-    }
-  };
-
-  const onCreatePlan = async () => {
-    if (!planName().trim() || planAmount() <= 0) return;
-    try {
-      await createShopBalancePlan(accountId(), planName().trim(), planAmount(), planBonus());
-      setPlanName('');
-      setSuccess('套餐已创建');
-      void reloadPlans();
-    } catch (err) {
-      setError(toApiError(err).message);
-    }
-  };
-
-  const onCreateGroupon = async () => {
-    if (!grouponProduct() || grouponPrice() <= 0) return;
-    try {
-      await createShopGroupon(accountId(), grouponProduct(), grouponPrice(), grouponSize());
-      setSuccess('拼团已创建');
-    } catch (err) {
-      setError(toApiError(err).message);
-    }
-  };
-
-  const onCreateInvite = async () => {
-    if (inviteCount() <= 0 || inviteValue() <= 0) return;
-    try {
-      await createInviteGift(accountId(), inviteCount(), inviteType(), inviteValue());
-      setSuccess('奖励已创建');
-      void reloadInviteGifts();
-    } catch (err) {
-      setError(toApiError(err).message);
-    }
-  };
-
-  const onCreateArticle = async () => {
-    if (!articleTitle().trim()) return;
-    try {
-      await createArticle(accountId(), articleTitle().trim(), articleContent().trim());
-      setArticleTitle('');
-      setArticleContent('');
-      setSuccess('文章已发布');
-      void reloadArticles();
-    } catch (err) {
-      setError(toApiError(err).message);
-    }
-  };
-
-  const onCreateOutlet = async () => {
-    if (!outletName().trim()) return;
-    try {
-      await createShopOutlet(accountId(), outletName().trim(), outletAddress().trim(), outletMobile().trim());
-      setOutletName('');
-      setSuccess('门店已创建');
-      void reloadOutlets();
-    } catch (err) {
-      setError(toApiError(err).message);
-    }
-  };
-
   return (
-    <div class="p-6 space-y-6">
-      <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold">商城运营</h1>
-        <select
-          class="select select-bordered"
-          onChange={(e) => onAccountChange(Number(e.currentTarget.value))}
-        >
-          <option value={0}>选择公众号</option>
-          <For each={accounts.accounts()}>
-            {(a) => <option value={a.id}>{a.name}</option>}
-          </For>
-        </select>
+    <section class="rounded-box border border-base-300 bg-base-100 p-4">
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h3 class="text-lg font-semibold">退款审核</h3>
+        <button type="button" class="btn btn-ghost btn-sm" onClick={() => void paged.refresh()}>
+          刷新
+        </button>
       </div>
-
-      <Show when={success()}>
-        <div class="alert alert-success">{success()}</div>
-      </Show>
-      <Show when={error()}>
-        <div class="alert alert-error">{error()}</div>
-      </Show>
-
-      {/* 退款审核 */}
+      <div class="mb-4">
+        <SearchBar
+          fields={[
+            { kind: 'text', key: 'keyword', label: '买家 openid', placeholder: '输入 openid' },
+            {
+              kind: 'select',
+              key: 'status',
+              label: '审核状态',
+              options: [
+                { value: '-1', label: '全部' },
+                { value: '0', label: '待审核' },
+                { value: '1', label: '已同意' },
+                { value: '2', label: '已拒绝' },
+              ],
+            },
+          ]}
+          values={{ status: '-1' }}
+          loading={paged.loading()}
+          onSearch={setFilters}
+        />
+      </div>
       <DataTable
-        columns={refundColumns}
-        rows={refunds.items()}
+        columns={columns}
+        rows={rows()}
         rowKey={(r) => r.id}
-        total={refunds.total()}
-        page={refunds.page()}
-        totalPages={refunds.totalPages()}
-        loading={refunds.loading()}
-        error={refunds.error()}
+        total={paged.total()}
+        page={paged.page()}
+        totalPages={paged.totalPages()}
+        pageSize={paged.pageSize()}
+        loading={paged.loading()}
+        error={paged.error()}
         emptyText="暂无退款申请"
-        onPageChange={(p) => void refunds.reload(p)}
+        onPageChange={(p) => void paged.reload(p)}
+        onPageSizeChange={(size) => paged.setPageSize(size)}
         actions={(row) => (
           <Show when={row.status === 0}>
-            <div class="flex gap-1">
-              <button class="btn btn-xs btn-outline btn-success" onClick={() => void onAudit(row, true)}>
-                同意
-              </button>
-              <button class="btn btn-xs btn-outline btn-error" onClick={() => void onAudit(row, false)}>
-                拒绝
-              </button>
-            </div>
+            <button type="button" class="btn btn-ghost btn-xs text-success" onClick={() => void onAudit(row, true)}>
+              同意
+            </button>
+            <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onAudit(row, false)}>
+              拒绝
+            </button>
           </Show>
         )}
       />
-
-      {/* 储值套餐 */}
-      <div class="card bg-base-200 p-4 space-y-3">
-        <h2 class="font-semibold">储值套餐（充送）</h2>
-        <div class="flex flex-wrap gap-2">
-          <input
-            class="input input-bordered flex-1 min-w-40"
-            placeholder="套餐名，如：充100送20"
-            value={planName()}
-            onInput={(e) => setPlanName(e.currentTarget.value)}
-          />
-          <input
-            class="input input-bordered w-28"
-            type="number"
-            placeholder="充值(分)"
-            value={planAmount()}
-            onInput={(e) => setPlanAmount(Number(e.currentTarget.value))}
-          />
-          <input
-            class="input input-bordered w-28"
-            type="number"
-            placeholder="赠送(分)"
-            value={planBonus()}
-            onInput={(e) => setPlanBonus(Number(e.currentTarget.value))}
-          />
-          <button class="btn btn-primary" onClick={() => void onCreatePlan()}>
-            创建
-          </button>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <For each={plans()}>
-            {(p) => (
-              <span class="badge badge-outline gap-2">
-                {p.name}（充 ¥{yuan(p.amount)} 送 ¥{yuan(p.bonus)}）
-                <button
-                  class="text-error"
-                  onClick={() => void deleteShopBalancePlan(p.id).then(() => void reloadPlans())}
-                >
-                  ✕
-                </button>
-              </span>
-            )}
-          </For>
-        </div>
-      </div>
-
-      {/* 拼团活动 */}
-      <div class="card bg-base-200 p-4 space-y-3">
-        <h2 class="font-semibold">拼团活动</h2>
-        <div class="flex flex-wrap gap-2">
-          <input
-            class="input input-bordered w-24"
-            type="number"
-            placeholder="商品ID"
-            value={grouponProduct()}
-            onInput={(e) => setGrouponProduct(Number(e.currentTarget.value))}
-          />
-          <input
-            class="input input-bordered w-28"
-            type="number"
-            placeholder="团价(分)"
-            value={grouponPrice()}
-            onInput={(e) => setGrouponPrice(Number(e.currentTarget.value))}
-          />
-          <input
-            class="input input-bordered w-24"
-            type="number"
-            placeholder="成团人数"
-            value={grouponSize()}
-            onInput={(e) => setGrouponSize(Number(e.currentTarget.value))}
-          />
-          <button class="btn btn-primary" onClick={() => void onCreateGroupon()}>
-            创建拼团
-          </button>
-        </div>
-      </div>
-
-      {/* 邀请奖励 */}
-      <div class="card bg-base-200 p-4 space-y-3">
-        <h2 class="font-semibold">邀请有礼（拉新奖励）</h2>
-        <div class="flex flex-wrap gap-2">
-          <input
-            class="input input-bordered w-24"
-            type="number"
-            placeholder="邀请人数"
-            value={inviteCount()}
-            onInput={(e) => setInviteCount(Number(e.currentTarget.value))}
-          />
-          <select
-            class="select select-bordered"
-            value={inviteType()}
-            onChange={(e) => setInviteType(e.currentTarget.value)}
-          >
-            <option value="points">积分</option>
-            <option value="coupon">优惠券</option>
-          </select>
-          <input
-            class="input input-bordered w-28"
-            type="number"
-            placeholder="奖励值"
-            value={inviteValue()}
-            onInput={(e) => setInviteValue(Number(e.currentTarget.value))}
-          />
-          <button class="btn btn-primary" onClick={() => void onCreateInvite()}>
-            创建奖励
-          </button>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <For each={inviteGifts()}>
-            {(g) => (
-              <span class="badge badge-outline gap-2">
-                邀 {g.target_count} 人 → {g.reward_type === 'points' ? `${g.reward_value} 积分` : `券 ${g.reward_value}`}
-                <button class="text-error" onClick={() => void deleteInviteGift(g.id).then(() => void reloadInviteGifts())}>
-                  ✕
-                </button>
-              </span>
-            )}
-          </For>
-        </div>
-      </div>
-
-      {/* 文章管理 */}
-      <div class="card bg-base-200 p-4 space-y-3">
-        <h2 class="font-semibold">文章（内容营销）</h2>
-        <div class="flex flex-wrap gap-2">
-          <input
-            class="input input-bordered flex-1 min-w-40"
-            placeholder="标题"
-            value={articleTitle()}
-            onInput={(e) => setArticleTitle(e.currentTarget.value)}
-          />
-          <input
-            class="input input-bordered flex-1 min-w-40"
-            placeholder="内容"
-            value={articleContent()}
-            onInput={(e) => setArticleContent(e.currentTarget.value)}
-          />
-          <button class="btn btn-primary" onClick={() => void onCreateArticle()}>
-            发布
-          </button>
-        </div>
-        <div class="flex flex-col gap-2">
-          <For each={articles()}>
-            {(a) => (
-              <div class="flex items-center justify-between bg-base-100 rounded-lg px-3 py-2">
-                <span class="text-sm">{a.title}</span>
-                <button class="btn btn-xs btn-outline btn-error" onClick={() => void deleteArticle(a.id).then(() => void reloadArticles())}>
-                  删除
-                </button>
-              </div>
-            )}
-          </For>
-        </div>
-      </div>
-
-      {/* 门店管理 */}
-      <div class="card bg-base-200 p-4 space-y-3">
-        <h2 class="font-semibold">门店（自提点）</h2>
-        <div class="flex flex-wrap gap-2">
-          <input
-            class="input input-bordered flex-1 min-w-40"
-            placeholder="门店名"
-            value={outletName()}
-            onInput={(e) => setOutletName(e.currentTarget.value)}
-          />
-          <input
-            class="input input-bordered flex-1 min-w-40"
-            placeholder="地址"
-            value={outletAddress()}
-            onInput={(e) => setOutletAddress(e.currentTarget.value)}
-          />
-          <input
-            class="input input-bordered w-36"
-            placeholder="电话"
-            value={outletMobile()}
-            onInput={(e) => setOutletMobile(e.currentTarget.value)}
-          />
-          <button class="btn btn-primary" onClick={() => void onCreateOutlet()}>
-            创建
-          </button>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <For each={outlets()}>
-            {(o) => (
-              <span class="badge badge-outline gap-2">
-                {o.name} · {o.address}
-                <button
-                  class="text-error"
-                  onClick={() => void deleteShopOutlet(o.id).then(() => void reloadOutlets())}
-                >
-                  ✕
-                </button>
-              </span>
-            )}
-          </For>
-        </div>
-      </div>
-    </div>
+    </section>
   );
+}
+
+function OutletSection() {
+  const { accountId, ready } = useAccountId();
+  const feedback = useFeedback();
+  const [filters, setFilters] = createSignal<SearchValues>({});
+  const [open, setOpen] = createSignal(false);
+  const [name, setName] = createSignal('');
+  const [address, setAddress] = createSignal('');
+  const [mobile, setMobile] = createSignal('');
+  const [submitting, setSubmitting] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+
+  const list = useLocalPaged<ShopOutletItem>(() => listShopOutlets(accountId()), {
+    keyword: () => filters().keyword ?? '',
+    match: (o, kw) => o.name.toLowerCase().includes(kw) || o.address.toLowerCase().includes(kw),
+    resetKey: () => filters(),
+    watch: accountId,
+    enabled: ready,
+  });
+
+  const onSubmit = async () => {
+    if (submitting()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await createShopOutlet(accountId(), name().trim(), address().trim(), mobile().trim());
+      setOpen(false);
+      setName('');
+      setAddress('');
+      setMobile('');
+      feedback.toast('门店已创建');
+      void list.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建失败，请稍后重试');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onDelete = (row: ShopOutletItem) =>
+    feedback.runAction({
+      confirm: { title: '删除门店', message: `确定删除门店「${row.name}」吗？`, danger: true },
+      action: () => deleteShopOutlet(row.id),
+      success: '门店已删除',
+      onDone: () => void list.reload(),
+    });
+
+  const columns: Column<ShopOutletItem>[] = [
+    { key: 'name', title: '门店', render: (r) => <span class="font-medium">{r.name}</span> },
+    { key: 'address', title: '地址', render: (r) => <span class="text-sm">{r.address || '—'}</span> },
+    { key: 'mobile', title: '联系电话', render: (r) => <span class="text-sm">{r.mobile || '—'}</span> },
+  ];
+
+  return (
+    <SubResource
+      title="门店（自提点）"
+      onCreate={() => {
+        setError(null);
+        setOpen(true);
+      }}
+      createLabel="新增门店"
+      onRefresh={() => void list.reload()}
+      search={[{ kind: 'text', key: 'keyword', label: '门店名称 / 地址', placeholder: '输入关键字' }]}
+      onSearch={setFilters}
+      loading={list.loading()}
+    >
+      <DataTable
+        columns={columns}
+        rows={list.items()}
+        rowKey={(r) => r.id}
+        total={list.total()}
+        page={list.page()}
+        totalPages={list.totalPages()}
+        pageSize={list.pageSize()}
+        loading={list.loading()}
+        error={list.error()}
+        emptyText="暂无门店"
+        onPageChange={(p) => list.setPage(p)}
+        onPageSizeChange={(size) => list.setPageSize(size)}
+        actions={(row) => (
+          <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDelete(row)}>
+            删除
+          </button>
+        )}
+      />
+
+      <FormModal
+        open={open()}
+        title="新增门店"
+        onSubmit={onSubmit}
+        onClose={() => setOpen(false)}
+        submitting={submitting()}
+        error={error()}
+        size="sm"
+      >
+        <label class="form-control">
+          <span class="label-text mb-1">门店名称</span>
+          <input
+            class="input input-bordered input-sm"
+            value={name()}
+            onInput={(e) => setName(e.currentTarget.value)}
+            required
+          />
+        </label>
+        <label class="form-control">
+          <span class="label-text mb-1">地址</span>
+          <input
+            class="input input-bordered input-sm"
+            value={address()}
+            onInput={(e) => setAddress(e.currentTarget.value)}
+          />
+        </label>
+        <label class="form-control">
+          <span class="label-text mb-1">联系电话</span>
+          <input
+            class="input input-bordered input-sm"
+            value={mobile()}
+            onInput={(e) => setMobile(e.currentTarget.value)}
+          />
+        </label>
+      </FormModal>
+    </SubResource>
+  );
+}
+
+function PlanSection() {
+  const { accountId, ready } = useAccountId();
+  const feedback = useFeedback();
+  const [filters, setFilters] = createSignal<SearchValues>({});
+  const [open, setOpen] = createSignal(false);
+  const [name, setName] = createSignal('');
+  const [amount, setAmount] = createSignal('100.00');
+  const [bonus, setBonus] = createSignal('20.00');
+  const [submitting, setSubmitting] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+
+  const list = useLocalPaged<ShopBalancePlanItem>(() => listShopBalancePlans(accountId()), {
+    keyword: () => filters().keyword ?? '',
+    match: (p, kw) => p.name.toLowerCase().includes(kw),
+    resetKey: () => filters(),
+    watch: accountId,
+    enabled: ready,
+  });
+
+  const onSubmit = async () => {
+    if (submitting()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await createShopBalancePlan(
+        accountId(),
+        name().trim(),
+        yuanToFen(Number(amount())),
+        yuanToFen(Number(bonus())),
+      );
+      setOpen(false);
+      setName('');
+      feedback.toast('储值套餐已创建');
+      void list.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建失败，请稍后重试');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onDelete = (row: ShopBalancePlanItem) =>
+    feedback.runAction({
+      confirm: { title: '删除套餐', message: `确定删除套餐「${row.name}」吗？`, danger: true },
+      action: () => deleteShopBalancePlan(row.id),
+      success: '套餐已删除',
+      onDone: () => void list.reload(),
+    });
+
+  const columns: Column<ShopBalancePlanItem>[] = [
+    { key: 'name', title: '套餐', render: (r) => <span class="font-medium">{r.name}</span> },
+    { key: 'amount', title: '充值', render: (r) => <span class="font-semibold">{formatYuan(r.amount)}</span> },
+    { key: 'bonus', title: '赠送', render: (r) => <span class="text-success">{formatYuan(r.bonus)}</span> },
+  ];
+
+  return (
+    <SubResource
+      title="储值套餐（充送）"
+      onCreate={() => {
+        setError(null);
+        setOpen(true);
+      }}
+      createLabel="新增套餐"
+      onRefresh={() => void list.reload()}
+      search={[{ kind: 'text', key: 'keyword', label: '套餐名称', placeholder: '输入套餐名' }]}
+      onSearch={setFilters}
+      loading={list.loading()}
+    >
+      <DataTable
+        columns={columns}
+        rows={list.items()}
+        rowKey={(r) => r.id}
+        total={list.total()}
+        page={list.page()}
+        totalPages={list.totalPages()}
+        pageSize={list.pageSize()}
+        loading={list.loading()}
+        error={list.error()}
+        emptyText="暂无储值套餐"
+        onPageChange={(p) => list.setPage(p)}
+        onPageSizeChange={(size) => list.setPageSize(size)}
+        actions={(row) => (
+          <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDelete(row)}>
+            删除
+          </button>
+        )}
+      />
+
+      <FormModal
+        open={open()}
+        title="新增储值套餐"
+        onSubmit={onSubmit}
+        onClose={() => setOpen(false)}
+        submitting={submitting()}
+        error={error()}
+        size="sm"
+      >
+        <label class="form-control">
+          <span class="label-text mb-1">套餐名称</span>
+          <input
+            class="input input-bordered input-sm"
+            placeholder="例如：充 100 送 20"
+            value={name()}
+            onInput={(e) => setName(e.currentTarget.value)}
+            required
+          />
+        </label>
+        <div class="grid grid-cols-2 gap-3">
+          <label class="form-control">
+            <span class="label-text mb-1">充值金额（元）</span>
+            <input
+              class="input input-bordered input-sm"
+              type="number"
+              step="0.01"
+              min="0"
+              value={amount()}
+              onInput={(e) => setAmount(e.currentTarget.value)}
+              required
+            />
+          </label>
+          <label class="form-control">
+            <span class="label-text mb-1">赠送金额（元）</span>
+            <input
+              class="input input-bordered input-sm"
+              type="number"
+              step="0.01"
+              min="0"
+              value={bonus()}
+              onInput={(e) => setBonus(e.currentTarget.value)}
+            />
+          </label>
+        </div>
+        <p class="text-xs text-base-content/50">
+          实得 ¥
+          {fenToYuan(yuanToFen(Number(amount() || 0)) + yuanToFen(Number(bonus() || 0)))}
+        </p>
+      </FormModal>
+    </SubResource>
+  );
+}
+
+function InviteGiftSection() {
+  const { accountId, ready } = useAccountId();
+  const feedback = useFeedback();
+  const [open, setOpen] = createSignal(false);
+  const [count, setCount] = createSignal(1);
+  const [type, setType] = createSignal('points');
+  const [value, setValue] = createSignal(0);
+  const [submitting, setSubmitting] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+
+  const list = useLocalPaged<ShopInviteGiftItem>(() => listInviteGifts(accountId()), { watch: accountId, enabled: ready });
+
+  const onSubmit = async () => {
+    if (submitting()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await createInviteGift(accountId(), count(), type(), value());
+      setOpen(false);
+      feedback.toast('邀请奖励已创建');
+      void list.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建失败，请稍后重试');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onDelete = (row: ShopInviteGiftItem) =>
+    feedback.runAction({
+      confirm: {
+        title: '删除奖励',
+        message: `确定删除「邀 ${row.target_count} 人」的奖励规则吗？`,
+        danger: true,
+      },
+      action: () => deleteInviteGift(row.id),
+      success: '奖励已删除',
+      onDone: () => void list.reload(),
+    });
+
+  const columns: Column<ShopInviteGiftItem>[] = [
+    { key: 'target_count', title: '邀请人数', render: (r) => `${r.target_count} 人` },
+    {
+      key: 'reward_type',
+      title: '奖励类型',
+      render: (r) => (
+        <span class="badge badge-sm badge-ghost">{r.reward_type === 'points' ? '积分' : '优惠券'}</span>
+      ),
+    },
+    {
+      key: 'reward_value',
+      title: '奖励值',
+      render: (r) => (r.reward_type === 'points' ? `${r.reward_value} 积分` : `券 #${r.reward_value}`),
+    },
+  ];
+
+  return (
+    <SubResource
+      title="邀请有礼（拉新奖励）"
+      hint="粉丝邀请满指定人数后发放奖励"
+      onCreate={() => {
+        setError(null);
+        setOpen(true);
+      }}
+      createLabel="新增奖励"
+      onRefresh={() => void list.reload()}
+      loading={list.loading()}
+    >
+      <DataTable
+        columns={columns}
+        rows={list.items()}
+        rowKey={(r) => r.id}
+        total={list.total()}
+        page={list.page()}
+        totalPages={list.totalPages()}
+        pageSize={list.pageSize()}
+        loading={list.loading()}
+        error={list.error()}
+        emptyText="暂无邀请奖励"
+        onPageChange={(p) => list.setPage(p)}
+        onPageSizeChange={(size) => list.setPageSize(size)}
+        actions={(row) => (
+          <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDelete(row)}>
+            删除
+          </button>
+        )}
+      />
+
+      <FormModal
+        open={open()}
+        title="新增邀请奖励"
+        onSubmit={onSubmit}
+        onClose={() => setOpen(false)}
+        submitting={submitting()}
+        error={error()}
+        size="sm"
+      >
+        <div class="grid grid-cols-2 gap-3">
+          <label class="form-control">
+            <span class="label-text mb-1">邀请人数</span>
+            <input
+              class="input input-bordered input-sm"
+              type="number"
+              min="1"
+              value={count()}
+              onInput={(e) => setCount(Number(e.currentTarget.value) || 1)}
+              required
+            />
+          </label>
+          <label class="form-control">
+            <span class="label-text mb-1">奖励类型</span>
+            <select
+              class="select select-bordered select-sm"
+              value={type()}
+              onChange={(e) => setType(e.currentTarget.value)}
+            >
+              <option value="points">积分</option>
+              <option value="coupon">优惠券</option>
+            </select>
+          </label>
+        </div>
+        <label class="form-control">
+          <span class="label-text mb-1">奖励值（积分数量 / 优惠券 ID）</span>
+          <input
+            class="input input-bordered input-sm"
+            type="number"
+            min="0"
+            value={value()}
+            onInput={(e) => setValue(Number(e.currentTarget.value) || 0)}
+            required
+          />
+        </label>
+      </FormModal>
+    </SubResource>
+  );
+}
+
+function ArticleSection() {
+  const { accountId, ready } = useAccountId();
+  const feedback = useFeedback();
+  const [filters, setFilters] = createSignal<SearchValues>({});
+  const [open, setOpen] = createSignal(false);
+  const [title, setTitle] = createSignal('');
+  const [content, setContent] = createSignal('');
+  const [submitting, setSubmitting] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+
+  const list = useLocalPaged<ShopArticleItem>(
+    async () => {
+      const res = await listShopArticles(accountId(), 1, 200);
+      return res.list;
+    },
+    {
+      keyword: () => filters().keyword ?? '',
+      match: (a, kw) => a.title.toLowerCase().includes(kw),
+      resetKey: () => filters(),
+      watch: accountId,
+      enabled: ready,
+    },
+  );
+
+  const onSubmit = async () => {
+    if (submitting()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await createArticle(accountId(), title().trim(), content().trim());
+      setOpen(false);
+      setTitle('');
+      setContent('');
+      feedback.toast('文章已发布');
+      void list.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '发布失败，请稍后重试');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onDelete = (row: ShopArticleItem) =>
+    feedback.runAction({
+      confirm: { title: '删除文章', message: `确定删除文章「${row.title}」吗？`, danger: true },
+      action: () => deleteArticle(row.id),
+      success: '文章已删除',
+      onDone: () => void list.reload(),
+    });
+
+  const columns: Column<ShopArticleItem>[] = [
+    { key: 'title', title: '标题', render: (r) => <span class="font-medium">{r.title}</span> },
+    {
+      key: 'content',
+      title: '内容摘要',
+      render: (r) => <span class="text-sm text-base-content/60">{r.content?.slice(0, 40) || '—'}</span>,
+    },
+    {
+      key: 'created_at',
+      title: '发布时间',
+      render: (r) => <span class="text-sm text-base-content/70">{formatDateTime(r.created_at)}</span>,
+    },
+  ];
+
+  return (
+    <SubResource
+      title="文章（内容营销）"
+      onCreate={() => {
+        setError(null);
+        setOpen(true);
+      }}
+      createLabel="发布文章"
+      onRefresh={() => void list.reload()}
+      search={[{ kind: 'text', key: 'keyword', label: '文章标题', placeholder: '输入标题关键字' }]}
+      onSearch={setFilters}
+      loading={list.loading()}
+    >
+      <DataTable
+        columns={columns}
+        rows={list.items()}
+        rowKey={(r) => r.id}
+        total={list.total()}
+        page={list.page()}
+        totalPages={list.totalPages()}
+        pageSize={list.pageSize()}
+        loading={list.loading()}
+        error={list.error()}
+        emptyText="暂无文章"
+        onPageChange={(p) => list.setPage(p)}
+        onPageSizeChange={(size) => list.setPageSize(size)}
+        actions={(row) => (
+          <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDelete(row)}>
+            删除
+          </button>
+        )}
+      />
+
+      <FormModal
+        open={open()}
+        title="发布文章"
+        onSubmit={onSubmit}
+        onClose={() => setOpen(false)}
+        submitting={submitting()}
+        error={error()}
+      >
+        <label class="form-control">
+          <span class="label-text mb-1">标题</span>
+          <input
+            class="input input-bordered input-sm"
+            value={title()}
+            onInput={(e) => setTitle(e.currentTarget.value)}
+            required
+          />
+        </label>
+        <label class="form-control">
+          <span class="label-text mb-1">正文</span>
+          <textarea
+            class="textarea textarea-bordered"
+            rows={6}
+            value={content()}
+            onInput={(e) => setContent(e.currentTarget.value)}
+          />
+        </label>
+      </FormModal>
+    </SubResource>
+  );
+}
+
+function refundLabel(status: number): string {
+  return status === 0 ? '待审核' : status === 1 ? '已同意' : '已拒绝';
+}
+
+function refundClass(status: number): string {
+  return status === 0 ? 'badge-warning' : status === 1 ? 'badge-success' : 'badge-ghost';
 }
 
 export default ShopAdmin;

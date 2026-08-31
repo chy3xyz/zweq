@@ -65,12 +65,12 @@ test "account: CRUD, tenant isolation, wechat config upsert" {
 
     // tenant isolation in list
     _ = try a_svc.create(2, "租户二公众号", "wechat");
-    var t1 = try a_svc.list(1, 20, 1, null);
+    var t1 = try a_svc.list(1, 20, 1, null, "", "");
     defer t1.free(allocator);
     try std.testing.expectEqual(@as(i64, 1), t1.total);
 
     // kind filter
-    var wc = try a_svc.list(1, 20, null, "wechat");
+    var wc = try a_svc.list(1, 20, null, "wechat", "", "");
     defer wc.free(allocator);
     try std.testing.expectEqual(@as(i64, 2), wc.total);
 
@@ -445,7 +445,7 @@ test "material: news + file CRUD, kind validation" {
     // 空标题拒绝
     try std.testing.expectError(error.InvalidTitle, material_svc.createNews(1, 5, "   ", "", "", "", "", "", ""));
 
-    var news = try material_svc.listNews(1, 20, 1, 5);
+    var news = try material_svc.listNews(1, 20, 1, 5, "");
     defer news.free(allocator);
     try std.testing.expectEqual(@as(i64, 1), news.total);
 

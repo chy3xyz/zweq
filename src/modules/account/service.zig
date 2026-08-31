@@ -66,8 +66,8 @@ pub const AccountService = struct {
         return self.store.getById(id) catch error.Unexpected;
     }
 
-    pub fn list(self: *AccountService, page: usize, page_size: usize, tenant_id: ?i64, kind: ?[]const u8) AccountError!AccountListResult {
-        return self.store.list(page, page_size, tenant_id, kind) catch error.Unexpected;
+    pub fn list(self: *AccountService, page: usize, page_size: usize, tenant_id: ?i64, kind: ?[]const u8, keyword: []const u8, status: []const u8) AccountError!AccountListResult {
+        return self.store.list(page, page_size, tenant_id, kind, keyword, status) catch error.Unexpected;
     }
 
     pub fn update(self: *AccountService, id: i64, name: []const u8, kind: []const u8, status: []const u8) AccountError!bool {

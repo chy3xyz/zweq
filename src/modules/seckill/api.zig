@@ -20,6 +20,7 @@ const ActivityDto = struct {
     per_user: i64,
     start_at: i64,
     end_at: i64,
+    status: i64,
     created_at: i64,
 };
 
@@ -35,6 +36,7 @@ fn toDto(row: service.SeckillActivityRow) ActivityDto {
         .per_user = row.per_user,
         .start_at = row.start_at,
         .end_at = row.end_at,
+        .status = row.status,
         .created_at = row.created_at,
     };
 }
@@ -48,6 +50,11 @@ const CreateActivityReq = struct {
     per_user: i64 = 1,
     start_at: i64 = 0,
     end_at: i64 = 0,
+    status: i64 = 1,
+};
+
+const SetStatusReq = struct {
+    status: i64,
 };
 
 const RushReq = struct {
@@ -68,10 +75,11 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "seckills", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "seckills", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "seckills/orders", .handler = http.wrapHandler(Self, orders), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "seckills/{id}/rush", .handler = http.wrapHandler(Self, rush), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "seckills", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "seckill:read" } },
+            .{ .method = .POST, .path = "seckills", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "seckill:write" } },
+            .{ .method = .PUT, .path = "seckills/{id}/status", .handler = http.wrapHandler(Self, setStatus), .meta = .{ .permission = "seckill:write" } },
+            .{ .method = .GET, .path = "seckills/orders", .handler = http.wrapHandler(Self, orders), .meta = .{ .permission = "seckill:read" } },
+            .{ .method = .POST, .path = "seckills/{id}/rush", .handler = http.wrapHandler(Self, rush), .meta = .{ .permission = "seckill:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
@@ -83,6 +91,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
             try g.get("/seckills", list, @ptrCast(@alignCast(self)));
             try g.post("/seckills", create, @ptrCast(@alignCast(self)));
+            try g.put("/seckills/{id}/status", setStatus, @ptrCast(@alignCast(self)));
             try g.get("/seckills/orders", orders, @ptrCast(@alignCast(self)));
             try g.post("/seckills/{id}/rush", rush, @ptrCast(@alignCast(self)));
         }
@@ -126,14 +135,49 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
             try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
+            const keyword = ctx.queryStr("keyword", "");
+            const status = ctx.queryInt(i64, "status", -1);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listActivities(params.page, params.page_size, tid, account_id) catch {
+            var result = self.svc.listActivities(params.page, params.page_size, tid, account_id, keyword, status) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, ActivityDto, toDto);
             try zigmodu.http.sendPaged(ctx, dtos, @intCast(result.total), params, .ruoyi);
+        }
+
+        /// 上下架：body `{"status": 1|0}`。
+        fn setStatus(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的活动 ID");
+                return;
+            };
+            const req = ctx.bindJson(SetStatusReq) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            if (req.status != 0 and req.status != 1) {
+                try ctx.sendErrorResponse(400, 400, "status 只能为 0 或 1");
+                return;
+            }
+            const ok = self.svc.setActivityStatus(id, req.status) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
+                return;
+            };
+            if (!ok) {
+                try ctx.sendErrorResponse(404, 404, "活动不存在");
+                return;
+            }
+            const action = if (req.status == 1) "上架" else "下架";
+            var d: [128]u8 = undefined;
+            const det = try std.fmt.bufPrint(&d, "{s}秒杀活动 #{d}", .{ action, id });
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "seckill.status", "seckill_activity", id, det, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = action, .data = null });
         }
 
         fn create(ctx: *http.Context) !void {
@@ -148,7 +192,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
             defer {
                 ctx.allocator.free(req.title);
             }
-            const id = self.svc.createActivity(tid, req.account_id, req.title, req.price, req.original_price, req.stock, req.per_user, req.start_at, req.end_at) catch |err| {
+            const id = self.svc.createActivity(tid, req.account_id, req.title, req.price, req.original_price, req.stock, req.per_user, req.start_at, req.end_at, req.status) catch |err| {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
@@ -163,8 +207,9 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
             try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
+            const keyword = ctx.queryStr("keyword", "");
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id) catch {
+            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id, "", keyword) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };

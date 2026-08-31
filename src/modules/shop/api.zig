@@ -115,6 +115,7 @@ pub fn ShopApi(comptime Service: type, comptime UserService: type) type {
         limiter: *mw_rate.PerIpLimiter,
         fan_store: *member_persist.FanStore,
         settings: *setting_store_mod.SettingStore,
+        order_timeout_secs: i64,
 
         pub const module_name = "shop";
         pub const nest: []const []const u8 = &.{};
@@ -131,13 +132,18 @@ pub fn ShopApi(comptime Service: type, comptime UserService: type) type {
             .{ .method = .DELETE, .path = "shop/cart/{id}", .handler = http.wrapHandler(Self, cartDelete), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "shop/addresses", .handler = http.wrapHandler(Self, addressCreate), .meta = .{ .auth = .public } },
             .{ .method = .GET, .path = "shop/addresses", .handler = http.wrapHandler(Self, addressList), .meta = .{ .auth = .public } },
+            .{ .method = .PUT, .path = "shop/addresses/{id}", .handler = http.wrapHandler(Self, addressUpdate), .meta = .{ .auth = .public } },
             .{ .method = .DELETE, .path = "shop/addresses/{id}", .handler = http.wrapHandler(Self, addressDelete), .meta = .{ .auth = .public } },
+            .{ .method = .POST, .path = "shop/addresses/{id}/default", .handler = http.wrapHandler(Self, addressSetDefault), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "shop/orders", .handler = http.wrapHandler(Self, orderCreate), .meta = .{ .auth = .public } },
             .{ .method = .GET, .path = "shop/orders", .handler = http.wrapHandler(Self, orderList), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "shop/orders/overview", .handler = http.wrapHandler(Self, orderOverview), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "shop/orders/summaries", .handler = http.wrapHandler(Self, orderSummaries), .meta = .{ .auth = .public } },
             .{ .method = .GET, .path = "shop/orders/{id}", .handler = http.wrapHandler(Self, orderDetail), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "shop/orders/{id}/cancel", .handler = http.wrapHandler(Self, orderCancel), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "shop/orders/{id}/confirm", .handler = http.wrapHandler(Self, orderConfirm), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "shop/refunds", .handler = http.wrapHandler(Self, refundApply), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "shop/refunds", .handler = http.wrapHandler(Self, refundByOrder), .meta = .{ .auth = .public } },
             .{ .method = .GET, .path = "shop/comments", .handler = http.wrapHandler(Self, productComments), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "shop/comments", .handler = http.wrapHandler(Self, commentCreate), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "shop/favorites", .handler = http.wrapHandler(Self, favoriteAdd), .meta = .{ .auth = .public } },
@@ -159,35 +165,35 @@ pub fn ShopApi(comptime Service: type, comptime UserService: type) type {
             .{ .method = .POST, .path = "shop/orders/{id}/pay-complete", .handler = http.wrapHandler(Self, orderPayComplete), .meta = .{ .auth = .public } },
             .{ .method = .DELETE, .path = "shop/favorites/{id}", .handler = http.wrapHandler(Self, favoriteDelete), .meta = .{ .auth = .public } },
             // Admin routes
-            .{ .method = .POST, .path = "shop/categories", .handler = http.wrapHandler(Self, createCategory), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "shop/categories/{id}", .handler = http.wrapHandler(Self, deleteCategory), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/products", .handler = http.wrapHandler(Self, createProduct), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "shop/products/{id}", .handler = http.wrapHandler(Self, updateProduct), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "shop/products/{id}", .handler = http.wrapHandler(Self, deleteProduct), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "shop/admin/products", .handler = http.wrapHandler(Self, adminProducts), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "shop/admin/orders", .handler = http.wrapHandler(Self, adminOrders), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/admin/orders/{id}/ship", .handler = http.wrapHandler(Self, adminShip), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "shop/admin/refunds", .handler = http.wrapHandler(Self, adminRefunds), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/admin/refunds/{id}/audit", .handler = http.wrapHandler(Self, adminRefundAudit), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "shop/admin/stats", .handler = http.wrapHandler(Self, adminStats), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/admin/outlets", .handler = http.wrapHandler(Self, outletCreate), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/admin/balance-plans", .handler = http.wrapHandler(Self, planCreate), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "shop/admin/balance-plans/{id}", .handler = http.wrapHandler(Self, planDelete), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/admin/groupons", .handler = http.wrapHandler(Self, grouponCreate), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/admin/invite-gifts", .handler = http.wrapHandler(Self, inviteGiftCreate), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "shop/admin/invite-gifts/{id}", .handler = http.wrapHandler(Self, inviteGiftDelete), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/admin/articles", .handler = http.wrapHandler(Self, articleCreate), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "shop/admin/articles/{id}", .handler = http.wrapHandler(Self, articleDelete), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "shop/admin/articles", .handler = http.wrapHandler(Self, adminArticles), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/admin/webhooks", .handler = http.wrapHandler(Self, webhookCreate), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "shop/admin/webhooks", .handler = http.wrapHandler(Self, webhookList), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "shop/admin/webhooks/{id}", .handler = http.wrapHandler(Self, webhookDelete), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "shop/admin/outlets/{id}", .handler = http.wrapHandler(Self, outletDelete), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "shop/admin/orders/{id}/pickup", .handler = http.wrapHandler(Self, orderPickup), .meta = .{ .permission = "admin" } },
+            .{ .method = .POST, .path = "shop/categories", .handler = http.wrapHandler(Self, createCategory), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .DELETE, .path = "shop/categories/{id}", .handler = http.wrapHandler(Self, deleteCategory), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .POST, .path = "shop/products", .handler = http.wrapHandler(Self, createProduct), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .PUT, .path = "shop/products/{id}", .handler = http.wrapHandler(Self, updateProduct), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .DELETE, .path = "shop/products/{id}", .handler = http.wrapHandler(Self, deleteProduct), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .GET, .path = "shop/admin/products", .handler = http.wrapHandler(Self, adminProducts), .meta = .{ .permission = "shop:read" } },
+            .{ .method = .GET, .path = "shop/admin/orders", .handler = http.wrapHandler(Self, adminOrders), .meta = .{ .permission = "shop:read" } },
+            .{ .method = .POST, .path = "shop/admin/orders/{id}/ship", .handler = http.wrapHandler(Self, adminShip), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .GET, .path = "shop/admin/refunds", .handler = http.wrapHandler(Self, adminRefunds), .meta = .{ .permission = "shop:read" } },
+            .{ .method = .POST, .path = "shop/admin/refunds/{id}/audit", .handler = http.wrapHandler(Self, adminRefundAudit), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .GET, .path = "shop/admin/stats", .handler = http.wrapHandler(Self, adminStats), .meta = .{ .permission = "shop:read" } },
+            .{ .method = .POST, .path = "shop/admin/outlets", .handler = http.wrapHandler(Self, outletCreate), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .POST, .path = "shop/admin/balance-plans", .handler = http.wrapHandler(Self, planCreate), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .DELETE, .path = "shop/admin/balance-plans/{id}", .handler = http.wrapHandler(Self, planDelete), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .POST, .path = "shop/admin/groupons", .handler = http.wrapHandler(Self, grouponCreate), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .POST, .path = "shop/admin/invite-gifts", .handler = http.wrapHandler(Self, inviteGiftCreate), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .DELETE, .path = "shop/admin/invite-gifts/{id}", .handler = http.wrapHandler(Self, inviteGiftDelete), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .POST, .path = "shop/admin/articles", .handler = http.wrapHandler(Self, articleCreate), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .DELETE, .path = "shop/admin/articles/{id}", .handler = http.wrapHandler(Self, articleDelete), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .GET, .path = "shop/admin/articles", .handler = http.wrapHandler(Self, adminArticles), .meta = .{ .permission = "shop:read" } },
+            .{ .method = .POST, .path = "shop/admin/webhooks", .handler = http.wrapHandler(Self, webhookCreate), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .GET, .path = "shop/admin/webhooks", .handler = http.wrapHandler(Self, webhookList), .meta = .{ .permission = "shop:read" } },
+            .{ .method = .DELETE, .path = "shop/admin/webhooks/{id}", .handler = http.wrapHandler(Self, webhookDelete), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .DELETE, .path = "shop/admin/outlets/{id}", .handler = http.wrapHandler(Self, outletDelete), .meta = .{ .permission = "shop:write" } },
+            .{ .method = .POST, .path = "shop/admin/orders/{id}/pickup", .handler = http.wrapHandler(Self, orderPickup), .meta = .{ .permission = "shop:write" } },
         };
 
-        pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64, limiter: *mw_rate.PerIpLimiter, fan_store: *member_persist.FanStore, settings: *setting_store_mod.SettingStore) Self {
-            return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id, .limiter = limiter, .fan_store = fan_store, .settings = settings };
+        pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64, limiter: *mw_rate.PerIpLimiter, fan_store: *member_persist.FanStore, settings: *setting_store_mod.SettingStore, order_timeout_secs: i64) Self {
+            return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id, .limiter = limiter, .fan_store = fan_store, .settings = settings, .order_timeout_secs = order_timeout_secs };
         }
 
         /// 公开路由：C 端浏览（无 JWT）。
@@ -203,13 +209,18 @@ pub fn ShopApi(comptime Service: type, comptime UserService: type) type {
             try limited.delete("/shop/cart/{id}", cartDelete, @ptrCast(@alignCast(self)));
             try limited.post("/shop/addresses", addressCreate, @ptrCast(@alignCast(self)));
             try limited.get("/shop/addresses", addressList, @ptrCast(@alignCast(self)));
+            try limited.put("/shop/addresses/{id}", addressUpdate, @ptrCast(@alignCast(self)));
             try limited.delete("/shop/addresses/{id}", addressDelete, @ptrCast(@alignCast(self)));
+            try limited.post("/shop/addresses/{id}/default", addressSetDefault, @ptrCast(@alignCast(self)));
             try limited.post("/shop/orders", orderCreate, @ptrCast(@alignCast(self)));
             try limited.get("/shop/orders", orderList, @ptrCast(@alignCast(self)));
+            try limited.get("/shop/orders/overview", orderOverview, @ptrCast(@alignCast(self)));
+            try limited.get("/shop/orders/summaries", orderSummaries, @ptrCast(@alignCast(self)));
             try limited.get("/shop/orders/{id}", orderDetail, @ptrCast(@alignCast(self)));
             try limited.post("/shop/orders/{id}/cancel", orderCancel, @ptrCast(@alignCast(self)));
             try limited.post("/shop/orders/{id}/confirm", orderConfirm, @ptrCast(@alignCast(self)));
             try limited.post("/shop/refunds", refundApply, @ptrCast(@alignCast(self)));
+            try limited.get("/shop/refunds", refundByOrder, @ptrCast(@alignCast(self)));
             try limited.get("/shop/comments", productComments, @ptrCast(@alignCast(self)));
             try limited.post("/shop/comments", commentCreate, @ptrCast(@alignCast(self)));
             try limited.post("/shop/favorites", favoriteAdd, @ptrCast(@alignCast(self)));
@@ -320,15 +331,20 @@ pub fn ShopApi(comptime Service: type, comptime UserService: type) type {
         pub const cartDelete = h_trade.cartDelete;
         pub const addressCreate = h_trade.addressCreate;
         pub const addressList = h_trade.addressList;
+        pub const addressUpdate = h_trade.addressUpdate;
         pub const addressDelete = h_trade.addressDelete;
+        pub const addressSetDefault = h_trade.addressSetDefault;
         pub const orderCreate = h_trade.orderCreate;
         pub const orderList = h_trade.orderList;
+        pub const orderOverview = h_trade.orderOverview;
+        pub const orderSummaries = h_trade.orderSummaries;
         pub const orderDetail = h_trade.orderDetail;
         pub const orderCancel = h_trade.orderCancel;
         pub const orderConfirm = h_trade.orderConfirm;
         pub const adminOrders = h_trade.adminOrders;
         pub const adminShip = h_trade.adminShip;
         pub const refundApply = h_trade.refundApply;
+        pub const refundByOrder = h_trade.refundByOrder;
         pub const productComments = h_trade.productComments;
         pub const commentCreate = h_trade.commentCreate;
         pub const adminRefunds = h_trade.adminRefunds;

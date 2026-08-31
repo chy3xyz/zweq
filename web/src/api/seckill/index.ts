@@ -1,2 +1,8 @@
 export * from './types';
-export { createSeckill, listSeckillOrders, listSeckills, rushSeckill } from './query';
+export {
+  createSeckill,
+  listSeckillOrders,
+  listSeckills,
+  rushSeckill,
+  setSeckillStatus,
+} from './query';

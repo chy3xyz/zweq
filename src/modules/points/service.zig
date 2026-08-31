@@ -37,26 +37,27 @@ pub const PointsService = struct {
 
     // ── 商品 ─────────────────────────────────────────────────────
 
-    pub fn createProduct(self: *PointsService, tenant_id: i64, account_id: i64, name: []const u8, points: i64, stock: i64) PointsError!i64 {
+    pub fn createProduct(self: *PointsService, tenant_id: i64, account_id: i64, name: []const u8, points: i64, stock: i64, status: i64) PointsError!i64 {
         if (std.mem.trim(u8, name, " \t").len == 0) return error.InvalidName;
         if (points <= 0) return error.InvalidPoints;
         if (stock < 0) return error.InvalidStock;
-        return self.store.createProduct(tenant_id, account_id, name, points, stock, self.now()) catch error.Unexpected;
+        return self.store.createProduct(tenant_id, account_id, name, points, stock, status, self.now()) catch error.Unexpected;
     }
 
     pub fn getProduct(self: *PointsService, id: i64) PointsError!?PointsProductRow {
         return self.store.getProduct(id) catch error.Unexpected;
     }
 
-    pub fn listProducts(self: *PointsService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) PointsError!ProductListResult {
-        return self.store.listProducts(page, page_size, tenant_id, account_id) catch error.Unexpected;
+    /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
+    pub fn listProducts(self: *PointsService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) PointsError!ProductListResult {
+        return self.store.listProducts(page, page_size, tenant_id, account_id, keyword, status) catch error.Unexpected;
     }
 
-    pub fn updateProduct(self: *PointsService, id: i64, name: []const u8, points: i64, stock: i64) PointsError!void {
+    pub fn updateProduct(self: *PointsService, id: i64, name: []const u8, points: i64, stock: i64, status: i64) PointsError!void {
         if (std.mem.trim(u8, name, " \t").len == 0) return error.InvalidName;
         if (points <= 0) return error.InvalidPoints;
         if (stock < 0) return error.InvalidStock;
-        self.store.updateProduct(id, name, points, stock, self.now()) catch return error.Unexpected;
+        self.store.updateProduct(id, name, points, stock, status, self.now()) catch return error.Unexpected;
     }
 
     pub fn deleteProduct(self: *PointsService, id: i64) PointsError!void {
@@ -80,6 +81,8 @@ pub const PointsService = struct {
         const prod_opt = self.store.getProduct(product_id) catch return error.Unexpected;
         const prod = prod_opt orelse return error.ProductNotFound;
         defer prod.free(self.allocator);
+        // 下架商品不可兑换：C 端列表与兑换入口都必须挡住。
+        if (prod.status != 1) return error.ProductNotFound;
         if (prod.stock <= 0) return error.OutOfStock;
 
         const fan_opt = self.fan_store.getByOpenid(tenant_id, account_id, openid) catch return error.Unexpected;

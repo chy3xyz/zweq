@@ -43,8 +43,8 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
         pub const routes: []const http.RouteSpec(Self) = &.{
             .{ .method = .GET, .path = "settings", .handler = http.wrapHandler(Self, list), .meta = .{ .auth = .jwt } },
             .{ .method = .GET, .path = "settings/{key}", .handler = http.wrapHandler(Self, get), .meta = .{ .auth = .jwt } },
-            .{ .method = .PUT, .path = "settings/{key}", .handler = http.wrapHandler(Self, set), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "settings/{key}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "admin" } },
+            .{ .method = .PUT, .path = "settings/{key}", .handler = http.wrapHandler(Self, set), .meta = .{ .permission = "setting:write" } },
+            .{ .method = .DELETE, .path = "settings/{key}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "setting:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {

@@ -97,18 +97,18 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "roles", .handler = http.wrapHandler(Self, listRoles), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "roles", .handler = http.wrapHandler(Self, createRole), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "roles/{id}", .handler = http.wrapHandler(Self, updateRole), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "roles/{id}", .handler = http.wrapHandler(Self, deleteRole), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "permissions", .handler = http.wrapHandler(Self, listPermissions), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "permissions", .handler = http.wrapHandler(Self, grantPermission), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "permissions/{id}", .handler = http.wrapHandler(Self, revokePermission), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "users/{id}/roles", .handler = http.wrapHandler(Self, listUserRoles), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "users/{id}/roles", .handler = http.wrapHandler(Self, assignUserRole), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "roles/{id}/permissions", .handler = http.wrapHandler(Self, listRolePermissions), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "roles/{id}/permissions", .handler = http.wrapHandler(Self, bindRolePermission), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "roles/{id}/permissions", .handler = http.wrapHandler(Self, unbindRolePermission), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "roles", .handler = http.wrapHandler(Self, listRoles), .meta = .{ .permission = "permission:read" } },
+            .{ .method = .POST, .path = "roles", .handler = http.wrapHandler(Self, createRole), .meta = .{ .permission = "permission:write" } },
+            .{ .method = .PUT, .path = "roles/{id}", .handler = http.wrapHandler(Self, updateRole), .meta = .{ .permission = "permission:write" } },
+            .{ .method = .DELETE, .path = "roles/{id}", .handler = http.wrapHandler(Self, deleteRole), .meta = .{ .permission = "permission:write" } },
+            .{ .method = .GET, .path = "permissions", .handler = http.wrapHandler(Self, listPermissions), .meta = .{ .permission = "permission:read" } },
+            .{ .method = .POST, .path = "permissions", .handler = http.wrapHandler(Self, grantPermission), .meta = .{ .permission = "permission:write" } },
+            .{ .method = .DELETE, .path = "permissions/{id}", .handler = http.wrapHandler(Self, revokePermission), .meta = .{ .permission = "permission:write" } },
+            .{ .method = .GET, .path = "users/{id}/roles", .handler = http.wrapHandler(Self, listUserRoles), .meta = .{ .permission = "permission:read" } },
+            .{ .method = .PUT, .path = "users/{id}/roles", .handler = http.wrapHandler(Self, assignUserRole), .meta = .{ .permission = "permission:write" } },
+            .{ .method = .GET, .path = "roles/{id}/permissions", .handler = http.wrapHandler(Self, listRolePermissions), .meta = .{ .permission = "permission:read" } },
+            .{ .method = .POST, .path = "roles/{id}/permissions", .handler = http.wrapHandler(Self, bindRolePermission), .meta = .{ .permission = "permission:write" } },
+            .{ .method = .DELETE, .path = "roles/{id}/permissions", .handler = http.wrapHandler(Self, unbindRolePermission), .meta = .{ .permission = "permission:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {

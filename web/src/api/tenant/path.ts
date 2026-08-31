@@ -6,7 +6,9 @@ export const TENANT_PATH = {
 } as const;
 
 export const tenantDetail = (id: number) => `${APP_CONFIG.apiPrefix}/tenants/${id}`;
-export const tenantListQuery = (page: number, pageSize: number) => {
+export const tenantListQuery = (page: number, pageSize: number, keyword = '', status = '') => {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (keyword) params.set('keyword', keyword);
+  if (status) params.set('status', status);
   return `${TENANT_PATH.list}?${params.toString()}`;
 };

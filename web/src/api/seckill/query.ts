@@ -13,9 +13,11 @@ export async function listSeckills(
   accountId: number,
   page: number,
   pageSize: number,
+  keyword = '',
+  status = -1,
 ): Promise<SeckillListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: SeckillListResult }>(
-    seckillListQuery(accountId, page, pageSize),
+    seckillListQuery(accountId, page, pageSize, keyword, status),
   );
   return unwrapEnvelope(data);
 }
@@ -36,6 +38,14 @@ export async function rushSeckill(id: number, openid: string, quantity = 1): Pro
   unwrapEnvelope(data);
 }
 
+export async function setSeckillStatus(id: number, status: number): Promise<void> {
+  const { data } = await http.put<{ code: number; msg: string; data: null }>(
+    SECKILL_PATH.status(id),
+    { status },
+  );
+  unwrapEnvelope(data);
+}
+
 export interface SeckillOrderListResult {
   list: SeckillOrderItem[];
   total: number;
@@ -47,9 +57,10 @@ export async function listSeckillOrders(
   accountId: number,
   page: number,
   pageSize: number,
+  keyword = '',
 ): Promise<SeckillOrderListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: SeckillOrderListResult }>(
-    seckillOrdersQuery(accountId, page, pageSize),
+    seckillOrdersQuery(accountId, page, pageSize, keyword),
   );
   return unwrapEnvelope(data);
 }

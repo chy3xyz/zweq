@@ -85,6 +85,23 @@ pub const PrepayRequest = struct {
     }
 };
 
+/// 小程序 `wx.requestPayment` 所需参数（caller frees）。
+pub const JsapiPayParams = struct {
+    time_stamp: []const u8,
+    nonce_str: []const u8,
+    package: []const u8,
+    sign_type: []const u8,
+    pay_sign: []const u8,
+
+    pub fn deinit(self: JsapiPayParams, allocator: std.mem.Allocator) void {
+        allocator.free(self.time_stamp);
+        allocator.free(self.nonce_str);
+        allocator.free(self.package);
+        allocator.free(self.sign_type);
+        allocator.free(self.pay_sign);
+    }
+};
+
 pub const PaymentService = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -198,6 +215,50 @@ pub const PaymentService = struct {
         const url = try allocator.dupe(u8, JSAPI_ORDER_URL);
         errdefer allocator.free(url);
         return .{ .url = url, .body = body, .auth = auth };
+    }
+
+    /// 调微信统一下单并生成小程序支付参数（需网络）。
+    pub fn fetchJsapiPayParams(self: *PaymentService, allocator: std.mem.Allocator, cfg: PayConfig, order_no: []const u8, amount: i64, description: []const u8, openid: []const u8) PaymentError!JsapiPayParams {
+        if (cfg.mch_id.len == 0 or cfg.app_id.len == 0 or cfg.serial_no.len == 0 or cfg.private_key_pem.len == 0) return error.InvalidPayConfig;
+
+        var req_data = self.buildPrepayRequest(allocator, cfg, order_no, amount, description, openid) catch return error.PrepayFailed;
+        defer req_data.deinit(allocator);
+
+        var client = zigmodu.http.HttpClient.init(allocator, self.io, 4, 10_000);
+        defer client.deinit();
+        var req = zigmodu.http.HttpClient.HttpRequest.init(allocator, "POST", req_data.url);
+        defer req.deinit();
+        req.setHeader("Authorization", req_data.auth) catch return error.PrepayFailed;
+        req.setHeader("Content-Type", "application/json") catch return error.PrepayFailed;
+        req.setBody(req_data.body) catch return error.PrepayFailed;
+        var resp = client.request(req) catch return error.PrepayFailed;
+        defer resp.deinit();
+        if (!resp.isSuccess()) return error.PrepayFailed;
+
+        var parsed = std.json.parseFromSlice(std.json.Value, allocator, resp.body, .{}) catch return error.PrepayFailed;
+        defer parsed.deinit();
+        const prepay_id = objString(parsed.value, "prepay_id") orelse return error.PrepayFailed;
+
+        const time_stamp = std.fmt.allocPrint(allocator, "{d}", .{self.now()}) catch return error.PrepayFailed;
+        errdefer allocator.free(time_stamp);
+        const nonce_str = genNonce(allocator, self.io) catch return error.PrepayFailed;
+        errdefer allocator.free(nonce_str);
+        const package = std.fmt.allocPrint(allocator, "prepay_id={s}", .{prepay_id}) catch return error.PrepayFailed;
+        errdefer allocator.free(package);
+
+        const message = std.fmt.allocPrint(allocator, "{s}\n{s}\n{s}\n{s}\n", .{ cfg.app_id, time_stamp, nonce_str, package }) catch return error.PrepayFailed;
+        defer allocator.free(message);
+        const pay_sign = zwechat.util.rsa.rsaSign(allocator, message, cfg.private_key_pem) catch return error.PrepayFailed;
+        const sign_type = allocator.dupe(u8, "RSA") catch return error.PrepayFailed;
+        errdefer allocator.free(sign_type);
+
+        return .{
+            .time_stamp = time_stamp,
+            .nonce_str = nonce_str,
+            .package = package,
+            .sign_type = sign_type,
+            .pay_sign = pay_sign,
+        };
     }
 
     /// Create a recharge order via real WeChat Pay v3 JSAPI prepay.
@@ -405,4 +466,20 @@ pub const PaymentService = struct {
 fn objString(v: std.json.Value, key: []const u8) ?[]const u8 {
     const field = v.object.get(key) orelse return null;
     return if (field == .string) field.string else null;
+}
+
+fn genNonce(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
+    var rand_bytes: [16]u8 = undefined;
+    {
+        var file = try std.Io.Dir.cwd().openFile(io, "/dev/urandom", .{});
+        defer file.close(io);
+        const read = try file.readPositionalAll(io, &rand_bytes, 0);
+        if (read != rand_bytes.len) return error.Unexpected;
+    }
+    return std.fmt.allocPrint(allocator, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{
+        rand_bytes[0], rand_bytes[1], rand_bytes[2], rand_bytes[3],
+        rand_bytes[4], rand_bytes[5], rand_bytes[6], rand_bytes[7],
+        rand_bytes[8], rand_bytes[9], rand_bytes[10], rand_bytes[11],
+        rand_bytes[12], rand_bytes[13], rand_bytes[14], rand_bytes[15],
+    });
 }

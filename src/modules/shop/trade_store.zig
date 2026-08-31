@@ -212,6 +212,46 @@ pub const TradeStore = struct {
         return (try d.Exec()) > 0;
     }
 
+    pub fn setDefaultAddress(self: *TradeStore, tenant_id: i64, openid: []const u8, id: i64, now: i64) !void {
+        const row_opt = try self.getAddress(id);
+        const row = row_opt orelse return error.AddressNotFound;
+        defer row.free(self.allocator);
+        if (!std.mem.eql(u8, row.openid, openid)) return error.InvalidInput;
+
+        const preds = self.client.shop_address.predicates;
+        var upd = self.client.shop_address.Update();
+        defer upd.deinit();
+        _ = try upd.set("is_default", .{ .int = 1 });
+        _ = try upd.set("updated_at", .{ .int = now });
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = id }) });
+        _ = try upd.Save();
+        try self.clearDefaultAddress(tenant_id, openid, id);
+    }
+
+    pub fn updateAddress(self: *TradeStore, tenant_id: i64, openid: []const u8, id: i64, a: anytype, now: i64) !void {
+        const row_opt = try self.getAddress(id);
+        const row = row_opt orelse return error.AddressNotFound;
+        defer row.free(self.allocator);
+        if (!std.mem.eql(u8, row.openid, openid)) return error.InvalidInput;
+
+        const preds = self.client.shop_address.predicates;
+        var upd = self.client.shop_address.Update();
+        defer upd.deinit();
+        _ = try upd.set("name", .{ .string = a.name });
+        _ = try upd.set("mobile", .{ .string = a.mobile });
+        _ = try upd.set("region", .{ .string = a.region });
+        _ = try upd.set("detail", .{ .string = a.detail });
+        _ = try upd.set("updated_at", .{ .int = now });
+        if (a.is_default == 1) {
+            _ = try upd.set("is_default", .{ .int = 1 });
+        }
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = id }) });
+        _ = try upd.Save();
+        if (a.is_default == 1) {
+            try self.clearDefaultAddress(tenant_id, openid, id);
+        }
+    }
+
     // ── 订单 ──────────────────────────────────────────────────
 
     pub fn createOrder(self: *TradeStore, tenant_id: i64, account_id: i64, order_no: []const u8, client_trade_no: []const u8, openid: []const u8, total_amount: i64, pay_amount: i64, address_json: []const u8, pickup_type: []const u8, pickup_code: []const u8, store_id: i64, groupon_team_id: i64, now: i64) !i64 {
@@ -566,6 +606,17 @@ pub const TradeStore = struct {
         return q.Count();
     }
 
+    pub fn countOrdersByStatusOpenid(self: *TradeStore, tenant_id: i64, account_id: i64, openid: []const u8, status: i64) !i64 {
+        var q = self.client.shop_order.Query();
+        defer q.deinit();
+        const preds = self.client.shop_order.predicates;
+        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
+        if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (openid.len > 0) _ = try q.Where(.{preds.openidEQ(.{ .string = openid })});
+        _ = try q.Where(.{preds.statusEQ(.{ .int = status })});
+        return q.Count();
+    }
+
     // ── 储值卡套餐 ───────────────────────────────────────
 
     pub fn sumPaidAmount(self: *TradeStore, tenant_id: i64, account_id: i64) !i64 {
@@ -661,6 +712,38 @@ pub const TradeStore = struct {
         return .{ .items = out, .total = paged.total };
     }
 
+    pub fn listRefundsByOpenid(self: *TradeStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8) !RefundListResult {
+        var q = self.client.shop_refund.Query();
+        defer q.deinit();
+        const preds = self.client.shop_refund.predicates;
+        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
+        if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        _ = try q.Where(.{preds.openidEQ(.{ .string = openid })});
+        _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
+        var paged = try q.paged(page, page_size);
+        defer paged.deinit();
+        var out = try self.allocator.alloc(ShopRefundRow, paged.items.items.len);
+        var n: usize = 0;
+        errdefer {
+            for (out[0..n]) |r| r.free(self.allocator);
+            self.allocator.free(out);
+        }
+        for (paged.items.items) |e| {
+            out[n] = .{
+                .id = e.id,
+                .account_id = e.account_id,
+                .order_id = e.order_id,
+                .openid = try self.allocator.dupe(u8, e.openid),
+                .reason = try self.allocator.dupe(u8, e.reason),
+                .amount = try self.allocator.dupe(u8, e.amount),
+                .status = e.status,
+                .created_at = e.created_at orelse 0,
+            };
+            n += 1;
+        }
+        return .{ .items = out, .total = paged.total };
+    }
+
     pub fn auditRefund(self: *TradeStore, id: i64, status: i64, now: i64) !bool {
         const preds = self.client.shop_refund.predicates;
         var upd = self.client.shop_refund.Update();
@@ -672,6 +755,31 @@ pub const TradeStore = struct {
     }
 
     // ── 评价 ──────────────────────────────────────────────
+
+    pub fn getCommentByOrderProduct(self: *TradeStore, order_product_id: i64) !?ShopCommentRow {
+        var q = self.client.shop_comment.Query();
+        defer q.deinit();
+        const preds = self.client.shop_comment.predicates;
+        _ = try q.Where(.{preds.order_product_idEQ(.{ .int = order_product_id })});
+        _ = q.Limit(1);
+        var rows = try q.All();
+        defer {
+            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopCommentInfo, e, self.allocator);
+            rows.deinit();
+        }
+        if (rows.items.len == 0) return null;
+        const e = rows.items[0];
+        return .{
+            .id = e.id,
+            .account_id = e.account_id,
+            .order_product_id = e.order_product_id,
+            .product_id = e.product_id,
+            .openid = try self.allocator.dupe(u8, e.openid),
+            .star = e.star,
+            .content = try self.allocator.dupe(u8, e.content),
+            .created_at = e.created_at orelse 0,
+        };
+    }
 
     pub fn createComment(self: *TradeStore, tenant_id: i64, account_id: i64, c: anytype, now: i64) !i64 {
         var row = try crud.create(self.client.shop_comment, .{

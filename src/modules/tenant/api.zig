@@ -48,9 +48,9 @@ pub fn TenantApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "tenants", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "tenants", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "admin" } },
-            .{ .method = .PUT, .path = "tenants/{id}", .handler = http.wrapHandler(Self, update), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "tenants", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "tenant:read" } },
+            .{ .method = .POST, .path = "tenants", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "tenant:write" } },
+            .{ .method = .PUT, .path = "tenants/{id}", .handler = http.wrapHandler(Self, update), .meta = .{ .permission = "tenant:write" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService) Self {
@@ -78,8 +78,10 @@ pub fn TenantApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
 
+            const keyword = ctx.queryStr("keyword", "");
+            const status = ctx.queryStr("status", "");
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.list(params.page, params.page_size) catch |err| {
+            var result = self.svc.list(params.page, params.page_size, keyword, status) catch |err| {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };

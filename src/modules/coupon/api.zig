@@ -19,6 +19,7 @@ const CouponDto = struct {
     per_user: i64,
     start_at: i64,
     end_at: i64,
+    status: i64,
     created_at: i64,
 };
 
@@ -33,6 +34,7 @@ fn toCouponDto(row: service.CouponRow) CouponDto {
         .per_user = row.per_user,
         .start_at = row.start_at,
         .end_at = row.end_at,
+        .status = row.status,
         .created_at = row.created_at,
     };
 }
@@ -70,6 +72,11 @@ const CreateCouponReq = struct {
     per_user: i64 = 1,
     start_at: i64 = 0,
     end_at: i64 = 0,
+    status: i64 = 1,
+};
+
+const SetStatusReq = struct {
+    status: i64,
 };
 
 const ClaimReq = struct {
@@ -93,12 +100,13 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "coupons", .handler = http.wrapHandler(Self, listCoupons), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "coupons", .handler = http.wrapHandler(Self, createCoupon), .meta = .{ .permission = "admin" } },
-            .{ .method = .DELETE, .path = "coupons/{id}", .handler = http.wrapHandler(Self, deleteCoupon), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "coupons/{id}/claim", .handler = http.wrapHandler(Self, claim), .meta = .{ .permission = "admin" } },
-            .{ .method = .POST, .path = "coupons/use", .handler = http.wrapHandler(Self, useCoupon), .meta = .{ .permission = "admin" } },
-            .{ .method = .GET, .path = "coupon-users", .handler = http.wrapHandler(Self, listUsers), .meta = .{ .permission = "admin" } },
+            .{ .method = .GET, .path = "coupons", .handler = http.wrapHandler(Self, listCoupons), .meta = .{ .permission = "coupon:read" } },
+            .{ .method = .POST, .path = "coupons", .handler = http.wrapHandler(Self, createCoupon), .meta = .{ .permission = "coupon:write" } },
+            .{ .method = .DELETE, .path = "coupons/{id}", .handler = http.wrapHandler(Self, deleteCoupon), .meta = .{ .permission = "coupon:write" } },
+            .{ .method = .PUT, .path = "coupons/{id}/status", .handler = http.wrapHandler(Self, setStatus), .meta = .{ .permission = "coupon:write" } },
+            .{ .method = .POST, .path = "coupons/{id}/claim", .handler = http.wrapHandler(Self, claim), .meta = .{ .permission = "coupon:write" } },
+            .{ .method = .POST, .path = "coupons/use", .handler = http.wrapHandler(Self, useCoupon), .meta = .{ .permission = "coupon:write" } },
+            .{ .method = .GET, .path = "coupon-users", .handler = http.wrapHandler(Self, listUsers), .meta = .{ .permission = "coupon:read" } },
         };
 
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
@@ -111,6 +119,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/coupons", listCoupons, @ptrCast(@alignCast(self)));
             try g.post("/coupons", createCoupon, @ptrCast(@alignCast(self)));
             try g.delete("/coupons/{id}", deleteCoupon, @ptrCast(@alignCast(self)));
+            try g.put("/coupons/{id}/status", setStatus, @ptrCast(@alignCast(self)));
             try g.post("/coupons/{id}/claim", claim, @ptrCast(@alignCast(self)));
             try g.post("/coupons/use", useCoupon, @ptrCast(@alignCast(self)));
             try g.get("/coupon-users", listUsers, @ptrCast(@alignCast(self)));
@@ -134,8 +143,10 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
+            const keyword = ctx.queryStr("keyword", "");
+            const status = ctx.queryInt(i64, "status", -1);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listCoupons(params.page, params.page_size, tid, account_id) catch {
+            var result = self.svc.listCoupons(params.page, params.page_size, tid, account_id, keyword, status) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -154,7 +165,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer ctx.allocator.free(req.title);
-            const id = self.svc.createCoupon(tid, req.account_id, req.title, req.amount, req.min_amount, req.total, req.per_user, req.start_at, req.end_at) catch |err| {
+            const id = self.svc.createCoupon(tid, req.account_id, req.title, req.amount, req.min_amount, req.total, req.per_user, req.start_at, req.end_at, req.status) catch |err| {
                 const msg = switch (err) {
                     error.InvalidInput => "参数非法",
                     else => @errorName(err),
@@ -166,6 +177,39 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             const det1 = try std.fmt.bufPrint(&d1, "创建优惠券 {s}", .{req.title});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.create", "coupon", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+        }
+
+        /// 上下架：body `{"status": 1|0}`。
+        fn setStatus(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的券 ID");
+                return;
+            };
+            const req = ctx.bindJson(SetStatusReq) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            if (req.status != 0 and req.status != 1) {
+                try ctx.sendErrorResponse(400, 400, "status 只能为 0 或 1");
+                return;
+            }
+            const ok = self.svc.setCouponStatus(id, req.status) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
+                return;
+            };
+            if (!ok) {
+                try ctx.sendErrorResponse(404, 404, "优惠券不存在");
+                return;
+            }
+            const action = if (req.status == 1) "上架" else "下架";
+            var d: [128]u8 = undefined;
+            const det = try std.fmt.bufPrint(&d, "{s}优惠券 #{d}", .{ action, id });
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.status", "coupon", id, det, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = action, .data = null });
         }
 
         fn deleteCoupon(ctx: *http.Context) !void {
@@ -244,8 +288,10 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const openid = ctx.queryStr("openid", "");
+            const keyword = ctx.queryStr("keyword", "");
+            const status = ctx.queryStr("status", "");
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listUserCoupons(params.page, params.page_size, tid, account_id, if (openid.len > 0) openid else null) catch {
+            var result = self.svc.listUserCoupons(params.page, params.page_size, tid, account_id, if (openid.len > 0) openid else null, keyword, status) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };

@@ -5,6 +5,7 @@ export * from './file';
 export * from './notify';
 export * from './tenant';
 export * from './account';
+export * from './permission';
 export * from './rule';
 export * from './member';
 export * from './payment';

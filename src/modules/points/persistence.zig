@@ -19,6 +19,7 @@ pub const PointsProductRow = struct {
     name: []const u8,
     points: i64,
     stock: i64,
+    status: i64,
 
     pub fn free(self: PointsProductRow, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -71,6 +72,7 @@ pub const PointsStore = struct {
             .name = name,
             .points = e.points,
             .stock = e.stock,
+            .status = e.status,
         };
     }
 
@@ -95,7 +97,7 @@ pub const PointsStore = struct {
 
     // ── 商品 ─────────────────────────────────────────────────────
 
-    pub fn createProduct(self: *PointsStore, tenant_id: i64, account_id: i64, name: []const u8, points: i64, stock: i64, now: i64) !i64 {
+    pub fn createProduct(self: *PointsStore, tenant_id: i64, account_id: i64, name: []const u8, points: i64, stock: i64, status: i64, now: i64) !i64 {
         var b = try self.client.points_product.Create();
         defer b.deinit();
         _ = try b.setFieldValue("tenant_id", tenant_id);
@@ -103,6 +105,8 @@ pub const PointsStore = struct {
         _ = try b.setFieldValue("name", name);
         _ = try b.setFieldValue("points", points);
         _ = try b.setFieldValue("stock", stock);
+        // 显式写入，不依赖 DB 默认值（迁移加的列在老库上是 nullable）。
+        _ = try b.setFieldValue("status", status);
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
@@ -120,12 +124,15 @@ pub const PointsStore = struct {
         return try self.dupProduct(entity);
     }
 
-    pub fn listProducts(self: *PointsStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !ProductListResult {
+    /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
+    pub fn listProducts(self: *PointsStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) !ProductListResult {
         var q = self.client.points_product.Query();
         defer q.deinit();
         const preds = self.client.points_product.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        if (keyword.len > 0) _ = try q.Where(.{preds.nameContainsEscaped(keyword)});
+        if (status >= 0) _ = try q.Where(.{preds.statusEQ(.{ .int = status })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("id")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();
@@ -142,13 +149,14 @@ pub const PointsStore = struct {
         return .{ .items = out, .total = paged.total };
     }
 
-    pub fn updateProduct(self: *PointsStore, id: i64, name: []const u8, points: i64, stock: i64, now: i64) !void {
+    pub fn updateProduct(self: *PointsStore, id: i64, name: []const u8, points: i64, stock: i64, status: i64, now: i64) !void {
         const preds = self.client.points_product.predicates;
         var upd = self.client.points_product.Update();
         defer upd.deinit();
         _ = try upd.set("name", .{ .string = name });
         _ = try upd.setFieldValue("points", points);
         _ = try upd.setFieldValue("stock", stock);
+        _ = try upd.setFieldValue("status", status);
         _ = try upd.setFieldValue("updated_at", now);
         _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
         _ = try upd.Save();

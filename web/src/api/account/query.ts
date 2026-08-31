@@ -16,8 +16,14 @@ async function getEnvelope<T>(path: string): Promise<T> {
   return unwrapEnvelope(data);
 }
 
-export async function listAccounts(page: number, pageSize: number, kind?: string): Promise<AccountListResult> {
-  return getEnvelope<AccountListResult>(accountListQuery(page, pageSize, kind));
+export async function listAccounts(
+  page: number,
+  pageSize: number,
+  kind?: string,
+  keyword = '',
+  status = '',
+): Promise<AccountListResult> {
+  return getEnvelope<AccountListResult>(accountListQuery(page, pageSize, kind, keyword, status));
 }
 
 export async function createAccount(body: CreateAccountRequest): Promise<{ id: number }> {

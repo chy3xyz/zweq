@@ -9,8 +9,13 @@ async function getEnvelope<T>(path: string): Promise<T> {
   return unwrapEnvelope(data);
 }
 
-export async function listTenants(page: number, pageSize: number): Promise<TenantListResult> {
-  return getEnvelope<TenantListResult>(tenantListQuery(page, pageSize));
+export async function listTenants(
+  page: number,
+  pageSize: number,
+  keyword = '',
+  status = '',
+): Promise<TenantListResult> {
+  return getEnvelope<TenantListResult>(tenantListQuery(page, pageSize, keyword, status));
 }
 
 export async function createTenant(body: CreateTenantRequest): Promise<{ id: number }> {

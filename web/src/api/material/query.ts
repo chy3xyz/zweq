@@ -17,8 +17,13 @@ async function getEnvelope<T>(path: string): Promise<T> {
   return unwrapEnvelope(data);
 }
 
-export async function listNews(page: number, pageSize: number, accountId: number): Promise<NewsListResult> {
-  return getEnvelope<NewsListResult>(pagedQuery(MATERIAL_PATH.news, page, pageSize, accountId));
+export async function listNews(
+  page: number,
+  pageSize: number,
+  accountId: number,
+  keyword = '',
+): Promise<NewsListResult> {
+  return getEnvelope<NewsListResult>(pagedQuery(MATERIAL_PATH.news, page, pageSize, accountId, '', keyword));
 }
 
 export async function createNews(body: CreateNewsRequest): Promise<{ id: number }> {
