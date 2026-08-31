@@ -5,12 +5,21 @@
 import { http } from '../http/request'
 import { ZWEQ_ACCOUNT_ID } from '../config/zweq'
 import { useShopSessionStore } from '../store/shopSession'
-import { ensureShopSession } from './shopAuth'
+import { ensureShopSession, fanAuthExtra } from './shopAuth'
 import type { IPagedList } from './points'
+import type { IWxPayment } from '../utils/pay'
 
 // ==========================================
 // 类型定义
 // ==========================================
+
+export type IShopCategory = {
+  id: number
+  account_id: number
+  name: string
+  sort: number
+  created_at: number
+}
 
 export type IShopProduct = {
   id: number
@@ -58,11 +67,87 @@ export type IShopFavoriteItem = {
 
 export type IShopOrder = {
   id: number
+  account_id: number
   order_no: string
   openid: string
   total_amount: number
   pay_amount: number
   status: number
+  address_json: string
+  express_company: string
+  express_no: string
+  paid_at: number
+  created_at: number
+}
+
+export type IShopRefund = {
+  id: number
+  account_id: number
+  order_id: number
+  openid: string
+  reason: string
+  amount: number
+  status: number
+  created_at: number
+}
+
+export type IShopAddress = {
+  id: number
+  openid: string
+  name: string
+  mobile: string
+  region: string
+  detail: string
+  is_default: number
+}
+
+export type IShopOrderProduct = {
+  id: number
+  order_id: number
+  product_id: number
+  sku_id: number
+  name: string
+  image: string
+  spec_json: string
+  price: number
+  quantity: number
+  created_at: number
+}
+
+export type IShopOrderSummary = {
+  order_id: number
+  cover_image: string
+  item_count: number
+  summary: string
+}
+
+export type IShopOrderOverview = {
+  pending_pay: number
+  pending_ship: number
+  shipped: number
+  completed: number
+  order_timeout_secs: number
+}
+
+export type IShopOrderDetail = {
+  order: IShopOrder
+  items: IShopOrderProduct[]
+  commented_order_product_ids: number[]
+}
+
+export type IShopOrderPayParams = {
+  mode: string
+  amount?: number
+  order_no?: string
+  payment?: IWxPayment
+}
+
+export type IShopComment = {
+  id: number
+  product_id: number
+  openid: string
+  star: number
+  content: string
   created_at: number
 }
 
@@ -87,9 +172,29 @@ function sessionOpenid(accountId: number): string {
 // API 函数
 // ==========================================
 
-/** 商品列表（公开） */
-export function listShopProducts(accountId: number = ZWEQ_ACCOUNT_ID, page: number = 1, pageSize: number = 20): Promise<IPagedList<IShopProduct>> {
-  const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+/** 商品分类（公开） */
+export function listShopCategories(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IShopCategory[]> {
+  const query = `account_id=${accountId}`
+  return http.get<IShopCategory[]>(`/api/v1/shop/categories?${query}`, {
+    extra: { ignoreAuth: true } as UTSJSONObject,
+  })
+}
+
+/** 商品列表（公开）；categoryId=0 不限分类，keyword 可选搜索 */
+export function listShopProducts(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 20,
+  categoryId: number = 0,
+  keyword: string = '',
+): Promise<IPagedList<IShopProduct>> {
+  let query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+  if (categoryId > 0) {
+    query = `${query}&category_id=${categoryId}`
+  }
+  if (keyword.length > 0) {
+    query = `${query}&keyword=${encodeURIComponent(keyword)}`
+  }
   return http.get<IPagedList<IShopProduct>>(`/api/v1/shop/products?${query}`, {
     extra: { ignoreAuth: true } as UTSJSONObject,
   })
@@ -105,13 +210,17 @@ export function getShopProduct(id: number): Promise<IShopProductDetail> {
 /** 加购物车（C 端粉丝） */
 export function addShopCart(accountId: number, productId: number, skuId: number, quantity: number = 1): Promise<{ id: number }> {
   return withFanSession(accountId, (openid) =>
-    http.post<{ id: number }>('/api/v1/shop/cart/add', {
-      account_id: accountId,
-      openid,
-      product_id: productId,
-      sku_id: skuId,
-      quantity,
-    }),
+    http.post<{ id: number }>(
+      '/api/v1/shop/cart/add',
+      {
+        account_id: accountId,
+        openid,
+        product_id: productId,
+        sku_id: skuId,
+        quantity,
+      },
+      { extra: fanAuthExtra() },
+    ),
   )
 }
 
@@ -119,28 +228,65 @@ export function addShopCart(accountId: number, productId: number, skuId: number,
 export function listShopCart(accountId: number): Promise<IShopCartItem[]> {
   return withFanSession(accountId, (openid) => {
     const query = `account_id=${accountId}&openid=${openid}`
-    return http.get<IShopCartItem[]>(`/api/v1/shop/cart?${query}`)
+    return http.get<IShopCartItem[]>(`/api/v1/shop/cart?${query}`, { extra: fanAuthExtra() })
   })
 }
 
-/** 创建地址（下单前置） */
+/** 创建地址（下单前置）；首个地址自动设为默认 */
 export function createShopAddress(
   accountId: number,
   name: string,
   mobile: string,
   region: string,
   detail: string,
+  isDefault: boolean = true,
 ): Promise<{ id: number }> {
   return withFanSession(accountId, (openid) =>
-    http.post<{ id: number }>('/api/v1/shop/addresses', {
-      account_id: accountId,
-      openid,
-      name,
-      mobile,
-      region,
-      detail,
-      is_default: 1,
-    }),
+    http.post<{ id: number }>(
+      '/api/v1/shop/addresses',
+      {
+        account_id: accountId,
+        openid,
+        name,
+        mobile,
+        region,
+        detail,
+        is_default: isDefault ? 1 : 0,
+      },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 设为默认收货地址 */
+export function setShopAddressDefault(id: number): Promise<void> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.post<void>(`/api/v1/shop/addresses/${id}/default`, {}, { extra: fanAuthExtra() }),
+  )
+}
+
+/** 更新收货地址 */
+export function updateShopAddress(
+  id: number,
+  name: string,
+  mobile: string,
+  region: string,
+  detail: string,
+  isDefault: boolean = false,
+): Promise<void> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, (openid) =>
+    http.put<void>(
+      `/api/v1/shop/addresses/${id}`,
+      {
+        openid,
+        name,
+        mobile,
+        region,
+        detail,
+        is_default: isDefault ? 1 : 0,
+      },
+      { extra: fanAuthExtra() },
+    ),
   )
 }
 
@@ -149,25 +295,37 @@ export function createShopOrder(
   accountId: number,
   addressId: number,
   items: { product_id: number; sku_id: number; quantity: number }[],
+  couponCode: string = '',
+  remark: string = '',
 ): Promise<{ id: number }> {
   return withFanSession(accountId, (openid) =>
-    http.post<{ id: number }>('/api/v1/shop/orders', {
-      account_id: accountId,
-      openid,
-      address_id: addressId,
-      items,
-    }),
+    http.post<{ id: number }>(
+      '/api/v1/shop/orders',
+      {
+        account_id: accountId,
+        openid,
+        address_id: addressId,
+        items,
+        coupon_code: couponCode,
+        remark,
+      },
+      { extra: fanAuthExtra() },
+    ),
   )
 }
 
 /** 收藏商品 */
 export function addShopFavorite(accountId: number, productId: number): Promise<{ id: number }> {
   return withFanSession(accountId, (openid) =>
-    http.post<{ id: number }>('/api/v1/shop/favorites', {
-      account_id: accountId,
-      openid,
-      product_id: productId,
-    }),
+    http.post<{ id: number }>(
+      '/api/v1/shop/favorites',
+      {
+        account_id: accountId,
+        openid,
+        product_id: productId,
+      },
+      { extra: fanAuthExtra() },
+    ),
   )
 }
 
@@ -175,24 +333,196 @@ export function addShopFavorite(accountId: number, productId: number): Promise<{
 export function listShopFavorites(accountId: number): Promise<IShopFavoriteItem[]> {
   return withFanSession(accountId, (openid) => {
     const query = `account_id=${accountId}&openid=${openid}`
-    return http.get<IShopFavoriteItem[]>(`/api/v1/shop/favorites?${query}`)
+    return http.get<IShopFavoriteItem[]>(`/api/v1/shop/favorites?${query}`, { extra: fanAuthExtra() })
   })
 }
 
 /** 删除购物车项 */
 export function deleteShopCart(id: number): Promise<void> {
-  return withFanSession(ZWEQ_ACCOUNT_ID, () => http.delete<void>(`/api/v1/shop/cart/${id}`))
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.delete<void>(`/api/v1/shop/cart/${id}`, null, { extra: fanAuthExtra() }),
+  )
 }
 
-/** 我的订单 */
-export function listShopOrders(accountId: number, page: number = 1, pageSize: number = 20): Promise<IPagedList<IShopOrder>> {
+/** 更新购物车数量 */
+export function updateShopCart(id: number, quantity: number): Promise<void> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.put<void>(`/api/v1/shop/cart/${id}?quantity=${quantity}`, null, { extra: fanAuthExtra() }),
+  )
+}
+
+/** 我的订单；status: -1=全部, 0=待支付, 1=已支付, 2=已发货, 3=已完成, 4=已取消 */
+export function listShopOrders(
+  accountId: number,
+  page: number = 1,
+  pageSize: number = 20,
+  status: number = -1,
+): Promise<IPagedList<IShopOrder>> {
+  return withFanSession(accountId, (openid) => {
+    let query = `account_id=${accountId}&openid=${openid}&page=${page}&page_size=${pageSize}`
+    if (status >= 0) {
+      query = `${query}&status=${status}`
+    }
+    return http.get<IPagedList<IShopOrder>>(`/api/v1/shop/orders?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 订单概览（各状态数量 + 支付超时秒数） */
+export function getShopOrderOverview(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IShopOrderOverview> {
+  return withFanSession(accountId, (openid) => {
+    const query = `account_id=${accountId}&openid=${openid}`
+    return http.get<IShopOrderOverview>(`/api/v1/shop/orders/overview?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 批量订单摘要（列表首图/商品名） */
+export function getShopOrderSummaries(orderIds: number[]): Promise<IShopOrderSummary[]> {
+  if (orderIds.length === 0) {
+    return Promise.resolve([] as IShopOrderSummary[])
+  }
+  const ids = orderIds.join(',')
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.get<IShopOrderSummary[]>(`/api/v1/shop/orders/summaries?ids=${ids}`, { extra: fanAuthExtra() }),
+  )
+}
+
+/** 我的退款单列表 */
+export function listShopRefunds(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 50,
+): Promise<IPagedList<IShopRefund>> {
   return withFanSession(accountId, (openid) => {
     const query = `account_id=${accountId}&openid=${openid}&page=${page}&page_size=${pageSize}`
-    return http.get<IPagedList<IShopOrder>>(`/api/v1/shop/orders?${query}`)
+    return http.get<IPagedList<IShopRefund>>(`/api/v1/shop/refunds?${query}`, { extra: fanAuthExtra() })
   })
+}
+
+/** 地址列表 */
+export function listShopAddresses(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IShopAddress[]> {
+  return withFanSession(accountId, (openid) => {
+    const query = `account_id=${accountId}&openid=${openid}`
+    return http.get<IShopAddress[]>(`/api/v1/shop/addresses?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 删除地址 */
+export function deleteShopAddress(id: number): Promise<void> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.delete<void>(`/api/v1/shop/addresses/${id}`, null, { extra: fanAuthExtra() }),
+  )
+}
+
+/** 订单详情（含明细） */
+export function getShopOrder(id: number): Promise<IShopOrderDetail> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.get<IShopOrderDetail>(`/api/v1/shop/orders/${id}`, { extra: fanAuthExtra() }),
+  )
+}
+
+/** 取消订单（待支付） */
+export function cancelShopOrder(id: number): Promise<void> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.post<void>(`/api/v1/shop/orders/${id}/cancel`, {}, { extra: fanAuthExtra() }),
+  )
+}
+
+/** 确认收货（已发货） */
+export function confirmShopOrder(id: number): Promise<void> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.post<void>(`/api/v1/shop/orders/${id}/confirm`, {}, { extra: fanAuthExtra() }),
+  )
+}
+
+/** 获取支付参数（mock 或 wxpay_v3） */
+export function getShopOrderPayParams(id: number): Promise<IShopOrderPayParams> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.get<IShopOrderPayParams>(`/api/v1/shop/orders/${id}/pay-params`, { extra: fanAuthExtra() }),
+  )
+}
+
+/** mock 支付完成（mode=mock 时） */
+export function completeShopOrderPay(id: number): Promise<void> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.post<void>(`/api/v1/shop/orders/${id}/pay-complete`, {}, { extra: fanAuthExtra() }),
+  )
+}
+
+/** 取消收藏 */
+export function deleteShopFavorite(id: number): Promise<void> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, () =>
+    http.delete<void>(`/api/v1/shop/favorites/${id}`, null, { extra: fanAuthExtra() }),
+  )
 }
 
 /** 当前缓存的 openid（未登录返回空串） */
 export function getCachedShopOpenid(accountId: number = ZWEQ_ACCOUNT_ID): string {
   return sessionOpenid(accountId)
+}
+
+/** 商品评价列表（公开） */
+export function listShopComments(productId: number): Promise<IShopComment[]> {
+  const query = `product_id=${productId}`
+  return http.get<IShopComment[]>(`/api/v1/shop/comments?${query}`, {
+    extra: { ignoreAuth: true } as UTSJSONObject,
+  })
+}
+
+/** 提交订单商品评价（订单须已完成） */
+export function createShopComment(
+  accountId: number,
+  orderProductId: number,
+  productId: number,
+  star: number,
+  content: string,
+): Promise<{ id: number }> {
+  return withFanSession(accountId, (openid) =>
+    http.post<{ id: number }>(
+      '/api/v1/shop/comments',
+      {
+        account_id: accountId,
+        order_product_id: orderProductId,
+        product_id: productId,
+        openid,
+        star,
+        content,
+      },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 申请退款（已支付/已发货可申请） */
+export function applyShopRefund(accountId: number, orderId: number, reason: string): Promise<void> {
+  return withFanSession(accountId, (openid) =>
+    http.post<void>(
+      '/api/v1/shop/refunds',
+      {
+        account_id: accountId,
+        order_id: orderId,
+        openid,
+        reason,
+      },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 查询订单退款单（无则返回 null） */
+export function getShopRefundByOrder(orderId: number): Promise<IShopRefund | null> {
+  return withFanSession(ZWEQ_ACCOUNT_ID, (openid) => {
+    const query = `order_id=${orderId}&openid=${openid}`
+    return http.get<IShopRefund | null>(`/api/v1/shop/refunds?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 批量删除购物车项 */
+export async function deleteShopCartItems(ids: number[]): Promise<void> {
+  for (let i = 0; i < ids.length; i++) {
+    try {
+      await deleteShopCart(ids[i])
+    } catch (_e) {
+      // 忽略单项失败，继续清理
+    }
+  }
 }

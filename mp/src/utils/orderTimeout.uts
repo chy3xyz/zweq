@@ -1,0 +1,31 @@
+// ==========================================
+// 待支付订单超时倒计时
+// ==========================================
+
+export function payDeadlineAt(createdAt: number, timeoutSecs: number): number {
+  return createdAt + timeoutSecs
+}
+
+export function payRemainingSecs(createdAt: number, timeoutSecs: number, nowSecs: number | null = null): number {
+  const now = nowSecs != null ? nowSecs : Math.floor(Date.now() / 1000)
+  const remain = payDeadlineAt(createdAt, timeoutSecs) - now
+  return remain > 0 ? remain : 0
+}
+
+export function formatPayCountdown(createdAt: number, timeoutSecs: number, nowSecs: number | null = null): string {
+  const remain = payRemainingSecs(createdAt, timeoutSecs, nowSecs)
+  if (remain <= 0) {
+    return '支付已超时'
+  }
+  const minutes = Math.floor(remain / 60)
+  const seconds = remain % 60
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60)
+    const mins = minutes % 60
+    return `${hours}小时${mins}分后关闭`
+  }
+  if (minutes > 0) {
+    return `${minutes}分${seconds}秒后关闭`
+  }
+  return `${seconds}秒后关闭`
+}

@@ -1,0 +1,518 @@
+<template>
+  <view>
+    <NavBar title="订单详情" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view v-if="order != null" class="mx-30rpx mt-20rpx px-24rpx py-24rpx rounded-12px" style="background-color: #f8fafc;">
+        <view class="flex flex-row items-center justify-between">
+          <view class="flex flex-row items-center" @click="copyOrderNo">
+            <text class="text-13px text-[#64748b]" style="font-family: monospace;">{{ order.order_no }}</text>
+            <text class="ml-8rpx text-11px text-[#0957DE]">复制</text>
+          </view>
+          <text class="text-14px font-bold" :style="{ color: statusColor(order.status) }">{{ statusLabel(order.status) }}</text>
+        </view>
+        <view class="mt-16rpx flex flex-row items-center justify-between">
+          <text class="text-12px text-[#94a3b8]">{{ formatTime(order.created_at) }}</text>
+          <text class="text-18px font-bold text-[#ef4444]">¥{{ fenToYuan(order.pay_amount) }}</text>
+        </view>
+        <view v-if="hasDiscount" class="mt-8rpx flex flex-row items-center justify-between">
+          <text class="text-12px text-[#94a3b8]">商品合计 ¥{{ fenToYuan(order.total_amount) }}</text>
+          <text class="text-12px text-[#ef4444]">优惠 -¥{{ fenToYuan(discountAmount) }}</text>
+        </view>
+        <view v-if="order.status == 0 && orderTimeoutSecs > 0" class="mt-12rpx px-16rpx py-12rpx rounded-8rpx" style="background-color: #fff7ed;">
+          <text class="text-12px text-[#f59e0b]">请在 {{ payCountdownText(order.created_at) }} 内完成支付</text>
+        </view>
+        <view v-if="refund != null" class="mt-12rpx px-16rpx py-12rpx rounded-8rpx" style="background-color: #fef3c7;">
+          <text class="text-12px text-[#92400e]">退款{{ refundStatusLabel(refund!.status) }} · ¥{{ fenToYuan(refund!.amount) }}</text>
+          <text v-if="refund!.reason.length > 0" class="mt-4rpx block text-11px text-[#b45309]">{{ refund!.reason }}</text>
+        </view>
+        <view v-if="order.express_no.length > 0" class="mt-12rpx flex flex-row items-center justify-between" @click="copyExpress">
+          <text class="text-12px text-[#64748b]">物流：{{ order.express_company }} {{ order.express_no }}</text>
+          <text class="text-11px text-[#0957DE]">复制</text>
+        </view>
+      </view>
+
+      <view v-if="shippingAddress != null" class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #ffffff; border-width: 1px; border-color: #e2e8f0; border-style: solid;">
+        <text class="text-14px font-bold text-[#1e293b] mb-12rpx">收货信息</text>
+        <text class="text-14px text-[#1e293b]">{{ shippingAddress!.name }} {{ shippingAddress!.mobile }}</text>
+        <text class="mt-8rpx block text-13px text-[#64748b]">{{ shippingAddress!.region }} {{ shippingAddress!.detail }}</text>
+        <text v-if="shippingAddress!.remark.length > 0" class="mt-8rpx block text-13px text-[#64748b]">备注：{{ shippingAddress!.remark }}</text>
+      </view>
+
+      <view v-if="items.length > 0" class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #ffffff; border-width: 1px; border-color: #e2e8f0; border-style: solid;">
+        <text class="text-14px font-bold text-[#1e293b] mb-16rpx">商品明细</text>
+        <view v-for="item in items" :key="item.id" class="mb-16rpx pb-16rpx flex flex-row" style="border-bottom-width: 1px; border-bottom-color: #f1f5f9; border-bottom-style: solid;">
+          <image v-if="item.image !== ''" class="w-100rpx h-100rpx rounded-8rpx mr-16rpx" :src="item.image" mode="aspectFill" />
+          <view class="flex-1">
+            <text class="text-14px text-[#1e293b]">{{ item.name }}</text>
+            <text v-if="specText(item.spec_json) !== ''" class="mt-4rpx block text-12px text-[#94a3b8]">{{ specText(item.spec_json) }}</text>
+            <view class="mt-8rpx flex flex-row items-center justify-between">
+              <text class="text-12px text-[#94a3b8]">x{{ item.quantity }}</text>
+              <text class="text-14px font-bold text-[#1e293b]">¥{{ fenToYuan(item.price) }}</text>
+            </view>
+            <view v-if="order != null && order.status == 3" class="mt-12rpx flex flex-row justify-end">
+              <view v-if="isCommented(item.id)" class="px-16rpx py-6rpx rounded-8rpx" style="background-color: #e2e8f0;">
+                <text class="text-12px text-[#94a3b8]">已评价</text>
+              </view>
+              <view v-else class="px-16rpx py-6rpx rounded-8rpx" style="background-color: rgba(9, 87, 222, 0.08);" @click="openComment(item)">
+                <text class="text-12px text-[#0957DE]">评价</text>
+              </view>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <view v-if="order != null" class="mx-30rpx mt-30rpx flex flex-row flex-wrap justify-end">
+        <view v-if="canRefund" class="px-24rpx py-12rpx rounded-8rpx mr-16rpx mb-12rpx" style="background-color: #fef2f2;" @click="openRefund">
+          <text class="text-13px text-[#ef4444]">申请退款</text>
+        </view>
+        <view v-if="order.status == 0" class="px-24rpx py-12rpx rounded-8rpx mr-16rpx mb-12rpx" style="background-color: #e2e8f0;" @click="doCancel">
+          <text class="text-13px text-[#64748b]">取消订单</text>
+        </view>
+        <view v-if="order.status == 0" class="px-24rpx py-12rpx rounded-8rpx mr-16rpx mb-12rpx" style="background-color: #0957DE;" @click="doPay">
+          <text class="text-13px text-[#ffffff]">去支付</text>
+        </view>
+        <view v-if="order.status == 2" class="px-24rpx py-12rpx rounded-8rpx mb-12rpx" style="background-color: #10b981;" @click="doConfirm">
+          <text class="text-13px text-[#ffffff]">确认收货</text>
+        </view>
+      </view>
+
+      <view v-if="order == null && !loading" class="mt-60rpx items-center">
+        <text class="text-14px text-[#94a3b8]">订单不存在</text>
+      </view>
+    </view>
+
+    <!-- 退款申请 -->
+    <view v-if="showRefundPanel" class="fixed inset-0" style="background-color: rgba(0,0,0,0.45); z-index: 100;" @click="closeRefund">
+      <view class="absolute bottom-0 left-0 right-0 px-30rpx pt-30rpx pb-40rpx rounded-t-16px" style="background-color: #ffffff;" @click.stop="">
+        <text class="text-16px font-bold text-[#1e293b]">申请退款</text>
+        <text class="mt-12rpx block text-12px text-[#94a3b8]">退款金额 ¥{{ fenToYuan(order != null ? order.pay_amount : 0) }}，提交后等待商家审核</text>
+        <textarea
+          v-model="refundReason"
+          class="mt-20rpx w-full px-20rpx py-16rpx rounded-8rpx text-14px"
+          style="background-color: #f8fafc; height: 160rpx;"
+          placeholder="请填写退款原因"
+          maxlength="200"
+        />
+        <view class="mt-24rpx flex flex-row">
+          <view class="flex-1 mr-16rpx py-20rpx rounded-12rpx items-center" style="background-color: #e2e8f0;" @click="closeRefund">
+            <text class="text-14px text-[#64748b]">取消</text>
+          </view>
+          <view class="flex-1 py-20rpx rounded-12rpx items-center" :style="{ backgroundColor: refunding ? '#cbd5e1' : '#ef4444' }" @click="submitRefund">
+            <text class="text-14px font-bold text-[#ffffff]">{{ refunding ? '提交中...' : '提交申请' }}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 商品评价 -->
+    <view v-if="showCommentPanel" class="fixed inset-0" style="background-color: rgba(0,0,0,0.45); z-index: 100;" @click="closeComment">
+      <view class="absolute bottom-0 left-0 right-0 px-30rpx pt-30rpx pb-40rpx rounded-t-16px" style="background-color: #ffffff;" @click.stop="">
+        <text class="text-16px font-bold text-[#1e293b]">评价商品</text>
+        <text v-if="commentItem != null" class="mt-8rpx block text-13px text-[#64748b]">{{ commentItem!.name }}</text>
+        <view class="mt-20rpx flex flex-row items-center">
+          <text class="text-13px text-[#64748b] mr-16rpx">评分</text>
+          <view class="flex flex-row">
+            <text
+              v-for="n in 5"
+              :key="n"
+              class="text-28px mr-8rpx"
+              :style="{ color: n <= commentStar ? '#f59e0b' : '#e2e8f0' }"
+              @click="commentStar = n"
+            >★</text>
+          </view>
+        </view>
+        <textarea
+          v-model="commentContent"
+          class="mt-20rpx w-full px-20rpx py-16rpx rounded-8rpx text-14px"
+          style="background-color: #f8fafc; height: 160rpx;"
+          placeholder="分享你的使用感受（选填）"
+          maxlength="500"
+        />
+        <view class="mt-24rpx flex flex-row">
+          <view class="flex-1 mr-16rpx py-20rpx rounded-12rpx items-center" style="background-color: #e2e8f0;" @click="closeComment">
+            <text class="text-14px text-[#64748b]">取消</text>
+          </view>
+          <view class="flex-1 py-20rpx rounded-12rpx items-center" :style="{ backgroundColor: commenting ? '#cbd5e1' : '#0957DE' }" @click="submitComment">
+            <text class="text-14px font-bold text-[#ffffff]">{{ commenting ? '提交中...' : '提交评价' }}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import {
+  getShopOrder,
+  cancelShopOrder,
+  confirmShopOrder,
+  applyShopRefund,
+  createShopComment,
+  getShopRefundByOrder,
+  getShopOrderOverview,
+} from '../../api/shop'
+import { payShopOrder, PayCancelledError } from '../../api/pay'
+import { fenToYuan, formatTime } from '../../utils/format'
+import { formatSpecJson } from '../../utils/shopDisplay'
+import { parseOrderAddress, type IOrderAddress } from '../../utils/orderAddress'
+import { formatPayCountdown, payRemainingSecs } from '../../utils/orderTimeout'
+import type { IShopOrder, IShopOrderProduct, IShopRefund } from '../../api/shop'
+
+const COMMENT_STORAGE_KEY = 'zweq_shop_commented_ops'
+
+const orderId = ref<number>(0)
+const order = ref<IShopOrder | null>(null)
+const items = ref<IShopOrderProduct[]>([])
+const refund = ref<IShopRefund | null>(null)
+const shippingAddress = ref<IOrderAddress | null>(null)
+const commentedIds = ref<number[]>([])
+const commentedSet = ref<UTSJSONObject>({} as UTSJSONObject)
+const loading = ref<boolean>(false)
+
+const showRefundPanel = ref<boolean>(false)
+const refundReason = ref<string>('')
+const refunding = ref<boolean>(false)
+
+const showCommentPanel = ref<boolean>(false)
+const commentItem = ref<IShopOrderProduct | null>(null)
+const commentStar = ref<number>(5)
+const commentContent = ref<string>('')
+const commenting = ref<boolean>(false)
+const orderTimeoutSecs = ref<number>(0)
+const nowTick = ref<number>(0)
+
+let countdownTimer: number = 0
+
+const hasDiscount = computed<boolean>(() => {
+  if (order.value == null) {
+    return false
+  }
+  return order.value.total_amount > order.value.pay_amount
+})
+
+const discountAmount = computed<number>(() => {
+  if (order.value == null) {
+    return 0
+  }
+  return order.value.total_amount - order.value.pay_amount
+})
+
+const canRefund = computed<boolean>(() => {
+  if (order.value == null || refund.value != null) {
+    return false
+  }
+  return order.value.status == 1 || order.value.status == 2
+})
+
+function loadCommentedSet() {
+  try {
+    const raw = uni.getStorageSync(COMMENT_STORAGE_KEY) as string
+    if (raw != null && raw !== '') {
+      const obj = JSON.parseObject(raw)
+      if (obj != null) {
+        commentedSet.value = obj
+      }
+    }
+  } catch (_e) {}
+}
+
+function isCommented(orderProductId: number): boolean {
+  for (let i = 0; i < commentedIds.value.length; i++) {
+    if (commentedIds.value[i] === orderProductId) {
+      return true
+    }
+  }
+  const flag = commentedSet.value[`${orderProductId}`] as boolean | null
+  return flag != null && flag
+}
+
+function markCommented(orderProductId: number) {
+  let found = false
+  for (let i = 0; i < commentedIds.value.length; i++) {
+    if (commentedIds.value[i] === orderProductId) {
+      found = true
+      break
+    }
+  }
+  if (!found) {
+    commentedIds.value.push(orderProductId)
+  }
+  commentedSet.value[`${orderProductId}`] = true
+  uni.setStorageSync(COMMENT_STORAGE_KEY, JSON.stringify(commentedSet.value))
+}
+
+function refundStatusLabel(status: number): string {
+  switch (status) {
+    case 0: return '审核中'
+    case 1: return '已同意'
+    case 2: return '已拒绝'
+    default: return '处理中'
+  }
+}
+
+onLoad((options: UTSJSONObject | null) => {
+  loadCommentedSet()
+  if (options != null) {
+    const id = options['id'] as number | null
+    if (id != null) {
+      orderId.value = id
+      load()
+    }
+  }
+})
+
+onShow(() => {
+  if (orderId.value > 0) {
+    load()
+  }
+})
+
+onUnload(() => {
+  stopCountdownTimer()
+})
+
+function startCountdownTimer() {
+  stopCountdownTimer()
+  nowTick.value = Math.floor(Date.now() / 1000)
+  countdownTimer = setInterval(() => {
+    nowTick.value = Math.floor(Date.now() / 1000)
+    if (order.value != null && order.value.status == 0 && orderTimeoutSecs.value > 0) {
+      const remain = payRemainingSecs(order.value.created_at, orderTimeoutSecs.value, nowTick.value)
+      if (remain <= 0) {
+        stopCountdownTimer()
+        load()
+      }
+    }
+  }, 1000)
+}
+
+function stopCountdownTimer() {
+  if (countdownTimer > 0) {
+    clearInterval(countdownTimer)
+    countdownTimer = 0
+  }
+}
+
+function payCountdownText(createdAt: number): string {
+  const _tick = nowTick.value
+  return formatPayCountdown(createdAt, orderTimeoutSecs.value, _tick)
+}
+
+function loadOverview() {
+  getShopOrderOverview(ZWEQ_ACCOUNT_ID)
+    .then((overview) => {
+      orderTimeoutSecs.value = overview.order_timeout_secs
+      if (order.value != null && order.value.status == 0 && orderTimeoutSecs.value > 0) {
+        startCountdownTimer()
+      } else {
+        stopCountdownTimer()
+      }
+    })
+    .catch(() => {
+      orderTimeoutSecs.value = 0
+      stopCountdownTimer()
+    })
+}
+
+function load() {
+  if (orderId.value <= 0) return
+  loading.value = true
+  Promise.all([
+    getShopOrder(orderId.value),
+    getShopRefundByOrder(orderId.value),
+  ])
+    .then((results: any[]) => {
+      const detail = results[0] as UTSJSONObject
+      order.value = detail['order'] as IShopOrder
+      items.value = detail['items'] as IShopOrderProduct[]
+      const serverCommented = detail['commented_order_product_ids'] as number[] | null
+      commentedIds.value = serverCommented != null ? serverCommented : []
+      refund.value = results[1] as IShopRefund | null
+      if (order.value != null) {
+        shippingAddress.value = parseOrderAddress(order.value.address_json)
+        if (order.value.status == 0) {
+          loadOverview()
+        } else {
+          stopCountdownTimer()
+        }
+      } else {
+        shippingAddress.value = null
+      }
+    })
+    .catch(() => {
+      order.value = null
+      items.value = []
+      refund.value = null
+      shippingAddress.value = null
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function copyOrderNo() {
+  if (order.value == null) return
+  uni.setClipboardData({
+    data: order.value.order_no,
+    success: () => {
+      uni.showToast({ title: '订单号已复制', icon: 'success' })
+    },
+  })
+}
+
+function copyExpress() {
+  if (order.value == null || order.value.express_no.length === 0) return
+  const text = `${order.value.express_company} ${order.value.express_no}`
+  uni.setClipboardData({
+    data: text,
+    success: () => {
+      uni.showToast({ title: '物流单号已复制', icon: 'success' })
+    },
+  })
+}
+
+function specText(specJson: string): string {
+  return formatSpecJson(specJson)
+}
+
+function statusLabel(s: number): string {
+  switch (s) {
+    case 0: return '待支付'
+    case 1: return '已支付'
+    case 2: return '已发货'
+    case 3: return '已完成'
+    case 4: return '已取消'
+    default: return '未知'
+  }
+}
+
+function statusColor(s: number): string {
+  switch (s) {
+    case 0: return '#f59e0b'
+    case 3: return '#10b981'
+    case 4: return '#94a3b8'
+    default: return '#0957DE'
+  }
+}
+
+function openRefund() {
+  refundReason.value = ''
+  showRefundPanel.value = true
+}
+
+function closeRefund() {
+  showRefundPanel.value = false
+}
+
+function submitRefund() {
+  if (refunding.value || order.value == null) return
+  const reason = refundReason.value.trim()
+  if (reason.length === 0) {
+    uni.showToast({ title: '请填写退款原因', icon: 'none' })
+    return
+  }
+  refunding.value = true
+  applyShopRefund(order.value.account_id, orderId.value, reason)
+    .then(() => {
+      uni.showToast({ title: '退款申请已提交', icon: 'success' })
+      closeRefund()
+      load()
+    })
+    .catch(() => {
+      uni.showToast({ title: '申请失败', icon: 'none' })
+    })
+    .finally(() => {
+      refunding.value = false
+    })
+}
+
+function openComment(item: IShopOrderProduct) {
+  commentItem.value = item
+  commentStar.value = 5
+  commentContent.value = ''
+  showCommentPanel.value = true
+}
+
+function closeComment() {
+  showCommentPanel.value = false
+  commentItem.value = null
+}
+
+function submitComment() {
+  if (commenting.value || commentItem.value == null || order.value == null) return
+  commenting.value = true
+  createShopComment(
+    order.value.account_id,
+    commentItem.value.id,
+    commentItem.value.product_id,
+    commentStar.value,
+    commentContent.value.trim(),
+  )
+    .then(() => {
+      uni.showToast({ title: '评价成功', icon: 'success' })
+      if (commentItem.value != null) {
+        markCommented(commentItem.value!.id)
+      }
+      closeComment()
+    })
+    .catch(() => {
+      uni.showToast({ title: '评价失败', icon: 'none' })
+    })
+    .finally(() => {
+      commenting.value = false
+    })
+}
+
+function doCancel() {
+  uni.showModal({
+    title: '提示',
+    content: '确定取消该订单吗？',
+    success: (res) => {
+      if (res.confirm) {
+        cancelShopOrder(orderId.value)
+          .then(() => {
+            uni.showToast({ title: '已取消', icon: 'success' })
+            load()
+          })
+          .catch(() => {
+            uni.showToast({ title: '取消失败', icon: 'none' })
+          })
+      }
+    },
+  })
+}
+
+function doPay() {
+  payShopOrder(orderId.value)
+    .then(() => {
+      load()
+    })
+    .catch((err) => {
+      if (err instanceof PayCancelledError) {
+        uni.showToast({ title: '已取消支付', icon: 'none' })
+        return
+      }
+      uni.showToast({ title: '支付失败', icon: 'none' })
+    })
+}
+
+function doConfirm() {
+  uni.showModal({
+    title: '提示',
+    content: '确认已收到商品？',
+    success: (res) => {
+      if (res.confirm) {
+        confirmShopOrder(orderId.value)
+          .then(() => {
+            uni.showToast({ title: '已确认收货', icon: 'success' })
+            load()
+          })
+          .catch(() => {
+            uni.showToast({ title: '操作失败', icon: 'none' })
+          })
+      }
+    },
+  })
+}
+</script>

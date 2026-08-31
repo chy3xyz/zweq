@@ -1,0 +1,421 @@
+// ==========================================
+// zweq C 端场景 BFF — 粉丝 JWT（fanAuthExtra）
+// ==========================================
+
+import { http } from '../http/request'
+import { ZWEQ_ACCOUNT_ID } from '../config/zweq'
+import { ensureShopSession, fanAuthExtra } from './shopAuth'
+import type { IPagedList } from './points'
+
+// ==========================================
+// 类型定义
+// ==========================================
+
+export type IFanProfile = {
+  openid: string
+  nickname: string
+  avatar: string
+  points: number
+}
+
+export type IAppPointsProduct = {
+  id: number
+  account_id: number
+  name: string
+  points: number
+  stock: number
+}
+
+export type IAppCoupon = {
+  id: number
+  account_id: number
+  title: string
+  amount: number
+  min_amount: number
+  total: number
+  per_user: number
+  start_at: number
+  end_at: number
+}
+
+export type IAppMyCoupon = {
+  id: number
+  coupon_id: number
+  code: string
+  status: string
+  created_at: number
+}
+
+export type IAppDrawRecord = {
+  id: number
+  prize_name: string
+  points: number
+  created_at: number
+}
+
+export type IAppDrawResult = {
+  prize_name: string
+  points: number
+}
+
+export type IAppDrawConfig = {
+  cost: number
+  daily_limit: number
+  prize_count: number
+}
+
+export type IAppRedeemResult = {
+  order_id: number
+}
+
+export type IAppClaimResult = {
+  code: string
+}
+
+export type IAppCheckinRecord = {
+  id: number
+  day: number
+  points: number
+  created_at: number
+}
+
+export type IAppCheckinResult = {
+  points: number
+  fresh: boolean
+}
+
+export type IAppVote = {
+  id: number
+  account_id: number
+  title: string
+  options_json: string
+  end_at: number
+  created_at: number
+}
+
+export type IAppVoteDetail = {
+  id: number
+  title: string
+  options_json: string
+  end_at: number
+  tally: number[]
+}
+
+export type IAppSeckillActivity = {
+  id: number
+  account_id: number
+  title: string
+  price: string
+  original_price: string
+  stock: number
+  sold: number
+  per_user: number
+  start_at: number
+  end_at: number
+}
+
+export type IAppSeckillRushResult = {
+  order_id: number
+}
+
+export type IAppSeckillOrder = {
+  id: number
+  account_id: number
+  openid: string
+  activity_id: number
+  quantity: number
+  created_at: number
+}
+
+export type IAppMemberCard = {
+  openid: string
+  level_name: string
+  level: number
+  discount: number
+  points: number
+  total_points: number
+}
+
+export type IAppDistribution = {
+  openid: string
+  parent_openid: string
+  commission_balance: number
+  total_commission: number
+}
+
+export type IAppPointsOrder = {
+  id: number
+  product_id: number
+  product_name: string
+  points_spent: number
+  status: string
+}
+
+// ==========================================
+// 内部：写操作前确保粉丝会话
+// ==========================================
+
+async function withFanSession<T>(accountId: number, fn: () => Promise<T>): Promise<T> {
+  await ensureShopSession(accountId)
+  return fn()
+}
+
+// ==========================================
+// API 函数
+// ==========================================
+
+/** 粉丝资料（含积分余额） */
+export function getFanProfile(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IFanProfile> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}`
+    return http.get<IFanProfile>(`/api/v1/app/fan/profile?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 积分商城商品列表 */
+export function listAppPointsProducts(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 50,
+): Promise<IPagedList<IAppPointsProduct>> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+    return http.get<IPagedList<IAppPointsProduct>>(`/api/v1/app/points/products?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 积分兑换 */
+export function redeemAppPoints(accountId: number, productId: number): Promise<IAppRedeemResult> {
+  return withFanSession(accountId, () =>
+    http.post<IAppRedeemResult>(
+      '/api/v1/app/points/redeem',
+      { account_id: accountId, product_id: productId },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 我的积分兑换记录 */
+export function listAppPointsOrders(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IAppPointsOrder[]> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}`
+    return http.get<IAppPointsOrder[]>(`/api/v1/app/points/orders?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 可领取优惠券模板 */
+export function listAppCoupons(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 50,
+): Promise<IPagedList<IAppCoupon>> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+    return http.get<IPagedList<IAppCoupon>>(`/api/v1/app/coupons?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 领取优惠券 */
+export function claimAppCoupon(accountId: number, couponId: number): Promise<IAppClaimResult> {
+  return withFanSession(accountId, () =>
+    http.post<IAppClaimResult>(
+      `/api/v1/app/coupons/${couponId}/claim`,
+      { account_id: accountId },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 我的优惠券 */
+export function listAppMyCoupons(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 50,
+): Promise<IPagedList<IAppMyCoupon>> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+    return http.get<IPagedList<IAppMyCoupon>>(`/api/v1/app/my-coupons?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 抽奖配置 */
+export function getAppLuckyDrawConfig(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IAppDrawConfig> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}`
+    return http.get<IAppDrawConfig>(`/api/v1/app/lucky-draw/config?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 抽奖记录 */
+export function listAppDrawRecords(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 50,
+): Promise<IPagedList<IAppDrawRecord>> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+    return http.get<IPagedList<IAppDrawRecord>>(`/api/v1/app/lucky-draw/records?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 抽奖 */
+export function drawAppLucky(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IAppDrawResult> {
+  return withFanSession(accountId, () =>
+    http.post<IAppDrawResult>(
+      '/api/v1/app/lucky-draw/draw',
+      { account_id: accountId },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 每日签到 */
+export function postAppCheckin(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IAppCheckinResult> {
+  return withFanSession(accountId, () =>
+    http.post<IAppCheckinResult>(
+      '/api/v1/app/checkin',
+      { account_id: accountId },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 签到记录 */
+export function listAppCheckinRecords(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 50,
+): Promise<IPagedList<IAppCheckinRecord>> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+    return http.get<IPagedList<IAppCheckinRecord>>(`/api/v1/app/checkin/records?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 投票列表 */
+export function listAppVotes(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 50,
+): Promise<IPagedList<IAppVote>> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+    return http.get<IPagedList<IAppVote>>(`/api/v1/app/votes?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 投票详情（含计票） */
+export function getAppVote(voteId: number, accountId: number = ZWEQ_ACCOUNT_ID): Promise<IAppVoteDetail> {
+  return withFanSession(accountId, () =>
+    http.get<IAppVoteDetail>(`/api/v1/app/votes/${voteId}`, { extra: fanAuthExtra() }),
+  )
+}
+
+/** 提交选票 */
+export function postAppVoteBallot(
+  accountId: number,
+  voteId: number,
+  optionIndex: number,
+): Promise<void> {
+  return withFanSession(accountId, () =>
+    http.post<void>(
+      `/api/v1/app/votes/${voteId}/ballot`,
+      { account_id: accountId, option_index: optionIndex },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 秒杀活动列表 */
+export function listAppSeckillActivities(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 50,
+): Promise<IPagedList<IAppSeckillActivity>> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+    return http.get<IPagedList<IAppSeckillActivity>>(`/api/v1/app/seckill/activities?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 秒杀抢购 */
+export function rushAppSeckill(
+  accountId: number,
+  activityId: number,
+  quantity: number = 1,
+): Promise<IAppSeckillRushResult> {
+  return withFanSession(accountId, () =>
+    http.post<IAppSeckillRushResult>(
+      `/api/v1/app/seckill/activities/${activityId}/rush`,
+      { account_id: accountId, quantity },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 我的秒杀订单 */
+export function listAppSeckillOrders(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  page: number = 1,
+  pageSize: number = 50,
+): Promise<IPagedList<IAppSeckillOrder>> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}&page=${page}&page_size=${pageSize}`
+    return http.get<IPagedList<IAppSeckillOrder>>(`/api/v1/app/seckill/orders?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 会员卡信息 */
+export function getAppMemberCard(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IAppMemberCard | null> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}`
+    return http.get<IAppMemberCard | null>(`/api/v1/app/member-card?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 开通会员卡 */
+export function openAppMemberCard(accountId: number = ZWEQ_ACCOUNT_ID): Promise<void> {
+  return withFanSession(accountId, () =>
+    http.post<void>(
+      '/api/v1/app/member-card/open',
+      { account_id: accountId },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 分销员状态 */
+export function getAppDistribution(accountId: number = ZWEQ_ACCOUNT_ID): Promise<IAppDistribution | null> {
+  return withFanSession(accountId, () => {
+    const query = `account_id=${accountId}`
+    return http.get<IAppDistribution | null>(`/api/v1/app/distribution?${query}`, { extra: fanAuthExtra() })
+  })
+}
+
+/** 加盟分销 */
+export function joinAppDistribution(
+  accountId: number = ZWEQ_ACCOUNT_ID,
+  parentOpenid: string = '',
+): Promise<void> {
+  return withFanSession(accountId, () =>
+    http.post<void>(
+      '/api/v1/app/distribution/join',
+      { account_id: accountId, parent_openid: parentOpenid },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}
+
+/** 佣金提现（金额单位：分） */
+export function withdrawAppDistribution(
+  accountId: number,
+  amount: number,
+): Promise<void> {
+  return withFanSession(accountId, () =>
+    http.post<void>(
+      '/api/v1/app/distribution/withdraw',
+      { account_id: accountId, amount },
+      { extra: fanAuthExtra() },
+    ),
+  )
+}

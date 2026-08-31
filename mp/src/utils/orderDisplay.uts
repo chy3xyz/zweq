@@ -1,0 +1,86 @@
+// ==========================================
+// 订单列表展示辅助 — 首图 / 摘要
+// ==========================================
+
+import { getShopOrderSummaries } from '../api/shop'
+import type { IShopOrderSummary } from '../api/shop'
+
+export type IOrderPreview = {
+  order_id: number
+  cover_image: string
+  item_count: number
+  summary: string
+}
+
+/** 批量加载订单首图与商品摘要（用于列表页） */
+export async function loadOrderPreviews(orderIds: number[]): Promise<UTSJSONObject> {
+  const map: UTSJSONObject = {} as UTSJSONObject
+  if (orderIds.length === 0) {
+    return map
+  }
+  try {
+    const summaries = await getShopOrderSummaries(orderIds)
+    for (let i = 0; i < summaries.length; i++) {
+      const s = summaries[i] as IShopOrderSummary
+      map[`${s.order_id}`] = {
+        order_id: s.order_id,
+        cover_image: s.cover_image,
+        item_count: s.item_count,
+        summary: s.summary,
+      } as UTSJSONObject
+    }
+  } catch (_e) {
+    for (let i = 0; i < orderIds.length; i++) {
+      const orderId = orderIds[i]
+      map[`${orderId}`] = {
+        order_id: orderId,
+        cover_image: '',
+        item_count: 0,
+        summary: '',
+      } as UTSJSONObject
+    }
+  }
+  return map
+}
+
+export function getOrderPreview(map: UTSJSONObject, orderId: number): IOrderPreview {
+  const key = `${orderId}`
+  const raw = map[key] as UTSJSONObject | null
+  if (raw == null) {
+    return { order_id: orderId, cover_image: '', item_count: 0, summary: '' }
+  }
+  return {
+    order_id: orderId,
+    cover_image: raw['cover_image'] as string,
+    item_count: raw['item_count'] as number,
+    summary: raw['summary'] as string,
+  }
+}
+
+/** 合并分页加载的预览数据 */
+export function mergeOrderPreviews(base: UTSJSONObject, chunk: UTSJSONObject): UTSJSONObject {
+  const keys = UTSJSONObject.keys(chunk)
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i]
+    base[key] = chunk[key]
+  }
+  return base
+}
+
+export function refundStatusLabel(status: number): string {
+  switch (status) {
+    case 0: return '退款中'
+    case 1: return '已退款'
+    case 2: return '退款被拒'
+    default: return '退款'
+  }
+}
+
+export function refundStatusColor(status: number): string {
+  switch (status) {
+    case 0: return '#f59e0b'
+    case 1: return '#10b981'
+    case 2: return '#ef4444'
+    default: return '#64748b'
+  }
+}

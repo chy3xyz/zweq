@@ -1,0 +1,123 @@
+<template>
+  <view>
+    <NavBar title="我的收藏" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view
+        v-for="row in displayRows"
+        :key="row.id"
+        class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px flex flex-row"
+        style="background-color: #f8fafc;"
+        @click="goDetail(row.product_id)"
+      >
+        <image v-if="row.image !== ''" class="w-140rpx h-140rpx rounded-8rpx mr-16rpx" :src="row.image" mode="aspectFill" />
+        <view v-else class="w-140rpx h-140rpx rounded-8rpx mr-16rpx items-center justify-center" style="background-color: #e2e8f0;">
+          <text class="text-12px text-[#94a3b8]">无图</text>
+        </view>
+        <view class="flex-1 flex flex-col justify-between">
+          <view>
+            <text class="text-14px font-bold text-[#1e293b]">{{ row.name }}</text>
+            <text class="mt-8rpx block text-12px text-[#94a3b8]">收藏于 {{ formatTime(row.created_at) }}</text>
+          </view>
+          <view class="flex flex-row items-center justify-between">
+            <text class="text-16px font-bold text-[#ef4444]">¥{{ fenToYuan(row.price) }}</text>
+            <view class="px-16rpx py-6rpx rounded-8rpx" style="background-color: #fee2e2;" @click.stop="remove(row.id)">
+              <text class="text-12px text-[#ef4444]">取消收藏</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <view v-if="displayRows.length === 0 && !loading" class="mt-60rpx items-center">
+        <text class="text-14px text-[#94a3b8]">暂无收藏商品</text>
+        <view class="mt-20rpx px-32rpx py-12rpx rounded-8rpx" style="background-color: #0957DE;" @click="goProducts">
+          <text class="text-13px text-[#ffffff]">去逛逛</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { listShopFavorites, deleteShopFavorite, getShopProduct } from '../../api/shop'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { fenToYuan, formatTime } from '../../utils/format'
+import type { IShopFavoriteItem } from '../../api/shop'
+
+type IFavoriteDisplay = {
+  id: number
+  product_id: number
+  name: string
+  image: string
+  price: number
+  created_at: number
+}
+
+const displayRows = ref<IFavoriteDisplay[]>([])
+const loading = ref<boolean>(false)
+
+onLoad(() => {
+  load()
+})
+
+onShow(() => {
+  load()
+})
+
+function load() {
+  loading.value = true
+  listShopFavorites(ZWEQ_ACCOUNT_ID)
+    .then(async (favs: IShopFavoriteItem[]) => {
+      const rows: IFavoriteDisplay[] = []
+      for (let i = 0; i < favs.length; i++) {
+        const fav = favs[i]
+        try {
+          const detail = await getShopProduct(fav.product_id)
+          rows.push({
+            id: fav.id,
+            product_id: fav.product_id,
+            name: detail.product.name,
+            image: detail.product.image,
+            price: detail.product.price,
+            created_at: fav.created_at,
+          })
+        } catch (_e) {
+          rows.push({
+            id: fav.id,
+            product_id: fav.product_id,
+            name: `商品 #${fav.product_id}`,
+            image: '',
+            price: 0,
+            created_at: fav.created_at,
+          })
+        }
+      }
+      displayRows.value = rows
+    })
+    .catch(() => {
+      displayRows.value = []
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function goDetail(productId: number) {
+  uni.navigateTo({ url: `/src/pages/shop/product-detail?id=${productId}` })
+}
+
+function goProducts() {
+  uni.navigateTo({ url: '/src/pages/shop/products' })
+}
+
+function remove(id: number) {
+  deleteShopFavorite(id)
+    .then(() => {
+      uni.showToast({ title: '已取消收藏', icon: 'success' })
+      load()
+    })
+    .catch(() => {
+      uni.showToast({ title: '操作失败', icon: 'none' })
+    })
+}
+</script>

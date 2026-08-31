@@ -1,0 +1,45 @@
+// ==========================================
+// 订单收货地址 JSON 解析
+// ==========================================
+
+export type IOrderAddress = {
+  name: string
+  mobile: string
+  region: string
+  detail: string
+  remark: string
+}
+
+export function parseOrderAddress(raw: string): IOrderAddress | null {
+  const trimmed = raw.trim()
+  if (trimmed.length === 0 || trimmed === '{}') {
+    return null
+  }
+  try {
+    const obj = JSON.parseObject(trimmed)
+    if (obj == null) {
+      return null
+    }
+    const name = obj['name'] as string | null
+    const mobile = obj['mobile'] as string | null
+    const region = obj['region'] as string | null
+    const detail = obj['detail'] as string | null
+    const remark = obj['remark'] as string | null
+    if (name == null || mobile == null) {
+      return null
+    }
+    return {
+      name,
+      mobile,
+      region: region != null ? region : '',
+      detail: detail != null ? detail : '',
+      remark: remark != null ? remark : '',
+    }
+  } catch (_e) {
+    return null
+  }
+}
+
+export function formatOrderAddress(addr: IOrderAddress): string {
+  return `${addr.name} ${addr.mobile}\n${addr.region} ${addr.detail}`
+}

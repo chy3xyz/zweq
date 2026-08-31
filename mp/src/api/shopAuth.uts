@@ -2,10 +2,9 @@
 // 商城 C 端登录：wx.login → miniprogram/login → shop/auth/login
 // ==========================================
 
-import { http } from '../http/request'
+import { http, setFanReauthHandler } from '../http/request'
 import { ZWEQ_ACCOUNT_ID } from '../config/zweq'
 import { useShopSessionStore } from '../store/shopSession'
-import { useTokenStore } from '../store/token'
 
 export type IMiniprogramOpenidResult = {
   openid: string
@@ -13,6 +12,47 @@ export type IMiniprogramOpenidResult = {
 
 export type IShopFanLoginResult = {
   token: string
+}
+
+export type FanLoginError = {
+  stage: string
+  message: string
+}
+
+const FAN_LOGIN_FAIL_MODAL = '小程序已自动注册粉丝，若仍失败请检查网络'
+
+/** 构造粉丝登录错误（供调用方 catch 后识别） */
+export function createFanLoginError(stage: string, message: string): FanLoginError {
+  return { stage, message } as FanLoginError
+}
+
+/** 判断是否为粉丝登录错误 */
+export function isFanLoginError(err: any): boolean {
+  const e = err as FanLoginError
+  return e.stage != null && e.stage !== ''
+}
+
+function showFanLoginFailModal(): void {
+  uni.showModal({
+    title: '提示',
+    content: FAN_LOGIN_FAIL_MODAL,
+    showCancel: false,
+  })
+}
+
+/** 商城 C 端请求 extra：走 shopSession fan JWT，与 admin tokenStore 隔离 */
+export function fanAuthExtra(): UTSJSONObject {
+  return { authMode: 'fan' } as UTSJSONObject
+}
+
+/** 供需要手动注入 fan token 的场景（一般直接用 fanAuthExtra 即可） */
+export function injectFanTokenForRequest(): string {
+  const session = useShopSessionStore()
+  const token = session.getToken()
+  if (token === '') {
+    throw new Error('商城粉丝未登录')
+  }
+  return token
 }
 
 /** 微信 jscode2session（公开接口） */
@@ -56,24 +96,24 @@ function getWxLoginCode(): Promise<string> {
 
 /**
  * 确保商城粉丝会话有效；返回 openid。
- * 成功后会将 C-token 写入 shopSession，并临时注入 http 拦截器使用的 tokenStore。
+ * C-token 仅写入 shopSession，不污染 admin tokenStore。
  */
 export async function ensureShopFanSession(accountId: number = ZWEQ_ACCOUNT_ID): Promise<string> {
   const session = useShopSessionStore()
   if (session.isValid(accountId)) {
-    const tokenStore = useTokenStore()
-    tokenStore.setSingleToken({ token: session.getToken(), expiresIn: 604800 })
     return session.getOpenid()
   }
 
   const code = await getWxLoginCode()
   const mini = await miniprogramCode2Openid(accountId, code)
-  const fan = await shopFanLogin(accountId, mini.openid)
-  session.setSession(accountId, mini.openid, fan.token, 604800)
-
-  const tokenStore = useTokenStore()
-  tokenStore.setSingleToken({ token: fan.token, expiresIn: 604800 })
-  return mini.openid
+  try {
+    const fan = await shopFanLogin(accountId, mini.openid)
+    session.setSession(accountId, mini.openid, fan.token, 604800)
+    return mini.openid
+  } catch (_err) {
+    showFanLoginFailModal()
+    throw createFanLoginError('shop_fan_login', FAN_LOGIN_FAIL_MODAL)
+  }
 }
 
 /** H5 开发兜底：固定演示 openid（需后端存在对应粉丝） */
@@ -81,15 +121,16 @@ export async function ensureShopFanSessionH5Demo(accountId: number = ZWEQ_ACCOUN
   const demoOpenid = 'o_h5_demo'
   const session = useShopSessionStore()
   if (session.isValid(accountId) && session.getOpenid() === demoOpenid) {
-    const tokenStore = useTokenStore()
-    tokenStore.setSingleToken({ token: session.getToken(), expiresIn: 604800 })
     return demoOpenid
   }
-  const fan = await shopFanLogin(accountId, demoOpenid)
-  session.setSession(accountId, demoOpenid, fan.token, 604800)
-  const tokenStore = useTokenStore()
-  tokenStore.setSingleToken({ token: fan.token, expiresIn: 604800 })
-  return demoOpenid
+  try {
+    const fan = await shopFanLogin(accountId, demoOpenid)
+    session.setSession(accountId, demoOpenid, fan.token, 604800)
+    return demoOpenid
+  } catch (_err) {
+    showFanLoginFailModal()
+    throw createFanLoginError('shop_fan_login', FAN_LOGIN_FAIL_MODAL)
+  }
 }
 
 /**
@@ -103,3 +144,7 @@ export async function ensureShopSession(accountId: number = ZWEQ_ACCOUNT_ID): Pr
   return ensureShopFanSessionH5Demo(accountId)
   // #endif
 }
+
+setFanReauthHandler(async (): Promise<void> => {
+  await ensureShopSession()
+})

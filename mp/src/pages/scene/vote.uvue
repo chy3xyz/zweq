@@ -1,0 +1,206 @@
+<template>
+  <view>
+    <NavBar title="投票" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view class="mt-20rpx px-30rpx">
+        <view
+          v-for="v in votes"
+          :key="v.id"
+          class="mb-20rpx px-24rpx py-20rpx rounded-12px"
+          style="background-color: #f8fafc;"
+        >
+          <view class="flex flex-row items-center justify-between" @click="toggleDetail(v.id)">
+            <view class="flex-1">
+              <text class="text-14px font-bold text-[#1e293b]">{{ v.title }}</text>
+              <view class="mt-8rpx flex flex-row items-center">
+                <text class="text-12px text-[#94a3b8]">截止 {{ formatTime(v.end_at) }}</text>
+                <text class="ml-12rpx text-11px" :style="{ color: voteStatusColor(v) }">{{ voteStatusLabel(v) }}</text>
+              </view>
+            </view>
+                <text class="text-12px text-[#0957DE]">{{ expandedId === v.id ? '收起' : (hasVoted(v.id) ? '已投票' : (isVoteOpen(v) ? '投票' : '查看')) }}</text>
+          </view>
+
+          <view v-if="expandedId === v.id" class="mt-20rpx">
+            <view
+              v-for="(opt, idx) in getOptions(v)"
+              :key="idx"
+              class="mb-12rpx px-20rpx py-16rpx rounded-8rpx flex flex-row items-center justify-between"
+              style="background-color: #ffffff;"
+              @click="isVoteOpen(v) && !hasVoted(v.id) ? submitBallot(v.id, idx) : (hasVoted(v.id) ? showVoted() : showVoteClosed())"
+            >
+              <text class="text-13px text-[#1e293b]">{{ opt }}</text>
+              <text v-if="getTallyCount(v.id, idx) > 0" class="text-12px text-[#64748b]">{{ getTallyCount(v.id, idx) }} 票</text>
+            </view>
+            <view v-if="getOptions(v).length === 0" class="py-12rpx">
+              <text class="text-12px text-[#94a3b8]">暂无选项</text>
+            </view>
+          </view>
+        </view>
+      </view>
+      <view v-if="votes.length === 0 && !loading" class="mt-60rpx items-center">
+        <text class="text-14px text-[#94a3b8]">暂无投票活动</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { listAppVotes, getAppVote, postAppVoteBallot } from '../../api/app'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { formatTime } from '../../utils/format'
+import { isInTimeRange, activityStatusLabel } from '../../utils/activity'
+import type { IAppVote } from '../../api/app'
+
+const VOTE_STORAGE_KEY = 'zweq_voted_ids'
+
+const votes = ref<IAppVote[]>([])
+const loading = ref<boolean>(false)
+const expandedId = ref<number>(0)
+const tallyMap = ref<UTSJSONObject>({} as UTSJSONObject)
+const votedSet = ref<UTSJSONObject>({} as UTSJSONObject)
+const voting = ref<boolean>(false)
+
+onLoad(() => {
+  loadVotedSet()
+  load()
+})
+
+function loadVotedSet() {
+  try {
+    const raw = uni.getStorageSync(VOTE_STORAGE_KEY) as string
+    if (raw != null && raw !== '') {
+      const obj = JSON.parseObject(raw)
+      if (obj != null) {
+        votedSet.value = obj
+      }
+    }
+  } catch (_e) {}
+}
+
+function hasVoted(voteId: number): boolean {
+  const flag = votedSet.value[`${voteId}`] as boolean | null
+  return flag != null && flag
+}
+
+function markVoted(voteId: number) {
+  votedSet.value[`${voteId}`] = true
+  uni.setStorageSync(VOTE_STORAGE_KEY, JSON.stringify(votedSet.value))
+}
+
+onShow(() => {
+  load()
+})
+
+function load() {
+  loading.value = true
+  listAppVotes(ZWEQ_ACCOUNT_ID, 1, 50)
+    .then((res: any) => {
+      votes.value = (res as UTSJSONObject)['list'] as IAppVote[]
+    })
+    .catch(() => {
+      votes.value = []
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function findVote(voteId: number): IAppVote | null {
+  for (let i = 0; i < votes.value.length; i++) {
+    if (votes.value[i].id === voteId) {
+      return votes.value[i]
+    }
+  }
+  return null
+}
+
+function getOptions(v: IAppVote): string[] {
+  try {
+    const arr = JSON.parse<string[]>(v.options_json)
+    return arr != null ? arr : []
+  } catch (_e) {
+    return []
+  }
+}
+
+function isVoteOpen(v: IAppVote): boolean {
+  return isInTimeRange(0, v.end_at)
+}
+
+function voteStatusLabel(v: IAppVote): string {
+  if (!isVoteOpen(v)) {
+    return '已结束'
+  }
+  return activityStatusLabel(0, v.end_at)
+}
+
+function voteStatusColor(v: IAppVote): string {
+  if (!isVoteOpen(v)) {
+    return '#94a3b8'
+  }
+  return '#10b981'
+}
+
+function showVoteClosed() {
+  uni.showToast({ title: '投票已结束', icon: 'none' })
+}
+
+function showVoted() {
+  uni.showToast({ title: '您已投过票', icon: 'none' })
+}
+
+function toggleDetail(voteId: number) {
+  if (expandedId.value === voteId) {
+    expandedId.value = 0
+    return
+  }
+  expandedId.value = voteId
+  getAppVote(voteId, ZWEQ_ACCOUNT_ID)
+    .then((res: any) => {
+      const obj = res as UTSJSONObject
+      const tally = obj['tally'] as number[]
+      tallyMap.value[`${voteId}`] = tally
+    })
+    .catch(() => {})
+}
+
+function getTallyCount(voteId: number, idx: number): number {
+  const key = `${voteId}`
+  const tally = tallyMap.value[key] as number[] | null
+  if (tally == null || idx >= tally.length) return 0
+  return tally[idx]
+}
+
+function submitBallot(voteId: number, optionIndex: number) {
+  if (voting.value || hasVoted(voteId)) {
+    if (hasVoted(voteId)) {
+      showVoted()
+    }
+    return
+  }
+  const vote = findVote(voteId)
+  if (vote != null && !isVoteOpen(vote)) {
+    showVoteClosed()
+    return
+  }
+  voting.value = true
+  postAppVoteBallot(ZWEQ_ACCOUNT_ID, voteId, optionIndex)
+    .then(() => {
+      markVoted(voteId)
+      uni.showToast({ title: '投票成功', icon: 'success' })
+      getAppVote(voteId, ZWEQ_ACCOUNT_ID)
+        .then((res: any) => {
+          const obj = res as UTSJSONObject
+          tallyMap.value[`${voteId}`] = obj['tally'] as number[]
+        })
+        .catch(() => {})
+    })
+    .catch(() => {
+      uni.showToast({ title: '投票失败', icon: 'none' })
+    })
+    .finally(() => {
+      voting.value = false
+    })
+}
+</script>

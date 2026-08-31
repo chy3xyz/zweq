@@ -1,0 +1,27 @@
+// ==========================================
+// zweq 商城 AI 助手 API（C 端，fan JWT + openid）
+// ==========================================
+
+import { http } from '../http/request'
+import { ensureShopSession, fanAuthExtra } from './shopAuth'
+
+export type IShopAssistantResult = {
+  reply: string
+}
+
+/** 商城 AI 智能助手对话 */
+export function shopAssistant(accountId: number, question: string): Promise<IShopAssistantResult> {
+  return ensureShopSession(accountId).then((openid) => {
+    const extra = fanAuthExtra()
+    extra['toast'] = false
+    return http.post<IShopAssistantResult>(
+      '/api/v1/shop/ai/assistant',
+      {
+        account_id: accountId,
+        openid,
+        question,
+      },
+      { extra },
+    )
+  })
+}

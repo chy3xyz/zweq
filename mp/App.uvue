@@ -1,9 +1,14 @@
 <script setup lang="uts">
 import { checkDirectEntry } from './src/router/interceptor'
 import { loadFont } from '@/uni_modules/uview-ultra/index.uts'
+import { ensureShopSession } from './src/api/shopAuth'
+import { ZWEQ_ACCOUNT_ID } from './src/config/zweq'
 
 onLaunch(() => {
   loadFont()
+  ensureShopSession(ZWEQ_ACCOUNT_ID).catch((err) => {
+    console.warn('ensureShopSession failed', err)
+  })
   // #ifdef MP-WEIXIN
   // 微信小程序真机 @font-face 不生效，使用 uni.loadFontFace 加载 uni-icons 字体
   uni.loadFontFace({

@@ -63,7 +63,8 @@ export function getMe(): Promise<IUserInfo> {
 /**
  * 微信小程序 code 登录（仅 MP-WEIXIN 环境有效，需在页面条件编译中调用）
  * 对应 zweq POST /api/v1/miniprogram/login（body: account_id/code）
- * 服务端 jscode2session 换 openid 后返回 JWT 与粉丝信息
+ * 对应 zweq POST /api/v1/miniprogram/login（body: account_id/code）
+ * 服务端 jscode2session 换 openid；C-token 需再调 shop/auth/login
  */
 export type IMiniprogramLoginParams = {
   account_id: number

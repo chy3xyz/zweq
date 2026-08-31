@@ -1,0 +1,132 @@
+// ==========================================
+// 商城展示辅助 — 规格文案 / 行项目富化
+// ==========================================
+
+import { getShopProduct } from '../api/shop'
+import type { IShopSku } from '../api/shop'
+
+type SpecKv = {
+  k: string
+  v: string
+}
+
+export type IShopLineItem = {
+  product_id: number
+  sku_id: number
+  quantity: number
+  product_name: string
+  spec_text: string
+  price: number
+  image: string
+}
+
+/** 将 SKU spec_json 格式化为可读文案，如「颜色:红 / 尺码:L」 */
+export function formatSpecJson(specJson: string): string {
+  const trimmed = specJson.trim()
+  if (trimmed === '' || trimmed === '[]' || trimmed === '{}') {
+    return ''
+  }
+
+  const parts: string[] = []
+
+  if (trimmed.startsWith('[')) {
+    const arr = JSON.parse<SpecKv[]>(specJson)
+    if (arr != null) {
+      for (let i = 0; i < arr.length; i++) {
+        const item = arr[i]
+        if (item.k !== '' && item.v !== '') {
+          parts.push(`${item.k}:${item.v}`)
+        }
+      }
+    }
+    return parts.join(' / ')
+  }
+
+  const obj = JSON.parseObject(specJson)
+  if (obj != null) {
+    const keys = UTSJSONObject.keys(obj)
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i]
+      const v = obj[k] as string | null
+      if (v != null && v !== '') {
+        parts.push(`${k}:${v}`)
+      }
+    }
+  }
+  return parts.join(' / ')
+}
+
+function findSku(skus: IShopSku[], skuId: number): IShopSku | null {
+  for (let i = 0; i < skus.length; i++) {
+    if (skus[i].id === skuId) {
+      return skus[i]
+    }
+  }
+  return null
+}
+
+/** 将下单行（购物车或立即购买）富化为展示数据 */
+export async function enrichShopLineItems(
+  items: { product_id: number; sku_id: number; quantity: number }[],
+): Promise<IShopLineItem[]> {
+  const productCache: UTSJSONObject = {} as UTSJSONObject
+  const result: IShopLineItem[] = []
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    const cacheKey = `${item.product_id}`
+    let detail = productCache[cacheKey] as UTSJSONObject | null
+    if (detail == null) {
+      const loaded = await getShopProduct(item.product_id)
+      detail = {
+        product: loaded.product,
+        skus: loaded.skus,
+      } as UTSJSONObject
+      productCache[cacheKey] = detail
+    }
+
+    const product = detail!['product'] as UTSJSONObject
+    const skus = detail!['skus'] as IShopSku[]
+    const sku = findSku(skus, item.sku_id)
+    const productName = product['name'] as string
+    const productImage = product['image'] as string
+    const productPrice = product['price'] as number
+
+    let specText = ''
+    let price = productPrice
+    let image = productImage
+    if (sku != null) {
+      specText = formatSpecJson(sku.spec_json)
+      price = sku.price
+      if (sku.image !== '') {
+        image = sku.image
+      }
+    }
+
+    result.push({
+      product_id: item.product_id,
+      sku_id: item.sku_id,
+      quantity: item.quantity,
+      product_name: productName,
+      spec_text: specText,
+      price,
+      image,
+    })
+  }
+
+  return result
+}
+
+/** 行项目小计（分） */
+export function lineSubtotal(item: IShopLineItem): number {
+  return item.price * item.quantity
+}
+
+/** 多行合计（分） */
+export function sumLineItems(items: IShopLineItem[]): number {
+  let total = 0
+  for (let i = 0; i < items.length; i++) {
+    total += lineSubtotal(items[i])
+  }
+  return total
+}

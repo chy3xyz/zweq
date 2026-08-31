@@ -2,23 +2,64 @@
   <view>
     <NavBar title="我的订单" :show-back="true" />
     <view class="content-container pb-20px">
-      <view v-for="o in orders" :key="o.id" class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;">
-        <view class="flex flex-row items-center justify-between">
-          <text class="text-13px font-mono text-[#64748b]">{{ o.order_no }}</text>
-          <text class="text-12px font-bold" :style="{ color: statusColor(o.status) }">{{ statusLabel(o.status) }}</text>
+      <!-- 状态筛选 -->
+      <scroll-view scroll-x="true" class="mx-30rpx mt-16rpx whitespace-nowrap">
+        <view class="flex flex-row">
+          <view
+            v-for="tab in tabs"
+            :key="tab.status"
+            class="mr-16rpx px-24rpx py-12rpx rounded-20rpx"
+            :style="tabStyle(tab.status)"
+            @click="switchTab(tab.status)"
+          >
+            <text class="text-13px" :style="tabTextStyle(tab.status)">{{ tab.label }}</text>
+          </view>
         </view>
-        <view class="mt-12rpx flex flex-row items-center justify-between">
-          <text class="text-14px font-bold text-[#1e293b]">¥{{ fenToYuan(o.pay_amount) }}</text>
+      </scroll-view>
+
+      <view v-for="o in orders" :key="o.id" class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;" @click="goDetail(o.id)">
+        <view class="flex flex-row items-center justify-between">
+          <text class="text-13px text-[#64748b]" style="font-family: monospace;">{{ o.order_no }}</text>
           <view class="flex flex-row items-center">
-            <text class="text-12px text-[#94a3b8] mr-16rpx">{{ o.openid }}</text>
-            <view v-if="o.status === 0" class="px-16rpx py-6rpx rounded-8rpx" style="background-color: #0957DE;" @click="pay(o.id)">
-              <text class="text-12px text-[#ffffff]">去支付</text>
+            <text v-if="refundFor(o.id) != null" class="mr-12rpx text-11px font-bold px-10rpx py-4rpx rounded-6rpx" :style="refundBadgeStyle(o.id)">{{ refundLabel(o.id) }}</text>
+            <text class="text-12px font-bold" :style="{ color: statusColor(o.status) }">{{ statusLabel(o.status) }}</text>
+          </view>
+        </view>
+        <view class="mt-16rpx flex flex-row">
+          <image v-if="preview(o.id).cover_image !== ''" class="w-120rpx h-120rpx rounded-8rpx mr-16rpx" :src="preview(o.id).cover_image" mode="aspectFill" />
+          <view v-else class="w-120rpx h-120rpx rounded-8rpx mr-16rpx items-center justify-center" style="background-color: #e2e8f0;">
+            <text class="text-12px text-[#94a3b8]">订单</text>
+          </view>
+          <view class="flex-1 flex flex-col justify-between">
+            <text class="text-14px text-[#1e293b]">{{ previewSummary(o.id) }}</text>
+            <view class="flex flex-row items-center justify-between">
+              <text class="text-12px text-[#94a3b8]">{{ formatTime(o.created_at) }}</text>
+              <text class="text-15px font-bold text-[#ef4444]">¥{{ fenToYuan(o.pay_amount) }}</text>
             </view>
           </view>
         </view>
+        <view class="mt-8rpx" v-if="o.status == 0 && orderTimeoutSecs > 0">
+          <text class="text-11px text-[#f59e0b]">{{ payCountdownText(o.created_at) }}</text>
+        </view>
+        <view class="mt-12rpx flex flex-row items-center justify-end">
+          <view v-if="o.status == 0" class="px-16rpx py-6rpx rounded-8rpx mr-12rpx" style="background-color: #e2e8f0;" @click.stop="cancel(o.id)">
+            <text class="text-12px text-[#64748b]">取消订单</text>
+          </view>
+          <view v-if="o.status == 2" class="px-16rpx py-6rpx rounded-8rpx mr-12rpx" style="background-color: #10b981;" @click.stop="confirm(o.id)">
+            <text class="text-12px text-[#ffffff]">确认收货</text>
+          </view>
+          <view v-if="o.status == 0" class="px-16rpx py-6rpx rounded-8rpx" style="background-color: #0957DE;" @click.stop="pay(o.id)">
+            <text class="text-12px text-[#ffffff]">去支付</text>
+          </view>
+        </view>
       </view>
-      <view v-if="orders.length === 0" class="mt-60rpx items-center">
+
+      <view v-if="orders.length === 0 && !loading" class="mt-60rpx items-center">
         <text class="text-14px text-[#94a3b8]">暂无订单</text>
+      </view>
+
+      <view v-if="orders.length > 0" class="mt-20rpx items-center py-20rpx" @click="loadMore">
+        <text class="text-13px text-[#64748b]">{{ loadMoreText }}</text>
       </view>
     </view>
   </view>
@@ -26,33 +67,310 @@
 
 <script setup lang="uts">
 import { ref } from 'vue'
-import { listShopOrders } from '../../api/shop'
-import { http } from '../../http/request'
-import { fenToYuan } from '../../utils/format'
-import type { IShopOrder } from '../../api/shop'
+import { listShopOrders, listShopRefunds, getShopOrderOverview, confirmShopOrder, cancelShopOrder } from '../../api/shop'
+import { payShopOrder, PayCancelledError } from '../../api/pay'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { fenToYuan, formatTime } from '../../utils/format'
+import { loadOrderPreviews, getOrderPreview, mergeOrderPreviews, refundStatusLabel, refundStatusColor } from '../../utils/orderDisplay'
+import { formatPayCountdown } from '../../utils/orderTimeout'
+import type { IShopOrder, IShopRefund } from '../../api/shop'
+import type { IOrderPreview } from '../../utils/orderDisplay'
+
+type IOrderTab = {
+  label: string
+  status: number
+}
+
+const PAGE_SIZE = 10
+
+const tabs: IOrderTab[] = [
+  { label: '全部', status: -1 },
+  { label: '待支付', status: 0 },
+  { label: '已支付', status: 1 },
+  { label: '已发货', status: 2 },
+  { label: '已完成', status: 3 },
+  { label: '已取消', status: 4 },
+]
 
 const orders = ref<IShopOrder[]>([])
+const loading = ref<boolean>(false)
+const loadingMore = ref<boolean>(false)
+const page = ref<number>(1)
+const total = ref<number>(0)
+const activeStatus = ref<number>(-1)
+const previewMap = ref<UTSJSONObject>({} as UTSJSONObject)
+const refundMap = ref<UTSJSONObject>({} as UTSJSONObject)
+const orderTimeoutSecs = ref<number>(0)
+const nowTick = ref<number>(0)
 
-onLoad(() => {
-  listShopOrders(0, 1, 50)
-    .then((res: any) => {
-      orders.value = (res as UTSJSONObject)['list'] as IShopOrder[]
-    })
-    .catch(() => {
-      orders.value = []
-    })
+const hasMore = computed<boolean>(() => orders.value.length < total.value)
+
+const loadMoreText = computed<string>(() => {
+  if (loadingMore.value) {
+    return '加载中…'
+  }
+  if (hasMore.value) {
+    return '点击加载更多'
+  }
+  return '没有更多了'
 })
 
-function pay(orderId: number) {
-  // H5 演示：mock 支付完成（真实环境走 pay-params + 微信收银台）。
-  http.post('/api/v1/shop/orders/' + orderId + '/pay-complete', {})
-    .then(() => {
-      uni.showToast({ title: '支付成功', icon: 'success' })
-      load()
+onLoad((options: UTSJSONObject | null) => {
+  if (options != null) {
+    const status = options['status'] as number | null
+    if (status != null) {
+      activeStatus.value = status
+    }
+  }
+  reload()
+})
+
+onUnload(() => {
+  stopCountdownTimer()
+})
+
+let countdownTimer: number = 0
+
+function startCountdownTimer() {
+  stopCountdownTimer()
+  nowTick.value = Math.floor(Date.now() / 1000)
+  countdownTimer = setInterval(() => {
+    nowTick.value = Math.floor(Date.now() / 1000)
+  }, 1000)
+}
+
+function stopCountdownTimer() {
+  if (countdownTimer > 0) {
+    clearInterval(countdownTimer)
+    countdownTimer = 0
+  }
+}
+
+onShow(() => {
+  reload()
+})
+
+onPullDownRefresh(() => {
+  reload()
+  setTimeout(() => {
+    uni.stopPullDownRefresh()
+  }, 400)
+})
+
+async function loadOverview() {
+  try {
+    const overview = await getShopOrderOverview(ZWEQ_ACCOUNT_ID)
+    orderTimeoutSecs.value = overview.order_timeout_secs
+    if (overview.pending_pay > 0 && orderTimeoutSecs.value > 0) {
+      startCountdownTimer()
+    } else {
+      stopCountdownTimer()
+    }
+  } catch (_e) {
+    orderTimeoutSecs.value = 0
+    stopCountdownTimer()
+  }
+}
+
+function reload() {
+  page.value = 1
+  total.value = 0
+  orders.value = []
+  previewMap.value = {} as UTSJSONObject
+  refundMap.value = {} as UTSJSONObject
+  loadOverview()
+  fetchPage(1, false)
+}
+
+async function loadRefunds() {
+  try {
+    const res = await listShopRefunds(ZWEQ_ACCOUNT_ID, 1, 100)
+    const data = res as UTSJSONObject
+    const list = data['list'] as IShopRefund[]
+    const map: UTSJSONObject = {} as UTSJSONObject
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i]
+      map[`${r.order_id}`] = r as UTSJSONObject
+    }
+    refundMap.value = map
+  } catch (_e) {
+    refundMap.value = {} as UTSJSONObject
+  }
+}
+
+async function enrichPreviews(list: IShopOrder[]) {
+  const ids: number[] = []
+  for (let i = 0; i < list.length; i++) {
+    ids.push(list[i].id)
+  }
+  if (ids.length === 0) {
+    return
+  }
+  const chunk = await loadOrderPreviews(ids)
+  previewMap.value = mergeOrderPreviews(previewMap.value, chunk)
+}
+
+function fetchPage(targetPage: number, append: boolean) {
+  if (append) {
+    loadingMore.value = true
+  } else {
+    loading.value = true
+  }
+  listShopOrders(ZWEQ_ACCOUNT_ID, targetPage, PAGE_SIZE, activeStatus.value)
+    .then(async (res: any) => {
+      const data = res as UTSJSONObject
+      const list = data['list'] as IShopOrder[]
+      const count = data['total'] as number
+      total.value = count
+      if (append) {
+        for (let i = 0; i < list.length; i++) {
+          orders.value.push(list[i])
+        }
+      } else {
+        orders.value = list
+        await loadRefunds()
+      }
+      page.value = targetPage
+      await enrichPreviews(list)
     })
     .catch(() => {
+      if (!append) {
+        orders.value = []
+        total.value = 0
+        previewMap.value = {} as UTSJSONObject
+      }
+    })
+    .finally(() => {
+      loading.value = false
+      loadingMore.value = false
+    })
+}
+
+function loadMore() {
+  if (loading.value || loadingMore.value || !hasMore.value) {
+    return
+  }
+  fetchPage(page.value + 1, true)
+}
+
+function switchTab(status: number) {
+  if (activeStatus.value === status) {
+    return
+  }
+  activeStatus.value = status
+  reload()
+}
+
+function tabStyle(status: number): string {
+  if (activeStatus.value === status) {
+    return 'background-color: rgba(9, 87, 222, 0.1); border-width: 1px; border-color: #0957DE; border-style: solid;'
+  }
+  return 'background-color: #f1f5f9;'
+}
+
+function tabTextStyle(status: number): string {
+  if (activeStatus.value === status) {
+    return 'color: #0957DE; font-weight: bold;'
+  }
+  return 'color: #64748b;'
+}
+
+function payCountdownText(createdAt: number): string {
+  const _tick = nowTick.value
+  return formatPayCountdown(createdAt, orderTimeoutSecs.value, _tick)
+}
+
+function preview(orderId: number): IOrderPreview {
+  return getOrderPreview(previewMap.value, orderId)
+}
+
+function previewSummary(orderId: number): string {
+  const p = preview(orderId)
+  if (p.summary !== '') {
+    return p.summary
+  }
+  return '查看订单详情'
+}
+
+function refundFor(orderId: number): IShopRefund | null {
+  const raw = refundMap.value[`${orderId}`] as UTSJSONObject | null
+  if (raw == null) {
+    return null
+  }
+  return raw as IShopRefund
+}
+
+function refundLabel(orderId: number): string {
+  const r = refundFor(orderId)
+  if (r == null) {
+    return ''
+  }
+  return refundStatusLabel(r.status)
+}
+
+function refundBadgeStyle(orderId: number): string {
+  const r = refundFor(orderId)
+  if (r == null) {
+    return ''
+  }
+  const color = refundStatusColor(r.status)
+  return `color: ${color}; background-color: rgba(0,0,0,0.04);`
+}
+
+function goDetail(id: number) {
+  uni.navigateTo({ url: `/src/pages/shop/order-detail?id=${id}` })
+}
+
+function pay(orderId: number) {
+  payShopOrder(orderId)
+    .then(() => {
+      reload()
+    })
+    .catch((err) => {
+      if (err instanceof PayCancelledError) {
+        uni.showToast({ title: '已取消支付', icon: 'none' })
+        return
+      }
       uni.showToast({ title: '支付失败', icon: 'none' })
     })
+}
+
+function cancel(orderId: number) {
+  uni.showModal({
+    title: '提示',
+    content: '确定取消该订单？',
+    success: (res) => {
+      if (res.confirm) {
+        cancelShopOrder(orderId)
+          .then(() => {
+            uni.showToast({ title: '已取消', icon: 'success' })
+            reload()
+          })
+          .catch(() => {
+            uni.showToast({ title: '取消失败', icon: 'none' })
+          })
+      }
+    },
+  })
+}
+
+function confirm(orderId: number) {
+  uni.showModal({
+    title: '提示',
+    content: '确认已收到商品？',
+    success: (res) => {
+      if (res.confirm) {
+        confirmShopOrder(orderId)
+          .then(() => {
+            uni.showToast({ title: '已确认收货', icon: 'success' })
+            reload()
+          })
+          .catch(() => {
+            uni.showToast({ title: '操作失败', icon: 'none' })
+          })
+      }
+    },
+  })
 }
 
 function statusLabel(s: number): string {
@@ -70,6 +388,7 @@ function statusColor(s: number): string {
   switch (s) {
     case 0: return '#f59e0b'
     case 3: return '#10b981'
+    case 4: return '#94a3b8'
     default: return '#0957DE'
   }
 }

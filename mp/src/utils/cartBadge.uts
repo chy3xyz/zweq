@@ -1,0 +1,30 @@
+// ==========================================
+// 购物车角标 — 商品件数统计
+// ==========================================
+
+import { listShopCart, getShopOrderOverview } from '../api/shop'
+import { ZWEQ_ACCOUNT_ID } from '../config/zweq'
+
+/** 购物车商品总件数（各 SKU quantity 之和） */
+export async function getCartItemCount(accountId: number = ZWEQ_ACCOUNT_ID): Promise<number> {
+  try {
+    const carts = await listShopCart(accountId)
+    let total = 0
+    for (let i = 0; i < carts.length; i++) {
+      total += carts[i].quantity
+    }
+    return total
+  } catch (_e) {
+    return 0
+  }
+}
+
+/** 待支付订单数 */
+export async function getPendingOrderCount(accountId: number = ZWEQ_ACCOUNT_ID): Promise<number> {
+  try {
+    const overview = await getShopOrderOverview(accountId)
+    return overview.pending_pay
+  } catch (_e) {
+    return 0
+  }
+}

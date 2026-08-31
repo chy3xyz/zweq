@@ -1,0 +1,98 @@
+// ==========================================
+// 优惠券选择辅助 — 结账页
+// ==========================================
+
+import type { IAppCoupon, IAppMyCoupon } from '../api/app'
+
+export type ISelectableCoupon = {
+  id: number
+  code: string
+  title: string
+  amount: number
+  min_amount: number
+}
+
+/** 将「我的券」与券模板合并为可选列表（仅 unused） */
+export function buildSelectableCoupons(myCoupons: IAppMyCoupon[], templates: IAppCoupon[]): ISelectableCoupon[] {
+  const templateMap: UTSJSONObject = {} as UTSJSONObject
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i]
+    templateMap[`${t.id}`] = t
+  }
+
+  const result: ISelectableCoupon[] = []
+  for (let i = 0; i < myCoupons.length; i++) {
+    const mine = myCoupons[i]
+    if (mine.status !== 'unused') {
+      continue
+    }
+    const tpl = templateMap[`${mine.coupon_id}`] as IAppCoupon | null
+    if (tpl == null) {
+      continue
+    }
+    result.push({
+      id: mine.id,
+      code: mine.code,
+      title: tpl.title,
+      amount: tpl.amount,
+      min_amount: tpl.min_amount,
+    })
+  }
+  return result
+}
+
+/** 计算优惠金额（分） */
+export function calcCouponDiscount(coupon: ISelectableCoupon | null, totalFen: number): number {
+  if (coupon == null) {
+    return 0
+  }
+  if (totalFen < coupon.min_amount) {
+    return 0
+  }
+  if (coupon.amount >= totalFen) {
+    return totalFen
+  }
+  return coupon.amount
+}
+
+/** 券是否满足使用门槛 */
+export function isCouponUsable(coupon: ISelectableCoupon, totalFen: number): boolean {
+  return totalFen >= coupon.min_amount
+}
+
+export type IMyCouponDisplay = {
+  id: number
+  coupon_id: number
+  code: string
+  status: string
+  created_at: number
+  title: string
+  amount: number
+  min_amount: number
+}
+
+/** 「我的券」合并模板信息，用于展示面额/标题 */
+export function enrichMyCoupons(myCoupons: IAppMyCoupon[], templates: IAppCoupon[]): IMyCouponDisplay[] {
+  const templateMap: UTSJSONObject = {} as UTSJSONObject
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i]
+    templateMap[`${t.id}`] = t
+  }
+
+  const result: IMyCouponDisplay[] = []
+  for (let i = 0; i < myCoupons.length; i++) {
+    const mine = myCoupons[i]
+    const tpl = templateMap[`${mine.coupon_id}`] as IAppCoupon | null
+    result.push({
+      id: mine.id,
+      coupon_id: mine.coupon_id,
+      code: mine.code,
+      status: mine.status,
+      created_at: mine.created_at,
+      title: tpl != null ? tpl.title : `优惠券 #${mine.coupon_id}`,
+      amount: tpl != null ? tpl.amount : 0,
+      min_amount: tpl != null ? tpl.min_amount : 0,
+    })
+  }
+  return result
+}

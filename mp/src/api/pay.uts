@@ -1,0 +1,83 @@
+// ==========================================
+// 商城订单支付 — mock / 微信 v3
+// ==========================================
+
+import { getShopOrderPayParams, completeShopOrderPay, getShopOrder } from './shop'
+import { invokeWxPay } from '../utils/pay'
+import type { IWxPayment } from '../utils/pay'
+import type { IShopOrderPayParams } from './shop'
+
+export class PayCancelledError extends Error {
+  constructor() {
+    super('用户取消支付')
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(), ms)
+  })
+}
+
+/** 轮询订单状态，等待 notify 入账（wxpay_v3） */
+async function pollOrderPaid(orderId: number, maxAttempts: number = 15, intervalMs: number = 2000): Promise<void> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const detail = await getShopOrder(orderId)
+    if (detail.order.status != 0) {
+      return
+    }
+    await sleep(intervalMs)
+  }
+}
+
+function parseWxPayment(params: IShopOrderPayParams): IWxPayment {
+  const payment = params.payment
+  if (payment == null) {
+    throw new Error('支付参数缺失')
+  }
+  return {
+    timeStamp: payment.timeStamp,
+    nonceStr: payment.nonceStr,
+    package: payment.package,
+    signType: payment.signType,
+    paySign: payment.paySign,
+  }
+}
+
+function isUserCancel(err: any): boolean {
+  const msg = JSON.stringify(err).toLowerCase()
+  return msg.indexOf('cancel') >= 0 || msg.indexOf('取消') >= 0
+}
+
+/**
+ * 支付商城订单：
+ * - mock → completeShopOrderPay
+ * - wxpay_v3 → invokeWxPay + 轮询订单状态（notify 入账，不调 complete）
+ */
+export async function payShopOrder(orderId: number): Promise<void> {
+  const params = await getShopOrderPayParams(orderId)
+  const mode = params.mode
+
+  if (mode == 'mock') {
+    await completeShopOrderPay(orderId)
+    uni.showToast({ title: '支付成功', icon: 'success' })
+    return
+  }
+
+  if (mode == 'wxpay_v3') {
+    const payment = parseWxPayment(params)
+    try {
+      await invokeWxPay(payment)
+    } catch (err) {
+      if (isUserCancel(err)) {
+        throw new PayCancelledError()
+      }
+      throw err
+    }
+    await pollOrderPaid(orderId)
+    uni.showToast({ title: '支付成功', icon: 'success' })
+    return
+  }
+
+  throw new Error(`不支持的支付方式: ${mode}`)
+}

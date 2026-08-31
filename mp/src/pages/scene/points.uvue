@@ -1,0 +1,169 @@
+<template>
+  <view>
+    <NavBar title="积分商城" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view class="mx-30rpx mt-20rpx px-24rpx py-24rpx rounded-12px" style="background-color: rgba(9, 87, 222, 0.08);">
+        <text class="text-12px text-[#64748b]">我的积分</text>
+        <view class="mt-8rpx">
+          <text class="text-32px font-bold text-[#0957DE]">{{ fanPoints }}</text>
+        </view>
+      </view>
+
+      <view class="mt-24rpx mx-30rpx flex flex-row items-center justify-between">
+        <text class="text-16px font-bold text-[#1e293b]">兑换商品</text>
+        <text class="text-12px text-[#0957DE]" @click="switchPointsTab">{{ tab === 'products' ? '兑换记录 ›' : '返回商品 ›' }}</text>
+      </view>
+
+      <view v-if="tab === 'products'" class="mt-16rpx px-30rpx">
+        <view
+          v-for="p in products"
+          :key="p.id"
+          class="mb-20rpx px-24rpx py-20rpx rounded-12px flex flex-row items-center justify-between"
+          style="background-color: #f8fafc;"
+        >
+          <view class="flex-1">
+            <text class="text-14px font-bold text-[#1e293b]">{{ p.name }}</text>
+            <view class="mt-8rpx flex flex-row items-center">
+              <text class="text-16px font-bold text-[#ef4444]">{{ p.points }} 积分</text>
+              <text class="text-12px text-[#94a3b8] ml-16rpx">库存 {{ p.stock }}</text>
+            </view>
+          </view>
+          <view
+            class="px-20rpx py-10rpx rounded-8rpx"
+            :style="{ backgroundColor: canRedeem(p) ? '#0957DE' : '#cbd5e1' }"
+            @click="redeem(p)"
+          >
+            <text class="text-12px text-[#ffffff]">兑换</text>
+          </view>
+        </view>
+        <view v-if="products.length === 0 && !loading" class="mt-60rpx items-center">
+          <text class="text-14px text-[#94a3b8]">暂无兑换商品</text>
+        </view>
+      </view>
+
+      <view v-else class="mt-16rpx px-30rpx">
+        <view
+          v-for="o in pointOrders"
+          :key="o.id"
+          class="mb-16rpx px-24rpx py-20rpx rounded-12px flex flex-row items-center justify-between"
+          style="background-color: #f8fafc;"
+        >
+          <view class="flex-1">
+            <text class="text-14px font-bold text-[#1e293b]">{{ o.product_name }}</text>
+            <text class="mt-6rpx block text-12px text-[#94a3b8]">-{{ o.points_spent }} 积分</text>
+          </view>
+          <text class="text-12px font-bold" :style="{ color: o.status === 'completed' ? '#10b981' : '#64748b' }">{{ o.status }}</text>
+        </view>
+        <view v-if="pointOrders.length === 0 && !loading" class="mt-60rpx items-center">
+          <text class="text-14px text-[#94a3b8]">暂无兑换记录</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { getFanProfile, listAppPointsProducts, redeemAppPoints, listAppPointsOrders } from '../../api/app'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import type { IAppPointsProduct, IAppPointsOrder } from '../../api/app'
+
+const tab = ref<string>('products')
+const fanPoints = ref<number>(0)
+const products = ref<IAppPointsProduct[]>([])
+const pointOrders = ref<IAppPointsOrder[]>([])
+const loading = ref<boolean>(false)
+const redeeming = ref<boolean>(false)
+
+onLoad(() => {
+  load()
+})
+
+onShow(() => {
+  load()
+})
+
+onPullDownRefresh(() => {
+  load()
+  setTimeout(() => {
+    uni.stopPullDownRefresh()
+  }, 400)
+})
+
+function switchPointsTab() {
+  tab.value = tab.value === 'products' ? 'orders' : 'products'
+  load()
+}
+
+function load() {
+  loading.value = true
+  if (tab.value === 'orders') {
+    Promise.all([
+      getFanProfile(ZWEQ_ACCOUNT_ID),
+      listAppPointsOrders(ZWEQ_ACCOUNT_ID),
+    ])
+      .then((results: any[]) => {
+        fanPoints.value = (results[0] as UTSJSONObject)['points'] as number
+        pointOrders.value = results[1] as IAppPointsOrder[]
+      })
+      .catch(() => {
+        pointOrders.value = []
+      })
+      .finally(() => {
+        loading.value = false
+      })
+    return
+  }
+
+  Promise.all([
+    getFanProfile(ZWEQ_ACCOUNT_ID),
+    listAppPointsProducts(ZWEQ_ACCOUNT_ID, 1, 50),
+  ])
+    .then((results: any[]) => {
+      fanPoints.value = (results[0] as UTSJSONObject)['points'] as number
+      const page = results[1] as UTSJSONObject
+      products.value = page['list'] as IAppPointsProduct[]
+    })
+    .catch(() => {
+      fanPoints.value = 0
+      products.value = []
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function canRedeem(p: IAppPointsProduct): boolean {
+  return p.stock > 0 && fanPoints.value >= p.points && !redeeming.value
+}
+
+function redeem(p: IAppPointsProduct) {
+  if (!canRedeem(p)) {
+    if (p.stock <= 0) {
+      uni.showToast({ title: '库存不足', icon: 'none' })
+    } else if (fanPoints.value < p.points) {
+      uni.showToast({ title: '积分不足', icon: 'none' })
+    }
+    return
+  }
+  uni.showModal({
+    title: '确认兑换',
+    content: `使用 ${p.points} 积分兑换「${p.name}」？`,
+    success: (res) => {
+      if (!res.confirm) return
+      redeeming.value = true
+      redeemAppPoints(ZWEQ_ACCOUNT_ID, p.id)
+        .then(() => {
+          uni.showToast({ title: '兑换成功', icon: 'success' })
+          load()
+        })
+        .catch(() => {
+          uni.showToast({ title: '兑换失败', icon: 'none' })
+        })
+        .finally(() => {
+          redeeming.value = false
+        })
+    },
+  })
+}
+</script>

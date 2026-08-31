@@ -1,2 +1,8 @@
 // zweq 站点配置 — 部署时按实际公众号账号修改
 export const ZWEQ_ACCOUNT_ID: number = 1
+
+/**
+ * API 根地址。微信小程序/App 等非 H5 端请在打包前填写 zweq 线上域名；
+ * 空串时 request.uts 回退 https://api.zweq.example.com。H5 仍走 Vite 代理。
+ */
+export const ZWEQ_API_BASEURL: string = ''

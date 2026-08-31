@@ -1,0 +1,200 @@
+<template>
+  <view>
+    <NavBar title="优惠券" :show-back="true" />
+    <view class="content-container pb-20px">
+      <!-- Tab 切换 -->
+      <view class="mx-30rpx mt-20rpx flex flex-row rounded-8rpx overflow-hidden" style="background-color: #e2e8f0;">
+        <view
+          class="flex-1 py-16rpx items-center"
+          :style="{ backgroundColor: tab === 'available' ? '#ffffff' : 'transparent' }"
+          @click="switchTab('available')"
+        >
+          <text class="text-13px font-bold" :style="{ color: tab === 'available' ? '#0957DE' : '#64748b' }">可领取</text>
+        </view>
+        <view
+          class="flex-1 py-16rpx items-center"
+          :style="{ backgroundColor: tab === 'mine' ? '#ffffff' : 'transparent' }"
+          @click="switchTab('mine')"
+        >
+          <text class="text-13px font-bold" :style="{ color: tab === 'mine' ? '#0957DE' : '#64748b' }">我的券</text>
+        </view>
+      </view>
+
+      <!-- 可领取 -->
+      <view v-if="tab === 'available'" class="mt-20rpx px-30rpx">
+        <view
+          v-for="c in coupons"
+          :key="c.id"
+          class="mb-20rpx rounded-12px overflow-hidden flex flex-row"
+          style="background-color: #f8fafc;"
+        >
+          <view class="w-160rpx py-24rpx items-center justify-center" style="background-color: rgba(239, 68, 68, 0.08);">
+            <text class="text-28px font-bold text-[#ef4444]">¥{{ fenToYuan(c.amount) }}</text>
+            <text class="mt-6rpx text-11px text-[#94a3b8]">满{{ fenToYuan(c.min_amount) }}可用</text>
+          </view>
+          <view class="flex-1 px-20rpx py-20rpx flex flex-row items-center justify-between">
+            <view class="flex-1">
+              <text class="text-14px font-bold text-[#1e293b]">{{ c.title }}</text>
+              <text class="mt-8rpx block text-11px text-[#94a3b8]">{{ formatTime(c.start_at) }} ~ {{ formatTime(c.end_at) }}</text>
+              <text class="mt-4rpx block text-11px text-[#94a3b8]">库存 {{ c.total }} · 每人限领 {{ c.per_user }}</text>
+            </view>
+            <view class="px-20rpx py-10rpx rounded-8rpx ml-12rpx" style="background-color: #0957DE;" @click="claim(c.id)">
+              <text class="text-12px text-[#ffffff]">领取</text>
+            </view>
+          </view>
+        </view>
+        <view v-if="coupons.length === 0 && !loading" class="mt-60rpx items-center">
+          <text class="text-14px text-[#94a3b8]">暂无可领优惠券</text>
+        </view>
+      </view>
+
+      <!-- 我的券 -->
+      <view v-if="tab === 'mine'" class="mt-20rpx px-30rpx">
+        <view
+          v-for="m in myCouponRows"
+          :key="m.id"
+          class="mb-20rpx rounded-12px overflow-hidden flex flex-row"
+          :style="mineCardStyle(m.status)"
+        >
+          <view class="w-160rpx py-24rpx items-center justify-center" :style="mineAmountStyle(m.status)">
+            <text class="text-28px font-bold" :style="{ color: mineAmountColor(m.status) }">¥{{ fenToYuan(m.amount) }}</text>
+            <text class="mt-6rpx text-11px text-[#94a3b8]">满{{ fenToYuan(m.min_amount) }}可用</text>
+          </view>
+          <view class="flex-1 px-20rpx py-20rpx">
+            <view class="flex flex-row items-center justify-between">
+              <text class="text-14px font-bold text-[#1e293b]">{{ m.title }}</text>
+              <text class="text-12px font-bold" :style="{ color: statusColor(m.status) }">{{ statusLabel(m.status) }}</text>
+            </view>
+            <text class="mt-8rpx block text-12px text-[#64748b]" style="font-family: monospace;">券码 {{ m.code }}</text>
+            <text class="mt-6rpx block text-11px text-[#94a3b8]">领取于 {{ formatTime(m.created_at) }}</text>
+            <view v-if="m.status === 'unused'" class="mt-12rpx flex flex-row">
+              <view class="px-20rpx py-8rpx rounded-8rpx" style="background-color: #0957DE;" @click="goCheckout(m.code)">
+                <text class="text-12px text-[#ffffff]">去使用</text>
+              </view>
+            </view>
+          </view>
+        </view>
+        <view v-if="myCouponRows.length === 0 && !loading" class="mt-60rpx items-center">
+          <text class="text-14px text-[#94a3b8]">暂无优惠券</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { listAppCoupons, listAppMyCoupons, claimAppCoupon } from '../../api/app'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { fenToYuan, formatTime } from '../../utils/format'
+import { enrichMyCoupons } from '../../utils/couponDisplay'
+import type { IAppCoupon, IAppMyCoupon } from '../../api/app'
+import type { IMyCouponDisplay } from '../../utils/couponDisplay'
+
+const tab = ref<string>('available')
+const coupons = ref<IAppCoupon[]>([])
+const myCouponRows = ref<IMyCouponDisplay[]>([])
+const loading = ref<boolean>(false)
+const claiming = ref<boolean>(false)
+
+onLoad(() => {
+  load()
+})
+
+onShow(() => {
+  load()
+})
+
+function switchTab(t: string) {
+  tab.value = t
+  load()
+}
+
+function load() {
+  loading.value = true
+  if (tab.value === 'available') {
+    listAppCoupons(ZWEQ_ACCOUNT_ID, 1, 50)
+      .then((res: any) => {
+        coupons.value = (res as UTSJSONObject)['list'] as IAppCoupon[]
+      })
+      .catch(() => {
+        coupons.value = []
+      })
+      .finally(() => {
+        loading.value = false
+      })
+    return
+  }
+
+  Promise.all([
+    listAppMyCoupons(ZWEQ_ACCOUNT_ID, 1, 50),
+    listAppCoupons(ZWEQ_ACCOUNT_ID, 1, 50),
+  ])
+    .then((results: any[]) => {
+      const myList = (results[0] as UTSJSONObject)['list'] as IAppMyCoupon[]
+      const tplList = (results[1] as UTSJSONObject)['list'] as IAppCoupon[]
+      myCouponRows.value = enrichMyCoupons(myList, tplList)
+    })
+    .catch(() => {
+      myCouponRows.value = []
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function claim(couponId: number) {
+  if (claiming.value) return
+  claiming.value = true
+  claimAppCoupon(ZWEQ_ACCOUNT_ID, couponId)
+    .then(() => {
+      uni.showToast({ title: '领取成功', icon: 'success' })
+      load()
+    })
+    .catch(() => {})
+    .finally(() => {
+      claiming.value = false
+    })
+}
+
+function goCheckout(code: string) {
+  uni.navigateTo({ url: `/src/pages/shop/checkout?coupon_code=${encodeURIComponent(code)}` })
+}
+
+function statusLabel(s: string): string {
+  switch (s) {
+    case 'unused': return '未使用'
+    case 'used': return '已使用'
+    case 'expired': return '已过期'
+    default: return s
+  }
+}
+
+function statusColor(s: string): string {
+  switch (s) {
+    case 'unused': return '#10b981'
+    case 'used': return '#94a3b8'
+    case 'expired': return '#ef4444'
+    default: return '#0957DE'
+  }
+}
+
+function mineAmountStyle(status: string): string {
+  if (status === 'unused') {
+    return 'background-color: rgba(239, 68, 68, 0.08);'
+  }
+  return 'background-color: #e2e8f0;'
+}
+
+function mineAmountColor(status: string): string {
+  if (status === 'unused') {
+    return '#ef4444'
+  }
+  return '#94a3b8'
+}
+
+function mineCardStyle(status: string): string {
+  const opacity = status === 'unused' ? '1' : '0.65'
+  return `background-color: #f8fafc; opacity: ${opacity};`
+}
+</script>

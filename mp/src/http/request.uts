@@ -1,8 +1,57 @@
 import { Request } from '@/uni_modules/lime-request'
 import type { LimeRequestConfig, LimeRequestResponse, LimeRequestFail } from '@/uni_modules/lime-request'
+import { ZWEQ_API_BASEURL } from '../config/zweq'
+import { useShopSessionStore } from '../store/shopSession'
 import { useTokenStore } from '../store/token'
 import { toLoginPage } from '../utils/toLoginPage'
 import { ContentTypeEnum, ResultEnum, ShowMessage } from './tools/enum'
+
+export type AuthMode = 'admin' | 'fan'
+type FanReauthHandler = () => Promise<void>
+
+let fanReauthHandler: FanReauthHandler | null = null
+
+/** 由 shopAuth 注册，401 时静默重登粉丝会话，避免 request ↔ shopAuth 循环 import */
+export function setFanReauthHandler(handler: FanReauthHandler): void {
+  fanReauthHandler = handler
+}
+
+function getAuthMode(extra: UTSJSONObject | null): AuthMode {
+  if (extra === null) {
+    return 'admin'
+  }
+  const mode = extra['authMode'] as string | null
+  if (mode === 'fan') {
+    return 'fan'
+  }
+  return 'admin'
+}
+
+function handleAdminUnauthorized(): void {
+  const tokenStore = useTokenStore()
+  tokenStore.clearToken()
+  toLoginPage({ mode: 'reLaunch' } as UTSJSONObject)
+}
+
+function handleFanUnauthorized(): void {
+  const session = useShopSessionStore()
+  session.clearSession()
+  if (fanReauthHandler != null) {
+    fanReauthHandler().catch((_err) => {
+      uni.showToast({ title: '商城登录已过期，请重试', icon: 'none' })
+    })
+  } else {
+    uni.showToast({ title: '商城登录已过期，请重试', icon: 'none' })
+  }
+}
+
+function handleUnauthorized(extra: UTSJSONObject | null): void {
+  if (getAuthMode(extra) === 'fan') {
+    handleFanUnauthorized()
+  } else {
+    handleAdminUnauthorized()
+  }
+}
 
 // ==========================================
 // 域名配置
@@ -14,9 +63,10 @@ const defaultUrl: string = `${import.meta.env.VITE_SERVER_BASEURL ?? ''}`
 const secondaryUrl: string = `${import.meta.env.VITE_SERVER_BASEURL_SECONDARY ?? ''}`
 // #endif
 // #ifndef H5
-// 非 H5 环境直接硬编码（编译期不存在 import.meta.env），部署时替换为 zweq 线上域名
-const defaultUrl: string = 'https://api.zweq.example.com'
-const secondaryUrl: string = 'https://api.zweq.example.com'
+// 非 H5 环境读 config/zweq.uts（编译期常量），空串回退示例域名
+const defaultUrlFallback: string = 'https://api.zweq.example.com'
+const defaultUrl: string = ZWEQ_API_BASEURL !== '' ? ZWEQ_API_BASEURL : defaultUrlFallback
+const secondaryUrl: string = ZWEQ_API_BASEURL !== '' ? ZWEQ_API_BASEURL : defaultUrlFallback
 // #endif
 
 type ApiDomainConfig = {
@@ -67,10 +117,20 @@ requestInstance.interceptors.request.use(
     }
 
     if (!ignoreAuth) {
-      const tokenStore = useTokenStore()
-      const token = tokenStore.getToken()
-      if (token === '') {
-        throw new Error('[请求错误]：未登录')
+      const authMode = getAuthMode(extra)
+      let token = ''
+      if (authMode === 'fan') {
+        const session = useShopSessionStore()
+        token = session.getToken()
+        if (token === '') {
+          throw new Error('[请求错误]：商城粉丝未登录')
+        }
+      } else {
+        const tokenStore = useTokenStore()
+        token = tokenStore.getToken()
+        if (token === '') {
+          throw new Error('[请求错误]：未登录')
+        }
       }
       // zweq 后端 JWT：Authorization: Bearer <token>
       header['Authorization'] = `Bearer ${token}`
@@ -109,9 +169,7 @@ requestInstance.interceptors.response.use(
       console.error('errorMessage===>', errorMessage)
       uni.showToast({ title: errorMessage, icon: 'error' })
       if (statusCode == 401) {
-        const tokenStore = useTokenStore()
-        tokenStore.clearToken()
-        toLoginPage({ mode: 'reLaunch' } as UTSJSONObject)
+        handleUnauthorized(extra)
       }
       throw new Error(`${errorMessage}：${response.errMsg}`)
     }
@@ -142,9 +200,7 @@ requestInstance.interceptors.response.use(
             uni.showToast({ title: message, icon: 'none' })
           }
           if (codeVal === ResultEnum.Unauthorized) {
-            const tokenStore = useTokenStore()
-            tokenStore.clearToken()
-            toLoginPage({ mode: 'reLaunch' } as UTSJSONObject)
+            handleUnauthorized(extra)
           }
           throw new Error(`请求错误[${codeVal}]：${message}`)
         }
@@ -189,9 +245,8 @@ export class HttpClient {
               throw new Error('响应 data 字段无法解析为指定的类型，请检查数据结构是否匹配。数据：' + innerStr)
             }
           }
-          // 如果外层有 code 但没有 data 字段，或者 data 为 null
-          // 有些接口可能只返回 code 和 msg，不返回 data。此时如果 T 是 any 可以，否则应该报错
-          throw new Error('响应结构包含 code，但 data 字段为空')
+          // code=0 且 data 为 null — 无载荷成功响应（办卡/加盟/投票等）
+          return null as T
         }
       }
 

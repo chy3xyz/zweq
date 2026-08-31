@@ -1,0 +1,211 @@
+<template>
+  <view>
+    <NavBar title="限时秒杀" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view class="mx-30rpx mt-20rpx flex flex-row rounded-12px overflow-hidden" style="background-color: #f1f5f9;">
+        <view class="flex-1 py-16rpx items-center" :style="tabStyle('activities')" @click="switchTab('activities')">
+          <text class="text-14px font-bold" :style="{ color: activeTab === 'activities' ? '#0957DE' : '#64748b' }">活动列表</text>
+        </view>
+        <view class="flex-1 py-16rpx items-center" :style="tabStyle('orders')" @click="switchTab('orders')">
+          <text class="text-14px font-bold" :style="{ color: activeTab === 'orders' ? '#0957DE' : '#64748b' }">我的订单</text>
+        </view>
+      </view>
+
+      <view v-if="activeTab === 'activities'" class="mt-20rpx px-30rpx">
+        <view
+          v-for="a in activities"
+          :key="a.id"
+          class="mb-20rpx px-24rpx py-20rpx rounded-12px"
+          style="background-color: #f8fafc;"
+        >
+          <view class="flex flex-row items-center justify-between">
+            <text class="text-14px font-bold text-[#1e293b]">{{ a.title }}</text>
+            <text class="text-12px font-bold" :style="{ color: statusColor(a) }">{{ statusLabel(a) }}</text>
+          </view>
+          <view class="mt-12rpx flex flex-row items-center">
+            <text class="text-20px font-bold text-[#ef4444]">¥{{ fenToYuan(priceFen(a.price)) }}</text>
+            <text class="text-12px text-[#94a3b8] ml-16rpx line-through">¥{{ fenToYuan(priceFen(a.original_price)) }}</text>
+          </view>
+          <view class="mt-8rpx flex flex-row items-center">
+            <text class="text-12px text-[#64748b]">剩余 {{ a.stock - a.sold }} / {{ a.stock }}</text>
+            <text class="text-12px text-[#94a3b8] ml-16rpx">限购 {{ a.per_user }} 件</text>
+          </view>
+          <view class="mt-8rpx">
+            <text class="text-11px text-[#94a3b8]">{{ formatTime(a.start_at) }} ~ {{ formatTime(a.end_at) }}</text>
+          </view>
+          <view
+            class="mt-16rpx px-32rpx py-14rpx rounded-8rpx items-center"
+            :style="{ backgroundColor: canRush(a) ? '#ef4444' : '#cbd5e1' }"
+            @click="doRush(a)"
+          >
+            <text class="text-14px font-bold text-[#ffffff]">{{ rushButtonText(a) }}</text>
+          </view>
+        </view>
+        <view v-if="activities.length === 0 && !loading" class="mt-60rpx items-center">
+          <text class="text-14px text-[#94a3b8]">暂无秒杀活动</text>
+        </view>
+      </view>
+
+      <view v-else class="mt-20rpx px-30rpx">
+        <view
+          v-for="o in orders"
+          :key="o.id"
+          class="mb-16rpx px-24rpx py-20rpx rounded-12px"
+          style="background-color: #f8fafc;"
+        >
+          <view class="flex flex-row items-center justify-between">
+            <text class="text-14px font-bold text-[#1e293b]">{{ activityTitle(o.activity_id) }}</text>
+            <text class="text-12px text-[#64748b]">#{{ o.id }}</text>
+          </view>
+          <view class="mt-8rpx flex flex-row items-center justify-between">
+            <text class="text-13px text-[#64748b]">数量 × {{ o.quantity }}</text>
+            <text class="text-12px text-[#94a3b8]">{{ formatTime(o.created_at) }}</text>
+          </view>
+        </view>
+        <view v-if="orders.length === 0 && !loading" class="mt-60rpx items-center">
+          <text class="text-14px text-[#94a3b8]">暂无秒杀订单</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { listAppSeckillActivities, listAppSeckillOrders, rushAppSeckill } from '../../api/app'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { formatTime, fenToYuan, parseFenString } from '../../utils/format'
+import { isInTimeRange, activityStatusLabel, activityStatusColor } from '../../utils/activity'
+import type { IAppSeckillActivity, IAppSeckillOrder } from '../../api/app'
+
+const activeTab = ref<string>('activities')
+const activities = ref<IAppSeckillActivity[]>([])
+const orders = ref<IAppSeckillOrder[]>([])
+const loading = ref<boolean>(false)
+const rushingId = ref<number>(0)
+
+onLoad(() => {
+  load()
+})
+
+onShow(() => {
+  load()
+})
+
+function switchTab(tab: string) {
+  activeTab.value = tab
+  load()
+}
+
+function tabStyle(tab: string): UTSJSONObject {
+  if (activeTab.value === tab) {
+    return { backgroundColor: '#ffffff' } as UTSJSONObject
+  }
+  return {} as UTSJSONObject
+}
+
+function load() {
+  loading.value = true
+  if (activeTab.value === 'orders') {
+    Promise.all([
+      listAppSeckillActivities(ZWEQ_ACCOUNT_ID, 1, 50),
+      listAppSeckillOrders(ZWEQ_ACCOUNT_ID, 1, 50),
+    ])
+      .then((results: any[]) => {
+        activities.value = (results[0] as UTSJSONObject)['list'] as IAppSeckillActivity[]
+        orders.value = (results[1] as UTSJSONObject)['list'] as IAppSeckillOrder[]
+      })
+      .catch(() => {
+        orders.value = []
+      })
+      .finally(() => {
+        loading.value = false
+      })
+    return
+  }
+
+  listAppSeckillActivities(ZWEQ_ACCOUNT_ID, 1, 50)
+    .then((res: any) => {
+      activities.value = (res as UTSJSONObject)['list'] as IAppSeckillActivity[]
+    })
+    .catch(() => {
+      activities.value = []
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function activityTitle(activityId: number): string {
+  for (let i = 0; i < activities.value.length; i++) {
+    if (activities.value[i].id === activityId) {
+      return activities.value[i].title
+    }
+  }
+  return `活动 #${activityId}`
+}
+
+function priceFen(raw: string): number {
+  return parseFenString(raw)
+}
+
+function statusLabel(a: IAppSeckillActivity): string {
+  return activityStatusLabel(a.start_at, a.end_at)
+}
+
+function statusColor(a: IAppSeckillActivity): string {
+  return activityStatusColor(a.start_at, a.end_at)
+}
+
+function canRush(a: IAppSeckillActivity): boolean {
+  if (rushingId.value > 0) {
+    return false
+  }
+  if (a.stock <= a.sold) {
+    return false
+  }
+  return isInTimeRange(a.start_at, a.end_at)
+}
+
+function rushButtonText(a: IAppSeckillActivity): string {
+  if (rushingId.value === a.id) {
+    return '抢购中...'
+  }
+  if (a.stock <= a.sold) {
+    return '已抢光'
+  }
+  if (!isInTimeRange(a.start_at, a.end_at)) {
+    return statusLabel(a)
+  }
+  return '立即抢购'
+}
+
+function doRush(a: IAppSeckillActivity) {
+  if (!canRush(a)) {
+    if (a.stock <= a.sold) {
+      uni.showToast({ title: '已抢光', icon: 'none' })
+    } else if (!isInTimeRange(a.start_at, a.end_at)) {
+      uni.showToast({ title: statusLabel(a), icon: 'none' })
+    }
+    return
+  }
+  rushingId.value = a.id
+  rushAppSeckill(ZWEQ_ACCOUNT_ID, a.id, 1)
+    .then((res: any) => {
+      const orderId = (res as UTSJSONObject)['order_id'] as number
+      uni.showModal({
+        title: '抢购成功',
+        content: `秒杀单号 #${orderId}，请留意活动说明完成后续流程`,
+        showCancel: false,
+        confirmText: '知道了',
+      })
+      load()
+    })
+    .catch(() => {
+      uni.showToast({ title: '抢购失败', icon: 'none' })
+    })
+    .finally(() => {
+      rushingId.value = 0
+    })
+}
+</script>

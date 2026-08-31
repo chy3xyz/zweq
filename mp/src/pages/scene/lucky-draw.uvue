@@ -1,0 +1,132 @@
+<template>
+  <view>
+    <NavBar title="大转盘" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view class="mx-30rpx mt-20rpx px-24rpx py-16rpx rounded-12px flex flex-row items-center justify-between" style="background-color: rgba(9, 87, 222, 0.08);">
+        <text class="text-13px text-[#64748b]">当前积分</text>
+        <text class="text-18px font-bold text-[#0957DE]">{{ fanPoints }}</text>
+      </view>
+
+      <view v-if="drawCost > 0 || drawDailyLimit > 0" class="mx-30rpx mt-16rpx px-24rpx py-14rpx rounded-12px" style="background-color: #f8fafc;">
+        <text v-if="drawCost > 0" class="text-13px text-[#64748b]">每次消耗 {{ drawCost }} 积分</text>
+        <text v-if="drawDailyLimit > 0" class="mt-6rpx block text-13px text-[#64748b]">每日限抽 {{ drawDailyLimit }} 次</text>
+      </view>
+
+      <view class="mx-30rpx mt-20rpx px-24rpx py-40rpx rounded-12px items-center" style="background-color: rgba(239, 68, 68, 0.08);">
+        <text class="text-48px">🎰</text>
+        <view class="mt-16rpx">
+          <text class="text-14px text-[#64748b]">{{ drawHint }}</text>
+        </view>
+        <view
+          class="mt-30rpx px-48rpx py-20rpx rounded-12rpx"
+          :style="{ backgroundColor: drawing ? '#cbd5e1' : '#ef4444' }"
+          @click="doDraw"
+        >
+          <text class="text-16px font-bold text-[#ffffff]">{{ drawing ? '抽奖中...' : '立即抽奖' }}</text>
+        </view>
+      </view>
+
+      <view class="mt-30rpx mx-30rpx">
+        <text class="text-16px font-bold text-[#1e293b]">我的记录</text>
+      </view>
+      <view class="mt-16rpx px-30rpx">
+        <view
+          v-for="r in records"
+          :key="r.id"
+          class="mb-16rpx px-24rpx py-20rpx rounded-12px flex flex-row items-center justify-between"
+          style="background-color: #f8fafc;"
+        >
+          <view class="flex-1">
+            <text class="text-14px font-bold text-[#1e293b]">{{ r.prize_name }}</text>
+            <view class="mt-6rpx">
+              <text class="text-12px text-[#94a3b8]">{{ formatTime(r.created_at) }}</text>
+            </view>
+          </view>
+          <text v-if="r.points > 0" class="text-14px font-bold text-[#ef4444]">+{{ r.points }} 积分</text>
+        </view>
+      </view>
+      <view v-if="records.length === 0 && !loading" class="mt-40rpx items-center">
+        <text class="text-14px text-[#94a3b8]">暂无抽奖记录</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { getFanProfile, getAppLuckyDrawConfig, listAppDrawRecords, drawAppLucky } from '../../api/app'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { formatTime } from '../../utils/format'
+import type { IAppDrawRecord } from '../../api/app'
+
+const fanPoints = ref<number>(0)
+const drawCost = ref<number>(0)
+const drawDailyLimit = ref<number>(0)
+const records = ref<IAppDrawRecord[]>([])
+const loading = ref<boolean>(false)
+const drawing = ref<boolean>(false)
+
+const drawHint = computed<string>(() => {
+  if (drawCost.value > 0) {
+    return `消耗 ${drawCost.value} 积分参与抽奖，试试手气`
+  }
+  return '免费参与抽奖，试试手气'
+})
+
+onLoad(() => {
+  load()
+})
+
+onShow(() => {
+  load()
+})
+
+function load() {
+  loading.value = true
+  Promise.all([
+    getFanProfile(ZWEQ_ACCOUNT_ID),
+    getAppLuckyDrawConfig(ZWEQ_ACCOUNT_ID),
+    listAppDrawRecords(ZWEQ_ACCOUNT_ID, 1, 50),
+  ])
+    .then((results: any[]) => {
+      fanPoints.value = (results[0] as UTSJSONObject)['points'] as number
+      const cfg = results[1] as UTSJSONObject
+      drawCost.value = cfg['cost'] as number
+      drawDailyLimit.value = cfg['daily_limit'] as number
+      records.value = (results[2] as UTSJSONObject)['list'] as IAppDrawRecord[]
+    })
+    .catch(() => {
+      fanPoints.value = 0
+      drawCost.value = 0
+      drawDailyLimit.value = 0
+      records.value = []
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function doDraw() {
+  if (drawing.value) return
+  drawing.value = true
+  drawAppLucky(ZWEQ_ACCOUNT_ID)
+    .then((res: any) => {
+      const prize = (res as UTSJSONObject)['prize_name'] as string
+      const pts = (res as UTSJSONObject)['points'] as number
+      const ptsText = pts > 0 ? `，获得 ${pts} 积分` : ''
+      uni.showModal({
+        title: '恭喜',
+        content: `抽中：${prize}${ptsText}`,
+        showCancel: false,
+        confirmText: '知道了',
+      })
+      load()
+    })
+    .catch(() => {
+      uni.showToast({ title: '抽奖失败，请检查积分或次数', icon: 'none' })
+    })
+    .finally(() => {
+      drawing.value = false
+    })
+}
+</script>

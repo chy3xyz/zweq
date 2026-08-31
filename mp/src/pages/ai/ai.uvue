@@ -75,6 +75,8 @@
 <script setup lang="uts">
 /* eslint-disable ts/consistent-type-definitions */
 import NavBar from '@/src/components/NavBar/NavBar.uvue'
+import { shopAssistant } from '@/src/api/ai'
+import { ZWEQ_ACCOUNT_ID } from '@/src/config/zweq'
 import { safeAreaInsets } from '@/src/utils/systemInfo'
 
 type ChatMessage = {
@@ -120,16 +122,34 @@ function scrollToBottom() {
   }, 100)
 }
 
-// 发送消息
-function sendMessage() {
-  const text = inputText.value.trim()
-  if (text == '')
-    return
+function extractApiErrorMessage(err: any): string {
+  if (err != null) {
+    const errObj = err as UTSJSONObject
+    const message = errObj['message'] as string | null
+    if (message != null && message.length > 0) {
+      const colonIdx = message.indexOf('：')
+      if (colonIdx >= 0 && colonIdx < message.length - 1) {
+        return message.substring(colonIdx + 1)
+      }
+      return message
+    }
+    const msg = errObj['msg'] as string | null
+    if (msg != null && msg.length > 0) {
+      return msg
+    }
+  }
+  return '请求失败，请稍后再试'
+}
 
-  // 添加用户消息
-  const userMsgId = Date.now().toString()
+// 发送消息
+async function sendMessage() {
+  const text = inputText.value.trim()
+  if (text == '' || isTyping.value) {
+    return
+  }
+
   messages.value.push({
-    id: userMsgId,
+    id: Date.now().toString(),
     sender: 'user',
     content: text,
     time: getCurrentTime(),
@@ -138,32 +158,24 @@ function sendMessage() {
   inputText.value = ''
   scrollToBottom()
 
-  // 模拟 AI 回复
   isTyping.value = true
 
-  setTimeout(() => {
-    isTyping.value = false
-    let replyContent = '收到你的消息！目前这只是一个模拟的 AI 对话窗口，你可以在此基础上接入你自己的大语言模型（如 DeepSeek、OpenAI、Gemini等）。'
-
-    if (text.includes('你好') || text.includes('hello')) {
-      replyContent = '你好！我是你的 AI 助手，很高兴为你提供服务。有什么我可以帮你的吗？😊'
-    }
-    else if (text.includes('模板') || text.includes('unibest')) {
-      replyContent = 'unibestX 是基于 uni-app X 极速开发模板。它支持 TypeScript、UnoCSS、UTS 插件，并能完美编译为原生 Android/iOS App！'
-    }
-    else if (text.includes('组件')) {
-      replyContent = '当前模板内置了许多优秀的组件，例如 NavBar 导航栏、uview UI 库组件等，你都可以直接使用。'
-    }
-
+  try {
+    const result = await shopAssistant(ZWEQ_ACCOUNT_ID, text)
     messages.value.push({
       id: Date.now().toString(),
       sender: 'ai',
-      content: replyContent,
+      content: result.reply,
       time: getCurrentTime(),
     } as ChatMessage)
-
     scrollToBottom()
-  }, 800)
+  }
+  catch (err) {
+    uni.showToast({ title: extractApiErrorMessage(err), icon: 'none' })
+  }
+  finally {
+    isTyping.value = false
+  }
 }
 
 onMounted(() => {

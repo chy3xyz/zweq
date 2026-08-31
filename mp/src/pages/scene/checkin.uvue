@@ -1,0 +1,128 @@
+<template>
+  <view>
+    <NavBar title="每日签到" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view class="mx-30rpx mt-30rpx px-24rpx py-40rpx rounded-12px items-center" style="background-color: rgba(9, 87, 222, 0.08);">
+        <text class="text-48px">📅</text>
+        <view class="mt-16rpx">
+          <text class="text-14px text-[#64748b]">每日签到领取积分奖励</text>
+        </view>
+        <view v-if="checkedToday" class="mt-16rpx px-20rpx py-8rpx rounded-20rpx" style="background-color: #d1fae5;">
+          <text class="text-12px text-[#065f46] font-bold">今日已签到 ✓</text>
+        </view>
+        <view
+          class="mt-30rpx px-48rpx py-20rpx rounded-12rpx"
+          :style="{ backgroundColor: checking || checkedToday ? '#cbd5e1' : '#0957DE' }"
+          @click="doCheckin"
+        >
+          <text class="text-16px font-bold text-[#ffffff]">{{ checkinButtonText }}</text>
+        </view>
+      </view>
+
+      <view class="mt-30rpx mx-30rpx">
+        <text class="text-16px font-bold text-[#1e293b]">签到记录</text>
+      </view>
+      <view class="mt-16rpx px-30rpx">
+        <view
+          v-for="r in records"
+          :key="r.id"
+          class="mb-16rpx px-24rpx py-20rpx rounded-12px flex flex-row items-center justify-between"
+          style="background-color: #f8fafc;"
+        >
+          <view class="flex-1">
+            <text class="text-14px font-bold text-[#1e293b]">第 {{ r.day }} 天</text>
+            <view class="mt-6rpx">
+              <text class="text-12px text-[#94a3b8]">{{ formatTime(r.created_at) }}</text>
+            </view>
+          </view>
+          <text v-if="r.points > 0" class="text-14px font-bold text-[#0957DE]">+{{ r.points }} 积分</text>
+        </view>
+      </view>
+      <view v-if="records.length === 0 && !loading" class="mt-40rpx items-center">
+        <text class="text-14px text-[#94a3b8]">暂无签到记录</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { listAppCheckinRecords, postAppCheckin } from '../../api/app'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { formatTime } from '../../utils/format'
+import type { IAppCheckinRecord } from '../../api/app'
+
+const records = ref<IAppCheckinRecord[]>([])
+const loading = ref<boolean>(false)
+const checking = ref<boolean>(false)
+
+const todayDay = computed<number>(() => {
+  return Math.floor(Date.now() / 1000 / 86400)
+})
+
+const checkedToday = computed<boolean>(() => {
+  for (let i = 0; i < records.value.length; i++) {
+    if (records.value[i].day === todayDay.value) {
+      return true
+    }
+  }
+  return false
+})
+
+const checkinButtonText = computed<string>(() => {
+  if (checking.value) {
+    return '签到中...'
+  }
+  if (checkedToday.value) {
+    return '今日已签到'
+  }
+  return '立即签到'
+})
+
+onLoad(() => {
+  load()
+})
+
+onShow(() => {
+  load()
+})
+
+function load() {
+  loading.value = true
+  listAppCheckinRecords(ZWEQ_ACCOUNT_ID, 1, 50)
+    .then((res: any) => {
+      records.value = (res as UTSJSONObject)['list'] as IAppCheckinRecord[]
+    })
+    .catch(() => {
+      records.value = []
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function doCheckin() {
+  if (checking.value || checkedToday.value) return
+  checking.value = true
+  postAppCheckin(ZWEQ_ACCOUNT_ID)
+    .then((res: any) => {
+      const obj = res as UTSJSONObject
+      const fresh = obj['fresh'] as boolean
+      const pts = obj['points'] as number
+      const ptsText = pts > 0 ? `，获得 ${pts} 积分` : ''
+      uni.showModal({
+        title: fresh ? '签到成功' : '今日已签到',
+        content: fresh ? `签到成功${ptsText}` : '您今天已经签过到了',
+        showCancel: false,
+        confirmText: '知道了',
+      })
+      load()
+    })
+    .catch(() => {
+      uni.showToast({ title: '签到失败', icon: 'none' })
+    })
+    .finally(() => {
+      checking.value = false
+    })
+}
+</script>

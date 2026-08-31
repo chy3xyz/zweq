@@ -15,7 +15,7 @@ export function toLoginPage(options : UTSJSONObject | null = null) {
   const mode = opts['mode'] as string | null ?? 'navigateTo'
   const queryString = opts['queryString'] as string | null ?? ''
 
-  const LOGIN_PAGE = '/src/pages/auth/login'
+  const LOGIN_PAGE = '/src/sub/auth/login'
   const url = `${LOGIN_PAGE}${queryString}`
 
   const pages = getCurrentPages()

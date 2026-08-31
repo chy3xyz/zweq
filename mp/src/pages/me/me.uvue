@@ -1,46 +1,110 @@
 <template>
-  <view class="flex flex-col items-center px-16px py-24px flex-1">
-    <!-- 头部卡片：用户头像及状态 -->
-    <view class="w-full bg-white rounded-12px px-20px py-30px mb-20px flex flex-col items-center">
-      <image class="w-90px h-90px rounded-45px mb-16px border-width-3px border-color-[#f1f5f9] border-solid" :src="avatarUrl" />
-      <text class="text-20px font-bold text-[#1e293b] mb-4px">
-        {{ userStore.state.userInfo.username.length > 0 ? userStore.state.userInfo.username : '未登录用户' }}
-      </text>
-      <text v-if="userStore.state.userInfo.username.length > 0" class="text-14px text-[#64748b] mb-12px">
-        {{ userStore.state.userInfo.nickname }}
-      </text>
-      <view class="flex flex-row">
+  <view class="flex flex-col px-16px py-24px flex-1">
+    <!-- 粉丝 C 端会话 -->
+    <view class="w-full bg-white rounded-12px px-20px py-24px mb-16px flex flex-col">
+      <text class="text-16px font-bold text-[#1e293b] mb-12px">我的账号</text>
+      <view class="flex flex-row items-center justify-between mb-8px">
+        <text class="text-14px text-[#64748b]">粉丝身份</text>
         <text
-          class="text-12px px-12px py-4px rounded-20px font-medium overflow-hidden"
-          :class="tokenStore.hasValidLogin() ? 'bg-[#d1fae5] text-[#065f46]' : 'bg-[#f1f5f9] text-[#64748b]'"
+          class="text-12px px-12px py-4px rounded-20px font-medium"
+          :class="fanLoggedIn ? 'bg-[#d1fae5] text-[#065f46]' : 'bg-[#f1f5f9] text-[#64748b]'"
         >
-          {{ tokenStore.hasValidLogin() ? '已登录' : '未登录' }}
+          {{ fanLoggedIn ? '已连接' : '未连接' }}
         </text>
       </view>
+      <text v-if="fanLoggedIn" class="text-13px text-[#64748b]" style="font-family: monospace;">openid: {{ maskedOpenid }}</text>
+      <text v-if="fanLoggedIn && fanPoints >= 0" class="mt-8rpx text-14px text-[#0957DE] font-bold">积分余额：{{ fanPoints }}</text>
+      <text v-else-if="!fanLoggedIn" class="text-13px text-[#94a3b8]">进入商城后将自动建立粉丝会话</text>
     </view>
 
-    <!-- 信息区域：序列化数据展示 -->
-    <view class="w-full bg-white rounded-12px p-20px mb-24px flex flex-col">
-      <view class="border-bottom-width-1px border-bottom-style-solid border-bottom-color-[#f1f5f9] pb-8px mb-12px flex flex-row">
-        <text class="text-15px font-semibold text-[#334155]">用户信息 (JSON)</text>
+    <!-- C 端菜单 -->
+    <view class="w-full bg-white rounded-12px overflow-hidden mb-16px">
+      <view class="px-20px h-56px flex flex-row items-center justify-between border-bottom-width-1px border-bottom-style-solid border-bottom-color-[#f1f5f9]" @click="goShop">
+        <text class="text-15px text-[#1e293b]">🛍️ 商城</text>
+        <text class="text-12px text-[#94a3b8]">浏览商品 ›</text>
       </view>
-      <scroll-view class="bg-[#0f172a] rounded-8px p-12px h-180px" scroll-y="true">
-        <text class="text-13px text-[#38bdf8] leading-20px" style="font-family: monospace;">{{ userInfoJson }}</text>
-      </scroll-view>
+      <view class="px-20px h-56px flex flex-row items-center justify-between border-bottom-width-1px border-bottom-style-solid border-bottom-color-[#f1f5f9]" @click="goOrders">
+        <text class="text-15px text-[#1e293b]">📦 我的订单</text>
+        <text class="text-12px text-[#94a3b8]">查看全部 ›</text>
+      </view>
+      <view class="px-20px py-16rpx flex flex-row flex-wrap border-bottom-width-1px border-bottom-style-solid border-bottom-color-[#f1f5f9]">
+        <view
+          v-for="item in orderShortcuts"
+          :key="item.status"
+          class="w-25p mb-12rpx items-center"
+          @click="goOrdersStatus(item.status)"
+        >
+          <view class="relative">
+            <text class="text-22px">{{ item.emoji }}</text>
+            <view v-if="orderBadge(item.status) > 0" class="absolute px-8rpx py-2rpx rounded-20rpx" style="top: -8rpx; right: -16rpx; background-color: #ef4444; min-width: 28rpx;">
+              <text class="text-10px text-[#ffffff] font-bold" style="text-align: center;">{{ orderBadge(item.status) }}</text>
+            </view>
+          </view>
+          <text class="mt-6rpx text-11px text-[#64748b]">{{ item.label }}</text>
+        </view>
+      </view>
+      <view class="px-20px h-56px flex flex-row items-center justify-between border-bottom-width-1px border-bottom-style-solid border-bottom-color-[#f1f5f9]" @click="goCart">
+        <text class="text-15px text-[#1e293b]">🛒 购物车</text>
+        <view class="flex flex-row items-center">
+          <text v-if="cartCount > 0" class="text-12px text-[#ef4444] font-bold mr-8rpx">{{ cartCount }}</text>
+          <text class="text-12px text-[#94a3b8]">结算 ›</text>
+        </view>
+      </view>
+      <view class="px-20px h-56px flex flex-row items-center justify-between border-bottom-width-1px border-bottom-style-solid border-bottom-color-[#f1f5f9]" @click="goFavorites">
+        <text class="text-15px text-[#1e293b]">❤️ 我的收藏</text>
+        <text class="text-12px text-[#94a3b8]">查看 ›</text>
+      </view>
+      <view class="px-20px h-56px flex flex-row items-center justify-between border-bottom-width-1px border-bottom-style-solid border-bottom-color-[#f1f5f9]" @click="goScene('/src/pages/scene/checkin')">
+        <text class="text-15px text-[#1e293b]">📅 每日签到</text>
+        <text class="text-12px text-[#94a3b8]">领积分 ›</text>
+      </view>
+      <view class="px-20px h-56px flex flex-row items-center justify-between border-bottom-width-1px border-bottom-style-solid border-bottom-color-[#f1f5f9]" @click="goScene('/src/pages/scene/coupons')">
+        <text class="text-15px text-[#1e293b]">🎫 优惠券</text>
+        <text class="text-12px text-[#94a3b8]">领取 ›</text>
+      </view>
+      <view class="px-20px h-56px flex flex-row items-center justify-between border-bottom-width-1px border-bottom-style-solid border-bottom-color-[#f1f5f9]" @click="goScene('/src/pages/scene/distribution')">
+        <text class="text-15px text-[#1e293b]">💰 分销加盟</text>
+        <text class="text-12px text-[#94a3b8]">佣金 ›</text>
+      </view>
+      <view class="px-20px h-56px flex flex-row items-center justify-between border-top-width-1px border-top-style-solid border-top-color-[#f1f5f9]" @click="goAddresses">
+        <text class="text-15px text-[#1e293b]">📍 收货地址</text>
+        <text class="text-12px text-[#94a3b8]">管理 ›</text>
+      </view>
     </view>
 
-    <!-- 按钮区域 -->
-    <view class="w-full px-8px flex flex-col">
-      <view v-if="tokenStore.hasValidLogin()" class="w-full h-48px rounded-8px bg-[#ef4444] flex flex-row items-center justify-center" @click="handleLogout">
-        <text class="text-[#ffffff] text-14px font-bold">退出登录</text>
+    <!-- 运营登录（折叠次要） -->
+    <view class="w-full bg-white rounded-12px overflow-hidden">
+      <view class="px-20px h-56px flex flex-row items-center justify-between" @click="adminCollapsed = !adminCollapsed">
+        <text class="text-15px font-semibold text-[#64748b]">🔧 运营登录</text>
+        <text class="text-12px text-[#94a3b8]">{{ adminCollapsed ? '展开 ▾' : '收起 ▴' }}</text>
       </view>
-      <view v-else class="w-full h-48px rounded-8px bg-[#3b82f6] flex flex-row items-center justify-center" @click="handleLogin">
-        <text class="text-[#ffffff] text-14px font-bold">登录</text>
+      <view v-if="!adminCollapsed" class="px-20px pb-20px flex flex-col">
+        <view class="flex flex-col items-center py-16px mb-12px">
+          <image class="w-64px h-64px rounded-32px mb-12px border-width-2px border-color-[#f1f5f9] border-solid" :src="avatarUrl" />
+          <text class="text-16px font-bold text-[#1e293b] mb-4px">
+            {{ userStore.state.userInfo.username.length > 0 ? userStore.state.userInfo.username : '未登录' }}
+          </text>
+          <text v-if="userStore.state.userInfo.nickname.length > 0" class="text-13px text-[#64748b] mb-8px">
+            {{ userStore.state.userInfo.nickname }}
+          </text>
+          <text
+            class="text-12px px-12px py-4px rounded-20px"
+            :class="tokenStore.hasValidLogin() ? 'bg-[#d1fae5] text-[#065f46]' : 'bg-[#f1f5f9] text-[#64748b]'"
+          >
+            {{ tokenStore.hasValidLogin() ? '管理员已登录' : '管理员未登录' }}
+          </text>
+        </view>
+        <view v-if="tokenStore.hasValidLogin()" class="w-full h-44px rounded-8px bg-[#ef4444] flex flex-row items-center justify-center" @click="handleLogout">
+          <text class="text-[#ffffff] text-14px font-bold">退出登录</text>
+        </view>
+        <view v-else class="w-full h-44px rounded-8px bg-[#3b82f6] flex flex-row items-center justify-center" @click="handleLogin">
+          <text class="text-[#ffffff] text-14px font-bold">管理员登录</text>
+        </view>
       </view>
     </view>
 
-    <!-- 开发演示折叠区（原 tab 页 basic/function 入口，供二次开发参考） -->
-    <view class="w-full bg-white rounded-12px mt-24px overflow-hidden">
+    <!-- 开发演示折叠区 -->
+    <view class="w-full bg-white rounded-12px mt-16px overflow-hidden">
       <view class="px-20px h-56px flex flex-row items-center justify-between" @click="demoCollapsed = !demoCollapsed">
         <text class="text-15px font-semibold text-[#334155]">🧪 开发演示</text>
         <text class="text-12px text-[#94a3b8]">{{ demoCollapsed ? '展开 ▾' : '收起 ▴' }}</text>
@@ -62,6 +126,12 @@
 <script setup lang="uts">
 import { ref } from 'vue'
 import { useTokenStore, useUserStore } from '../../store'
+import { useShopSessionStore } from '../../store/shopSession'
+import { getCachedShopOpenid, getShopOrderOverview } from '../../api/shop'
+import { getFanProfile } from '../../api/app'
+import { getCartItemCount } from '../../utils/cartBadge'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import type { IShopOrderOverview } from '../../api/shop'
 import { LOGIN_PAGE } from '../../router/config'
 import { handleBackPressExit } from '@/src/utils/backPress'
 import { setCurIdxByPath } from '@/src/tabbar/store'
@@ -77,8 +147,29 @@ onBackPress((options: OnBackPressOptions): boolean => {
 
 const userStore = useUserStore()
 const tokenStore = useTokenStore()
+const shopSession = useShopSessionStore()
 
-// 计算头像
+const adminCollapsed = ref<boolean>(true)
+const demoCollapsed = ref<boolean>(true)
+const fanLoggedIn = ref<boolean>(false)
+const maskedOpenid = ref<string>('')
+const fanPoints = ref<number>(-1)
+const cartCount = ref<number>(0)
+const orderOverview = ref<IShopOrderOverview | null>(null)
+
+type IOrderShortcut = {
+  label: string
+  emoji: string
+  status: number
+}
+
+const orderShortcuts: IOrderShortcut[] = [
+  { label: '待支付', emoji: '💳', status: 0 },
+  { label: '待发货', emoji: '📮', status: 1 },
+  { label: '待收货', emoji: '🚚', status: 2 },
+  { label: '已完成', emoji: '✅', status: 3 },
+]
+
 const avatarUrl = computed((): string => {
   if (userStore.state.userInfo.avatar.length > 0) {
     return userStore.state.userInfo.avatar
@@ -86,39 +177,100 @@ const avatarUrl = computed((): string => {
   return '/static/logo.png'
 })
 
-// 序列化用户信息为 JSON
-const userInfoJson = computed((): string => {
-  const info = {
-    userId: userStore.state.userInfo.userId,
-    username: userStore.state.userInfo.username,
-    nickname: userStore.state.userInfo.nickname,
-    avatar: userStore.state.userInfo.avatar,
-  }
-  return JSON.stringify(info, null, 2)
-})
-
-onShow(() => {
-  console.log('All storage keys:', uni.getStorageInfoSync().keys)
-  console.log('pinia:token:', uni.getStorageSync('pinia:token'))
-  console.log('pinia:user:', uni.getStorageSync('pinia:user'))
-})
-
-// 登录
-function handleLogin() {
-  uni.navigateTo({
-    url: LOGIN_PAGE,
-  })
+function maskOpenid(openid: string): string {
+  if (openid.length <= 8) return openid
+  const head = openid.substring(0, 4)
+  const tail = openid.substring(openid.length - 4)
+  return `${head}****${tail}`
 }
 
-// 开发演示折叠区状态
-const demoCollapsed = ref<boolean>(true)
+function refreshFanSession() {
+  const openid = getCachedShopOpenid(ZWEQ_ACCOUNT_ID)
+  fanLoggedIn.value = shopSession.isValid(ZWEQ_ACCOUNT_ID) && openid.length > 0
+  maskedOpenid.value = openid.length > 0 ? maskOpenid(openid) : ''
+  if (fanLoggedIn.value) {
+    getFanProfile(ZWEQ_ACCOUNT_ID)
+      .then((profile) => {
+        fanPoints.value = profile.points
+      })
+      .catch(() => {
+        fanPoints.value = -1
+      })
+    getCartItemCount(ZWEQ_ACCOUNT_ID)
+      .then((count: number) => {
+        cartCount.value = count
+      })
+      .catch(() => {
+        cartCount.value = 0
+      })
+    getShopOrderOverview(ZWEQ_ACCOUNT_ID)
+      .then((overview: IShopOrderOverview) => {
+        orderOverview.value = overview
+      })
+      .catch(() => {
+        orderOverview.value = null
+      })
+  } else {
+    fanPoints.value = -1
+    cartCount.value = 0
+    orderOverview.value = null
+  }
+}
 
-// 跳转演示页（basic/function 已从 tab 折叠为普通页）
+onShow(() => {
+  refreshFanSession()
+})
+
+function goShop() {
+  uni.navigateTo({ url: '/src/pages/shop/products' })
+}
+
+function goOrders() {
+  uni.navigateTo({ url: '/src/pages/shop/orders' })
+}
+
+function goOrdersStatus(status: number) {
+  uni.navigateTo({ url: `/src/pages/shop/orders?status=${status}` })
+}
+
+function orderBadge(status: number): number {
+  if (orderOverview.value == null) {
+    return 0
+  }
+  const o = orderOverview.value!
+  switch (status) {
+    case 0: return o.pending_pay
+    case 1: return o.pending_ship
+    case 2: return o.shipped
+    case 3: return o.completed
+    default: return 0
+  }
+}
+
+function goCart() {
+  uni.navigateTo({ url: '/src/pages/shop/cart' })
+}
+
+function goFavorites() {
+  uni.navigateTo({ url: '/src/pages/shop/favorites' })
+}
+
+function goScene(url: string) {
+  uni.navigateTo({ url })
+}
+
+function goAddresses() {
+  uni.navigateTo({ url: '/src/pages/shop/addresses' })
+}
+
+function handleLogin() {
+  uni.navigateTo({ url: LOGIN_PAGE })
+}
+
 function goDemo(url: string) {
   uni.navigateTo({ url })
 }
 
-// 退出登录
 function handleLogout() {
   uni.showModal({
     title: '提示',
@@ -131,7 +283,6 @@ function handleLogout() {
           title: '退出登录成功',
           icon: 'success',
         })
-        // 退出后跳回首页（me 页需要登录，不能停留）
         setTimeout(() => {
           const targetUrl = '/src/pages/index/index'
           setCurIdxByPath(targetUrl)

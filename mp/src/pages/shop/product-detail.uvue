@@ -1,9 +1,18 @@
 <template>
   <view>
-    <NavBar title="商品详情" :show-back="true" />
+    <NavBar title="商品详情" :show-back="true">
+      <template #right>
+        <view class="relative flex flex-row items-center justify-center" style="width: 44px; height: 44px;" @click="goCart">
+          <text class="text-20px">🛒</text>
+          <view v-if="cartCount > 0" class="absolute" style="top: 4px; right: 4px; min-width: 16px; height: 16px; padding-left: 4px; padding-right: 4px; border-radius: 8px; background-color: #ef4444; align-items: center; justify-content: center;">
+            <text class="text-10px text-[#ffffff] font-bold">{{ cartBadgeText }}</text>
+          </view>
+        </view>
+      </template>
+    </NavBar>
     <view class="content-container pb-20px">
       <view v-if="product != null" class="px-30rpx pt-20rpx">
-        <image v-if="product.image !== ''" class="w-full h-420rpx rounded-12px" :src="product.image" mode="aspectFill" />
+        <image v-if="displayImage !== ''" class="w-full h-420rpx rounded-12px" :src="displayImage" mode="aspectFill" />
         <view v-else class="w-full h-420rpx rounded-12px items-center justify-center" style="background-color: #e2e8f0;">
           <text class="text-14px text-[#94a3b8]">无图</text>
         </view>
@@ -16,6 +25,25 @@
         <text class="mt-8rpx block text-13px text-[#64748b]">{{ product.content }}</text>
         <text class="mt-8rpx block text-12px text-[#94a3b8]">库存 {{ stock }} · 已售 {{ product.sales }}</text>
 
+        <!-- SKU 规格 -->
+        <view v-if="showSpecSelector" class="mt-30rpx px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;">
+          <view v-for="dim in specDimensions" :key="dim.name" class="mb-20rpx">
+            <text class="text-14px text-[#1e293b]">{{ dim.name }}</text>
+            <view class="mt-12rpx flex flex-row flex-wrap">
+              <view
+                v-for="val in dim.values"
+                :key="val"
+                class="mr-16rpx mb-12rpx px-20rpx py-10rpx rounded-8rpx"
+                :style="chipStyle(dim.name, val)"
+                @click="selectSpec(dim.name, val)"
+              >
+                <text :style="chipTextStyle(dim.name, val)" class="text-13px">{{ val }}</text>
+              </view>
+            </view>
+          </view>
+          <text v-if="!canBuy && sku == null" class="text-12px text-[#ef4444]">所选规格暂无库存</text>
+        </view>
+
         <!-- 数量 -->
         <view class="mt-30rpx flex flex-row items-center justify-between px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;">
           <text class="text-14px text-[#1e293b]">购买数量</text>
@@ -24,7 +52,7 @@
               <text class="text-18px font-bold text-[#64748b]">-</text>
             </view>
             <text class="mx-24rpx text-16px font-bold">{{ qty }}</text>
-            <view class="w-56rpx h-56rpx rounded-8rpx items-center justify-center" style="background-color: #e2e8f0;" @click="qty < stock && (qty++)">
+            <view class="w-56rpx h-56rpx rounded-8rpx items-center justify-center" style="background-color: #e2e8f0;" @click="canBuy && qty < stock && (qty++)">
               <text class="text-18px font-bold text-[#64748b]">+</text>
             </view>
           </view>
@@ -35,12 +63,41 @@
           <view class="w-88rpx h-88rpx rounded-12rpx items-center justify-center mr-16rpx" :style="{ backgroundColor: faved ? '#fef2f2' : '#f1f5f9' }" @click="toggleFav">
             <text :style="{ color: faved ? '#ef4444' : '#94a3b8' }" class="text-28rpx">{{ faved ? '♥' : '♡' }}</text>
           </view>
-          <button class="flex-1 h-88rpx rounded-12rpx text-[#ffffff] text-15px font-bold mr-16rpx" :style="{ backgroundColor: '#f59e0b' }" @click="buyNow">
+          <button
+            class="flex-1 h-88rpx rounded-12rpx text-[#ffffff] text-15px font-bold mr-16rpx"
+            :style="{ backgroundColor: canBuy ? '#f59e0b' : '#cbd5e1' }"
+            :disabled="!canBuy"
+            @click="buyNow"
+          >
             立即购买
           </button>
-          <button class="flex-1 h-88rpx rounded-12rpx text-[#ffffff] text-15px font-bold" :style="{ backgroundColor: '#0957DE' }" @click="addCart">
+          <button
+            class="flex-1 h-88rpx rounded-12rpx text-[#ffffff] text-15px font-bold"
+            :style="{ backgroundColor: canBuy ? '#0957DE' : '#cbd5e1' }"
+            :disabled="!canBuy"
+            @click="addCart"
+          >
             加入购物车
           </button>
+        </view>
+      </view>
+
+      <!-- 用户评价 -->
+      <view v-if="product != null" class="mx-30rpx mt-30rpx px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;">
+        <view class="flex flex-row items-center justify-between mb-16rpx">
+          <text class="text-15px font-bold text-[#1e293b]">用户评价</text>
+          <text class="text-12px text-[#94a3b8]">{{ comments.length }} 条</text>
+        </view>
+        <view v-if="comments.length === 0 && !commentsLoading" class="py-20rpx items-center">
+          <text class="text-13px text-[#94a3b8]">暂无评价，购买后可评价</text>
+        </view>
+        <view v-for="c in comments" :key="c.id" class="mb-20rpx pb-20rpx" style="border-bottom-width: 1px; border-bottom-color: #e2e8f0; border-bottom-style: solid;">
+          <view class="flex flex-row items-center justify-between">
+            <text class="text-12px text-[#64748b]">{{ maskOpenid(c.openid) }}</text>
+            <text class="text-12px text-[#f59e0b]">{{ starText(c.star) }}</text>
+          </view>
+          <text v-if="c.content.length > 0" class="mt-8rpx block text-13px text-[#1e293b]">{{ c.content }}</text>
+          <text class="mt-8rpx block text-11px text-[#94a3b8]">{{ relativeTime(c.created_at) }}</text>
         </view>
       </view>
     </view>
@@ -49,17 +106,73 @@
 
 <script setup lang="uts">
 import { ref } from 'vue'
-import { getShopProduct, addShopCart, createShopAddress, createShopOrder } from '../../api/shop'
-import { fenToYuan } from '../../utils/format'
-import type { IShopProduct, IShopSku } from '../../api/shop'
+import { getShopProduct, addShopCart, addShopFavorite, listShopFavorites, deleteShopFavorite, listShopComments } from '../../api/shop'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { fenToYuan, maskOpenid, relativeTime } from '../../utils/format'
+import { getCartItemCount } from '../../utils/cartBadge'
+import type { IShopProduct, IShopSku, IShopProductDetail, IShopComment } from '../../api/shop'
+
+type SpecDimension = {
+  name: string
+  values: string[]
+}
+
+type SpecKv = {
+  k: string
+  v: string
+}
 
 const product = ref<IShopProduct | null>(null)
 const sku = ref<IShopSku | null>(null)
+const allSkus = ref<IShopSku[]>([])
+const specDimensions = ref<SpecDimension[]>([])
+const selectedSpecs = ref<UTSJSONObject>({} as UTSJSONObject)
 const qty = ref<number>(1)
 const faved = ref<boolean>(false)
+const favoriteId = ref<number>(0)
+const comments = ref<IShopComment[]>([])
+const commentsLoading = ref<boolean>(false)
+const cartCount = ref<number>(0)
+
+const cartBadgeText = computed<string>(() => {
+  if (cartCount.value > 99) {
+    return '99+'
+  }
+  return `${cartCount.value}`
+})
 
 const price = computed<number>(() => (sku.value != null ? sku.value.price : (product.value != null ? product.value.price : 0)))
 const stock = computed<number>(() => (sku.value != null ? sku.value.stock : (product.value != null ? product.value.stock : 0)))
+
+const displayImage = computed<string>(() => {
+  if (sku.value != null && sku.value.image !== '') {
+    return sku.value.image
+  }
+  if (product.value != null) {
+    return product.value.image
+  }
+  return ''
+})
+
+const showSpecSelector = computed<boolean>(() => {
+  if (allSkus.value.length <= 1) {
+    return false
+  }
+  return specDimensions.value.length > 0
+})
+
+const canBuy = computed<boolean>(() => {
+  if (sku.value == null) {
+    return false
+  }
+  if (sku.value.stock <= 0) {
+    return false
+  }
+  if (showSpecSelector.value && !isSelectionComplete()) {
+    return false
+  }
+  return true
+})
 
 onLoad((options: UTSJSONObject | null) => {
   if (options != null) {
@@ -70,30 +183,258 @@ onLoad((options: UTSJSONObject | null) => {
   }
 })
 
+onShow(() => {
+  refreshCartBadge()
+})
+
+function refreshCartBadge() {
+  getCartItemCount(ZWEQ_ACCOUNT_ID)
+    .then((count: number) => {
+      cartCount.value = count
+    })
+    .catch(() => {
+      cartCount.value = 0
+    })
+}
+
+function starText(star: number): string {
+  let s = ''
+  for (let i = 0; i < star; i++) {
+    s += '★'
+  }
+  return s
+}
+
+function loadComments(productId: number) {
+  commentsLoading.value = true
+  listShopComments(productId)
+    .then((rows) => {
+      comments.value = rows
+    })
+    .catch(() => {
+      comments.value = []
+    })
+    .finally(() => {
+      commentsLoading.value = false
+    })
+}
+
+function parseSkuSpecMap(specJson: string): UTSJSONObject {
+  const result: UTSJSONObject = {} as UTSJSONObject
+  const trimmed = specJson.trim()
+  if (trimmed === '' || trimmed === '[]' || trimmed === '{}') {
+    return result
+  }
+
+  if (trimmed.startsWith('[')) {
+    const arr = JSON.parse<SpecKv[]>(specJson)
+    if (arr != null) {
+      for (let i = 0; i < arr.length; i++) {
+        const item = arr[i]
+        if (item.k !== '' && item.v !== '') {
+          result[item.k] = item.v
+        }
+      }
+    }
+    return result
+  }
+
+  const obj = JSON.parseObject(specJson)
+  if (obj != null) {
+    const keys = UTSJSONObject.keys(obj)
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i]
+      const v = obj[k] as string | null
+      if (v != null && v !== '') {
+        result[k] = v
+      }
+    }
+  }
+  return result
+}
+
+function buildDimensions(skus: IShopSku[]): SpecDimension[] {
+  const order: string[] = []
+  const seenByDim: UTSJSONObject = {} as UTSJSONObject
+
+  for (let i = 0; i < skus.length; i++) {
+    const spec = parseSkuSpecMap(skus[i].spec_json)
+    const keys = UTSJSONObject.keys(spec)
+    for (let j = 0; j < keys.length; j++) {
+      const dimName = keys[j]
+      const dimValue = spec[dimName] as string
+      let dimSeen = seenByDim[dimName] as UTSJSONObject | null
+      if (dimSeen == null) {
+        dimSeen = {} as UTSJSONObject
+        seenByDim[dimName] = dimSeen
+        order.push(dimName)
+      }
+      dimSeen[dimValue] = true
+    }
+  }
+
+  const dims: SpecDimension[] = []
+  for (let i = 0; i < order.length; i++) {
+    const dimName = order[i]
+    const dimSeen = seenByDim[dimName] as UTSJSONObject
+    const valueKeys = UTSJSONObject.keys(dimSeen)
+    const values: string[] = []
+    for (let j = 0; j < valueKeys.length; j++) {
+      values.push(valueKeys[j])
+    }
+    dims.push({ name: dimName, values })
+  }
+  return dims
+}
+
+function isSelectionComplete(): boolean {
+  if (specDimensions.value.length === 0) {
+    return true
+  }
+  for (let i = 0; i < specDimensions.value.length; i++) {
+    const dimName = specDimensions.value[i].name
+    const val = selectedSpecs.value[dimName] as string | null
+    if (val == null || val === '') {
+      return false
+    }
+  }
+  return true
+}
+
+function findMatchingSku(skus: IShopSku[], selected: UTSJSONObject): IShopSku | null {
+  for (let i = 0; i < skus.length; i++) {
+    const item = skus[i]
+    const spec = parseSkuSpecMap(item.spec_json)
+    const specKeys = UTSJSONObject.keys(spec)
+    if (specKeys.length === 0) {
+      continue
+    }
+    let matched = true
+    for (let j = 0; j < specKeys.length; j++) {
+      const key = specKeys[j]
+      const selectedVal = selected[key] as string | null
+      const specVal = spec[key] as string | null
+      if (selectedVal != specVal) {
+        matched = false
+        break
+      }
+    }
+    if (matched) {
+      return item
+    }
+  }
+  return null
+}
+
+function updateMatchedSku(): void {
+  if (allSkus.value.length === 0) {
+    sku.value = null
+    return
+  }
+  if (!showSpecSelector.value) {
+    sku.value = allSkus.value[0]
+    return
+  }
+  if (!isSelectionComplete()) {
+    sku.value = null
+    return
+  }
+  sku.value = findMatchingSku(allSkus.value, selectedSpecs.value)
+  if (sku.value != null && qty.value > sku.value!.stock) {
+    qty.value = sku.value!.stock > 0 ? sku.value!.stock : 1
+  }
+}
+
+function initSkuState(skus: IShopSku[]): void {
+  allSkus.value = skus
+  specDimensions.value = buildDimensions(skus)
+
+  if (skus.length === 0) {
+    sku.value = null
+    selectedSpecs.value = {} as UTSJSONObject
+    return
+  }
+
+  if (skus.length <= 1 || specDimensions.value.length === 0) {
+    sku.value = skus[0]
+    selectedSpecs.value = {} as UTSJSONObject
+    return
+  }
+
+  selectedSpecs.value = parseSkuSpecMap(skus[0].spec_json)
+  updateMatchedSku()
+}
+
 function load(id: number) {
   getShopProduct(id)
-    .then((res: any) => {
-      const detail = res as UTSJSONObject
-      product.value = detail['product'] as IShopProduct
-      const skus = detail['skus'] as IShopSku[]
-      if (skus.length > 0) {
-        sku.value = skus[0]
-      }
+    .then((detail: IShopProductDetail) => {
+      product.value = detail.product
+      initSkuState(detail.skus)
+      syncFavoriteState(id)
+      loadComments(id)
     })
     .catch(() => {
       uni.showToast({ title: '商品不存在', icon: 'none' })
     })
 }
 
+function syncFavoriteState(productId: number) {
+  listShopFavorites(ZWEQ_ACCOUNT_ID)
+    .then((favs) => {
+      faved.value = false
+      favoriteId.value = 0
+      for (let i = 0; i < favs.length; i++) {
+        if (favs[i].product_id === productId) {
+          faved.value = true
+          favoriteId.value = favs[i].id
+          break
+        }
+      }
+    })
+    .catch(() => {})
+}
+
+function chipStyle(dimName: string, value: string): string {
+  const selected = selectedSpecs.value[dimName] as string | null
+  const active = selected != null && selected == value
+  if (active) {
+    return 'background-color: rgba(9, 87, 222, 0.1); border-width: 1px; border-color: #0957DE; border-style: solid;'
+  }
+  return 'background-color: #ffffff; border-width: 1px; border-color: #e2e8f0; border-style: solid;'
+}
+
+function chipTextStyle(dimName: string, value: string): string {
+  const selected = selectedSpecs.value[dimName] as string | null
+  const active = selected != null && selected == value
+  if (active) {
+    return 'color: #0957DE;'
+  }
+  return 'color: #64748b;'
+}
+
+function selectSpec(dimName: string, value: string): void {
+  selectedSpecs.value[dimName] = value
+  updateMatchedSku()
+}
+
 function toggleFav() {
   if (product.value == null) return
-  if (faved.value) {
-    uni.showToast({ title: '已收藏', icon: 'none' })
+  if (faved.value && favoriteId.value > 0) {
+    deleteShopFavorite(favoriteId.value)
+      .then(() => {
+        faved.value = false
+        favoriteId.value = 0
+        uni.showToast({ title: '已取消收藏', icon: 'success' })
+      })
+      .catch(() => {
+        uni.showToast({ title: '操作失败', icon: 'none' })
+      })
     return
   }
   addShopFavorite(product.value.account_id, product.value.id)
-    .then(() => {
+    .then((res) => {
       faved.value = true
+      favoriteId.value = res.id
       uni.showToast({ title: '收藏成功', icon: 'success' })
     })
     .catch(() => {
@@ -102,10 +443,11 @@ function toggleFav() {
 }
 
 function addCart() {
-  if (product.value == null || sku.value == null) return
+  if (!canBuy.value || product.value == null || sku.value == null) return
   addShopCart(product.value.account_id, product.value.id, sku.value.id, qty.value)
     .then(() => {
       uni.showToast({ title: '已加入购物车', icon: 'success' })
+      refreshCartBadge()
     })
     .catch(() => {
       uni.showToast({ title: '加入失败', icon: 'none' })
@@ -113,26 +455,13 @@ function addCart() {
 }
 
 function buyNow() {
-  if (product.value == null || sku.value == null) return
-  // H5 演示：自动创建默认地址并下单（mock 支付）
-  createShopAddress(product.value.account_id, '演示用户', '13800138000', '广东省深圳市', '科技园 1 号')
-    .then((addr: any) => {
-      const addressId = (addr as UTSJSONObject)['id'] as number
-      return createShopOrder(product.value.account_id, addressId, [{
-        product_id: product.value!.id,
-        sku_id: sku.value!.id,
-        quantity: qty.value,
-      }])
-    })
-    .then((order: any) => {
-      const orderId = (order as UTSJSONObject)['id'] as number
-      uni.showToast({ title: '下单成功', icon: 'success' })
-      setTimeout(() => {
-        uni.redirectTo({ url: `/src/pages/shop/orders?highlight=${orderId}` })
-      }, 400)
-    })
-    .catch(() => {
-      uni.showToast({ title: '下单失败，库存不足？', icon: 'none' })
-    })
+  if (!canBuy.value || product.value == null || sku.value == null) return
+  uni.navigateTo({
+    url: `/src/pages/shop/checkout?product_id=${product.value.id}&sku_id=${sku.value.id}&qty=${qty.value}`,
+  })
+}
+
+function goCart() {
+  uni.navigateTo({ url: '/src/pages/shop/cart' })
 }
 </script>

@@ -7,19 +7,36 @@
         <text class="text-14px text-[#64748b] mt-8px">多商户微信运营平台 · 场景应用中心</text>
       </view>
 
-      <!-- 登录状态 -->
+      <!-- 粉丝状态 -->
       <view
         class="mx-30px mt-30px px-24rpx py-20rpx rounded-12px"
         style="background-color: rgba(9, 87, 222, 0.06);"
       >
-        <view v-if="loggedIn" class="flex flex-row items-center justify-between">
-          <text class="text-14px font-bold">{{ nickname }}</text>
-          <text class="text-12px text-[#64748b]">{{ email }}</text>
+        <view v-if="fanReady" class="flex flex-col">
+          <view class="flex flex-row items-center justify-between">
+            <text class="text-14px font-bold text-[#1e293b]">粉丝已连接</text>
+            <text class="text-12px text-[#64748b]" style="font-family: monospace;">{{ maskedOpenid }}</text>
+          </view>
+          <view class="mt-12rpx flex flex-row items-center justify-between">
+            <text class="text-14px text-[#0957DE] font-bold">积分 {{ fanPoints }}</text>
+            <text v-if="pendingOrders > 0" class="text-12px text-[#f59e0b]" @click="goPendingOrders">待支付 {{ pendingOrders }} 单 ›</text>
+          </view>
         </view>
         <view v-else class="flex flex-row items-center justify-between">
-          <text class="text-14px text-[#64748b]">未登录</text>
-          <text class="text-12px text-[#0957DE]" @click="goLogin">去登录 ›</text>
+          <text class="text-14px text-[#64748b]">进入商城后将自动建立粉丝会话</text>
+          <text class="text-12px text-[#0957DE]" @click="goShop('/src/pages/shop/products')">去逛逛 ›</text>
         </view>
+      </view>
+
+      <!-- 管理员状态（次要） -->
+      <view
+        v-if="adminLoggedIn"
+        class="mx-30px mt-12rpx px-24rpx py-14rpx rounded-12px flex flex-row items-center justify-between"
+        style="background-color: #f8fafc;"
+        @click="goLogin"
+      >
+        <text class="text-12px text-[#64748b]">运营：{{ nickname }}</text>
+        <text class="text-11px text-[#94a3b8]">已登录 ›</text>
       </view>
 
       <!-- AI 入口引导条 -->
@@ -30,6 +47,28 @@
       >
         <text class="text-14px font-bold text-[#2563eb]">🤖 AI 智能助手</text>
         <text class="text-12px text-[#64748b]">答疑 · 运营建议 ›</text>
+      </view>
+
+      <!-- 商城快捷入口 -->
+      <view class="mx-30px mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;">
+        <text class="text-14px font-bold text-[#1e293b] mb-16rpx">商城</text>
+        <view class="flex flex-row flex-wrap">
+          <view class="w-200rpx mr-16rpx mb-12rpx px-16rpx py-16rpx rounded-8rpx" style="background-color: #ffffff;" @click="goShop('/src/pages/shop/products')">
+            <text class="text-13px text-[#1e293b]">🛍️ 商品</text>
+          </view>
+          <view class="w-200rpx mr-16rpx mb-12rpx px-16rpx py-16rpx rounded-8rpx" style="background-color: #ffffff;" @click="goShop('/src/pages/shop/cart')">
+            <text class="text-13px text-[#1e293b]">🛒 购物车</text>
+          </view>
+          <view class="w-200rpx mr-16rpx mb-12rpx px-16rpx py-16rpx rounded-8rpx" style="background-color: #ffffff;" @click="goShop('/src/pages/shop/orders?status=0')">
+            <text class="text-13px text-[#1e293b]">📦 订单</text>
+          </view>
+          <view class="w-200rpx mr-16rpx mb-12rpx px-16rpx py-16rpx rounded-8rpx" style="background-color: #ffffff;" @click="goShop('/src/pages/shop/favorites')">
+            <text class="text-13px text-[#1e293b]">❤️ 收藏</text>
+          </view>
+          <view class="w-200rpx mb-12rpx px-16rpx py-16rpx rounded-8rpx" style="background-color: #ffffff;" @click="goShop('/src/pages/shop/addresses')">
+            <text class="text-13px text-[#1e293b]">📍 地址</text>
+          </view>
+        </view>
       </view>
 
       <!-- 场景应用网格 -->
@@ -67,23 +106,83 @@
 /* eslint-disable dot-notation */
 import { ref } from 'vue'
 import { useTokenStore, useUserStore } from '../../store'
+import { useShopSessionStore } from '../../store/shopSession'
+import { getFanProfile } from '../../api/app'
+import { getCachedShopOpenid } from '../../api/shop'
+import { ensureShopSession } from '../../api/shopAuth'
+import { getPendingOrderCount } from '../../utils/cartBadge'
+import { maskOpenid } from '../../utils/format'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
 import { setCurIdxByPath } from '../../tabbar/store'
 
 const tokenStore = useTokenStore()
 const userStore = useUserStore()
+const shopSession = useShopSessionStore()
 
-const loggedIn = ref<boolean>(tokenStore.hasValidLogin())
+const adminLoggedIn = ref<boolean>(tokenStore.hasValidLogin())
+const fanReady = ref<boolean>(false)
+const fanPoints = ref<number>(0)
+const pendingOrders = ref<number>(0)
+const maskedOpenid = ref<string>('')
 const nickname = ref<string>('')
-const email = ref<string>('')
+const refreshing = ref<boolean>(false)
 
 onShow(() => {
-  loggedIn.value = tokenStore.hasValidLogin()
-  if (loggedIn.value) {
+  adminLoggedIn.value = tokenStore.hasValidLogin()
+  if (adminLoggedIn.value) {
     const info = userStore.getUserInfo()
-    nickname.value = info.nickname
-    email.value = info.username
+    nickname.value = info.nickname.length > 0 ? info.nickname : info.username
   }
+  refreshFanState()
 })
+
+onPullDownRefresh(() => {
+  if (refreshing.value) {
+    uni.stopPullDownRefresh()
+    return
+  }
+  refreshing.value = true
+  ensureShopSession(ZWEQ_ACCOUNT_ID)
+    .then(() => {
+      refreshFanState()
+    })
+    .catch(() => {
+      refreshFanState()
+    })
+    .finally(() => {
+      refreshing.value = false
+      uni.stopPullDownRefresh()
+    })
+})
+
+function refreshFanState() {
+  const openid = getCachedShopOpenid(ZWEQ_ACCOUNT_ID)
+  fanReady.value = shopSession.isValid(ZWEQ_ACCOUNT_ID) && openid.length > 0
+  maskedOpenid.value = openid.length > 0 ? maskOpenid(openid) : ''
+  if (!fanReady.value) {
+    fanPoints.value = 0
+    pendingOrders.value = 0
+    return
+  }
+  getFanProfile(ZWEQ_ACCOUNT_ID)
+    .then((profile) => {
+      fanPoints.value = profile.points
+    })
+    .catch(() => {
+      fanPoints.value = 0
+    })
+  getPendingOrderCount(ZWEQ_ACCOUNT_ID)
+    .then((count: number) => {
+      pendingOrders.value = count
+    })
+    .catch(() => {
+      pendingOrders.value = 0
+    })
+}
+
+function goPendingOrders() {
+  uni.navigateTo({ url: '/src/pages/shop/orders?status=0' })
+}
 
 type IScene = {
   key: string
@@ -114,9 +213,45 @@ function goAi() {
   uni.switchTab({ url: '/src/pages/ai/ai' })
 }
 
+function goShop(url: string) {
+  uni.navigateTo({ url })
+}
+
 function showScene(scene: IScene) {
   if (scene.key === 'shop') {
     uni.navigateTo({ url: '/src/pages/shop/products' })
+    return
+  }
+  if (scene.key === 'points') {
+    uni.navigateTo({ url: '/src/pages/scene/points' })
+    return
+  }
+  if (scene.key === 'coupon') {
+    uni.navigateTo({ url: '/src/pages/scene/coupons' })
+    return
+  }
+  if (scene.key === 'luckyDraw') {
+    uni.navigateTo({ url: '/src/pages/scene/lucky-draw' })
+    return
+  }
+  if (scene.key === 'checkin') {
+    uni.navigateTo({ url: '/src/pages/scene/checkin' })
+    return
+  }
+  if (scene.key === 'vote') {
+    uni.navigateTo({ url: '/src/pages/scene/vote' })
+    return
+  }
+  if (scene.key === 'seckill') {
+    uni.navigateTo({ url: '/src/pages/scene/seckill' })
+    return
+  }
+  if (scene.key === 'memberCard') {
+    uni.navigateTo({ url: '/src/pages/scene/member-card' })
+    return
+  }
+  if (scene.key === 'distribution') {
+    uni.navigateTo({ url: '/src/pages/scene/distribution' })
     return
   }
   uni.showModal({

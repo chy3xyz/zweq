@@ -1,0 +1,34 @@
+// ==========================================
+// 活动时间窗 — 秒杀 / 投票等
+// ==========================================
+
+/** 当前时间（秒）是否在 [startAt, endAt] 内；endAt=0 表示不限制结束 */
+export function isInTimeRange(startAt: number, endAt: number, nowSec: number = Math.floor(Date.now() / 1000)): boolean {
+  if (startAt > 0 && nowSec < startAt) {
+    return false
+  }
+  if (endAt > 0 && nowSec > endAt) {
+    return false
+  }
+  return true
+}
+
+export function activityStatusLabel(startAt: number, endAt: number, nowSec: number = Math.floor(Date.now() / 1000)): string {
+  if (startAt > 0 && nowSec < startAt) {
+    return '未开始'
+  }
+  if (endAt > 0 && nowSec > endAt) {
+    return '已结束'
+  }
+  return '进行中'
+}
+
+export function activityStatusColor(startAt: number, endAt: number, nowSec: number = Math.floor(Date.now() / 1000)): string {
+  if (startAt > 0 && nowSec < startAt) {
+    return '#f59e0b'
+  }
+  if (endAt > 0 && nowSec > endAt) {
+    return '#94a3b8'
+  }
+  return '#10b981'
+}

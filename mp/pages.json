@@ -4,7 +4,8 @@
       "path": "src/pages/index/index",
       "style": {
         "navigationStyle": "custom",
-        "navigationBarTitleText": "首页"
+        "navigationBarTitleText": "首页",
+        "enablePullDownRefresh": true
       }
     },
     {
@@ -36,7 +37,8 @@
     {
       "path": "src/pages/shop/products",
       "style": {
-        "navigationStyle": "custom"
+        "navigationStyle": "custom",
+        "enablePullDownRefresh": true
       }
     },
     {
@@ -48,13 +50,100 @@
     {
       "path": "src/pages/shop/orders",
       "style": {
-        "navigationStyle": "custom"
+        "navigationStyle": "custom",
+        "enablePullDownRefresh": true
       }
     },
     {
       "path": "src/pages/shop/cart",
       "style": {
-        "navigationStyle": "custom"
+        "navigationStyle": "custom",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "src/pages/shop/checkout",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "确认订单"
+      }
+    },
+    {
+      "path": "src/pages/shop/addresses",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "收货地址"
+      }
+    },
+    {
+      "path": "src/pages/shop/order-detail",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "订单详情"
+      }
+    },
+    {
+      "path": "src/pages/shop/favorites",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "我的收藏"
+      }
+    },
+    {
+      "path": "src/pages/scene/points",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "积分商城",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "src/pages/scene/coupons",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "优惠券"
+      }
+    },
+    {
+      "path": "src/pages/scene/lucky-draw",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "大转盘"
+      }
+    },
+    {
+      "path": "src/pages/scene/checkin",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "签到"
+      }
+    },
+    {
+      "path": "src/pages/scene/vote",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "投票"
+      }
+    },
+    {
+      "path": "src/pages/scene/seckill",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "秒杀"
+      }
+    },
+    {
+      "path": "src/pages/scene/member-card",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "会员卡"
+      }
+    },
+    {
+      "path": "src/pages/scene/distribution",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "分销"
       }
     }
   ],

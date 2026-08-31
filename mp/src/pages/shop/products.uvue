@@ -1,11 +1,52 @@
 <template>
   <view>
-    <NavBar title="商城" :show-back="false" />
+    <NavBar title="商城" :show-back="false">
+      <template #right>
+        <view class="relative flex flex-row items-center justify-center" style="width: 44px; height: 44px;" @click="goCart">
+          <text class="text-20px">🛒</text>
+          <view v-if="cartCount > 0" class="absolute" style="top: 4px; right: 4px; min-width: 16px; height: 16px; padding-left: 4px; padding-right: 4px; border-radius: 8px; background-color: #ef4444; align-items: center; justify-content: center;">
+            <text class="text-10px text-[#ffffff] font-bold">{{ cartBadgeText }}</text>
+          </view>
+        </view>
+      </template>
+    </NavBar>
     <view class="content-container pb-20px">
-      <!-- 分类/搜索占位：直接商品流 -->
-      <view class="mt-20rpx mx-30rpx">
-        <text class="text-16px font-bold text-[#1e293b]">全部商品</text>
+      <!-- 搜索 -->
+      <view class="mx-30rpx mt-16rpx px-20rpx py-12rpx rounded-12rpx flex flex-row items-center" style="background-color: #f1f5f9;">
+        <input
+          v-model="keyword"
+          class="flex-1 text-14px"
+          placeholder="搜索商品"
+          confirm-type="search"
+          @confirm="onSearch"
+        />
+        <view class="ml-12rpx px-16rpx py-8rpx rounded-8rpx" style="background-color: #0957DE;" @click="onSearch">
+          <text class="text-12px text-[#ffffff]">搜索</text>
+        </view>
       </view>
+
+      <!-- 分类 -->
+      <scroll-view scroll-x="true" class="mx-30rpx mt-16rpx whitespace-nowrap">
+        <view class="flex flex-row">
+          <view
+            class="mr-16rpx px-24rpx py-12rpx rounded-20rpx"
+            :style="categoryStyle(0)"
+            @click="selectCategory(0)"
+          >
+            <text class="text-13px" :style="categoryTextStyle(0)">全部</text>
+          </view>
+          <view
+            v-for="cat in categories"
+            :key="cat.id"
+            class="mr-16rpx px-24rpx py-12rpx rounded-20rpx"
+            :style="categoryStyle(cat.id)"
+            @click="selectCategory(cat.id)"
+          >
+            <text class="text-13px" :style="categoryTextStyle(cat.id)">{{ cat.name }}</text>
+          </view>
+        </view>
+      </scroll-view>
+
       <view class="mt-16rpx px-30rpx flex flex-row flex-wrap justify-between">
         <view
           v-for="p in products"
@@ -27,8 +68,13 @@
           </view>
         </view>
       </view>
+
       <view v-if="products.length === 0 && !loading" class="mt-60rpx items-center">
-        <text class="text-14px text-[#94a3b8]">暂无商品，请在管理端创建</text>
+        <text class="text-14px text-[#94a3b8]">{{ emptyHint }}</text>
+      </view>
+
+      <view v-if="products.length > 0" class="mt-20rpx items-center py-20rpx" @click="loadMore">
+        <text class="text-13px text-[#64748b]">{{ loadMoreText }}</text>
       </view>
     </view>
   </view>
@@ -36,30 +82,162 @@
 
 <script setup lang="uts">
 import { ref } from 'vue'
-import { listShopProducts } from '../../api/shop'
+import { listShopProducts, listShopCategories } from '../../api/shop'
 import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
 import { fenToYuan } from '../../utils/format'
-import type { IShopProduct } from '../../api/shop'
+import { getCartItemCount } from '../../utils/cartBadge'
+import type { IShopProduct, IShopCategory } from '../../api/shop'
+
+const PAGE_SIZE = 20
 
 const products = ref<IShopProduct[]>([])
+const categories = ref<IShopCategory[]>([])
 const loading = ref<boolean>(false)
+const loadingMore = ref<boolean>(false)
+const page = ref<number>(1)
+const total = ref<number>(0)
+const activeCategoryId = ref<number>(0)
+const keyword = ref<string>('')
+const cartCount = ref<number>(0)
 
-onLoad(() => {
-  load()
+const cartBadgeText = computed<string>(() => {
+  if (cartCount.value > 99) {
+    return '99+'
+  }
+  return `${cartCount.value}`
 })
 
-function load() {
-  loading.value = true
-  listShopProducts(ZWEQ_ACCOUNT_ID, 1, 50)
-    .then((res: any) => {
-      products.value = (res as UTSJSONObject)['list'] as IShopProduct[]
+const hasMore = computed<boolean>(() => products.value.length < total.value)
+
+const emptyHint = computed<string>(() => {
+  if (keyword.value.length > 0) {
+    return '未找到相关商品'
+  }
+  return '暂无商品，请在管理端创建'
+})
+
+const loadMoreText = computed<string>(() => {
+  if (loadingMore.value) {
+    return '加载中…'
+  }
+  if (hasMore.value) {
+    return '点击加载更多'
+  }
+  return '没有更多了'
+})
+
+onLoad(() => {
+  loadCategories()
+  reload()
+})
+
+onShow(() => {
+  refreshCartCount()
+})
+
+onPullDownRefresh(() => {
+  reload()
+  refreshCartCount()
+  setTimeout(() => {
+    uni.stopPullDownRefresh()
+  }, 400)
+})
+
+function refreshCartCount() {
+  getCartItemCount(ZWEQ_ACCOUNT_ID)
+    .then((count: number) => {
+      cartCount.value = count
     })
     .catch(() => {
-      products.value = []
+      cartCount.value = 0
+    })
+}
+
+function goCart() {
+  uni.navigateTo({ url: '/src/pages/shop/cart' })
+}
+
+function loadCategories() {
+  listShopCategories(ZWEQ_ACCOUNT_ID)
+    .then((res: any) => {
+      categories.value = res as IShopCategory[]
+    })
+    .catch(() => {
+      categories.value = []
+    })
+}
+
+function reload() {
+  page.value = 1
+  total.value = 0
+  products.value = []
+  fetchPage(1, false)
+}
+
+function fetchPage(targetPage: number, append: boolean) {
+  if (append) {
+    loadingMore.value = true
+  } else {
+    loading.value = true
+  }
+  listShopProducts(ZWEQ_ACCOUNT_ID, targetPage, PAGE_SIZE, activeCategoryId.value, keyword.value)
+    .then((res: any) => {
+      const data = res as UTSJSONObject
+      const list = data['list'] as IShopProduct[]
+      const count = data['total'] as number
+      total.value = count
+      if (append) {
+        for (let i = 0; i < list.length; i++) {
+          products.value.push(list[i])
+        }
+      } else {
+        products.value = list
+      }
+      page.value = targetPage
+    })
+    .catch(() => {
+      if (!append) {
+        products.value = []
+        total.value = 0
+      }
     })
     .finally(() => {
       loading.value = false
+      loadingMore.value = false
     })
+}
+
+function loadMore() {
+  if (loading.value || loadingMore.value || !hasMore.value) {
+    return
+  }
+  fetchPage(page.value + 1, true)
+}
+
+function onSearch() {
+  reload()
+}
+
+function selectCategory(categoryId: number) {
+  if (activeCategoryId.value === categoryId) {
+    return
+  }
+  activeCategoryId.value = categoryId
+  reload()
+}
+
+function categoryStyle(categoryId: number): string {
+  if (activeCategoryId.value === categoryId) {
+    return 'background-color: rgba(9, 87, 222, 0.1); border-width: 1px; border-color: #0957DE; border-style: solid;'
+  }
+  return 'background-color: #f1f5f9;'
+}
+
+function categoryTextStyle(categoryId: number): string {
+  if (activeCategoryId.value === categoryId) {
+    return 'color: #0957DE; font-weight: bold;'
+  }
+  return 'color: #64748b;'
 }
 
 function goDetail(id: number) {

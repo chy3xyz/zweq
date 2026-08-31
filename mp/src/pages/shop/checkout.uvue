@@ -1,0 +1,431 @@
+<template>
+  <view>
+    <NavBar :title="buyNowMode ? '确认购买' : '确认订单'" :show-back="true" />
+    <view class="content-container pb-120rpx">
+      <!-- 收货地址 -->
+      <view class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #ffffff; border-width: 1px; border-color: #e2e8f0; border-style: solid;">
+        <view class="flex flex-row items-center justify-between mb-16rpx">
+          <text class="text-15px font-bold text-[#1e293b]">收货地址</text>
+          <view @click="goAddresses">
+            <text class="text-12px text-[#0957DE]">管理地址</text>
+          </view>
+        </view>
+        <view v-if="addresses.length === 0" class="py-20rpx items-center">
+          <text class="text-13px text-[#94a3b8]">暂无地址，请先添加</text>
+          <view class="mt-16rpx px-24rpx py-10rpx rounded-8rpx" style="background-color: #0957DE;" @click="goAddresses">
+            <text class="text-13px text-[#ffffff]">去添加</text>
+          </view>
+        </view>
+        <view v-for="addr in addresses" :key="addr.id" class="mb-12rpx px-16rpx py-16rpx rounded-8rpx flex flex-row items-start" :style="addressItemStyle(addr.id)" @click="selectAddress(addr.id)">
+          <view class="w-36rpx h-36rpx rounded-full mr-16rpx mt-4rpx flex flex-row items-center justify-center" :style="radioStyle(addr.id)">
+            <view v-if="selectedAddressId == addr.id" class="w-16rpx h-16rpx rounded-full" style="background-color: #ffffff;" />
+          </view>
+          <view class="flex-1">
+            <view class="flex flex-row items-center justify-between">
+              <text class="text-14px font-bold text-[#1e293b]">{{ addr.name }}</text>
+              <text class="text-13px text-[#64748b]">{{ addr.mobile }}</text>
+            </view>
+            <text class="mt-8rpx text-13px text-[#64748b]">{{ addr.region }} {{ addr.detail }}</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 商品清单 -->
+      <view class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;">
+        <text class="text-15px font-bold text-[#1e293b] mb-16rpx">商品清单</text>
+        <view v-for="line in lineItems" :key="`${line.product_id}-${line.sku_id}`" class="mb-16rpx pb-16rpx flex flex-row" style="border-bottom-width: 1px; border-bottom-color: #e2e8f0; border-bottom-style: solid;">
+          <image v-if="line.image !== ''" class="w-100rpx h-100rpx rounded-8rpx mr-16rpx" :src="line.image" mode="aspectFill" />
+          <view class="flex-1">
+            <text class="text-14px text-[#1e293b]">{{ line.product_name }}</text>
+            <text v-if="line.spec_text !== ''" class="mt-4rpx block text-12px text-[#94a3b8]">{{ line.spec_text }}</text>
+            <view class="mt-8rpx flex flex-row items-center justify-between">
+              <text class="text-14px font-bold text-[#ef4444]">¥{{ fenToYuan(line.price) }}</text>
+              <text class="text-12px text-[#64748b]">× {{ line.quantity }}</text>
+            </view>
+          </view>
+        </view>
+        <view v-if="lineItems.length === 0 && !loading" class="py-20rpx items-center">
+          <text class="text-13px text-[#94a3b8]">{{ buyNowMode ? '商品信息加载失败' : '购物车为空' }}</text>
+        </view>
+      </view>
+
+      <!-- 优惠券 -->
+      <view class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #ffffff; border-width: 1px; border-color: #e2e8f0; border-style: solid;">
+        <view class="flex flex-row items-center justify-between" @click="toggleCouponPanel">
+          <text class="text-15px font-bold text-[#1e293b]">优惠券</text>
+          <view class="flex flex-row items-center">
+            <text v-if="selectedCoupon != null && discountAmount > 0" class="text-14px font-bold text-[#ef4444]">-¥{{ fenToYuan(discountAmount) }}</text>
+            <text v-else class="text-13px text-[#94a3b8]">{{ couponHint }}</text>
+            <text class="ml-8rpx text-12px text-[#94a3b8]">{{ showCouponPanel ? '▴' : '▾' }}</text>
+          </view>
+        </view>
+        <view v-if="showCouponPanel" class="mt-16rpx">
+          <view class="mb-12rpx px-16rpx py-14rpx rounded-8rpx" :style="couponRowStyle(null)" @click="selectCoupon(null)">
+            <text class="text-13px text-[#64748b]">不使用优惠券</text>
+          </view>
+          <view
+            v-for="c in selectableCoupons"
+            :key="c.id"
+            class="mb-12rpx px-16rpx py-14rpx rounded-8rpx"
+            :style="couponRowStyle(c)"
+            @click="selectCoupon(c)"
+          >
+            <view class="flex flex-row items-center justify-between">
+              <text class="text-14px font-bold text-[#1e293b]">{{ c.title }}</text>
+              <text class="text-14px font-bold text-[#ef4444]">-¥{{ fenToYuan(c.amount) }}</text>
+            </view>
+            <text class="mt-6rpx text-12px text-[#94a3b8]">满 ¥{{ fenToYuan(c.min_amount) }} 可用</text>
+            <text v-if="!isCouponEligible(c)" class="mt-4rpx text-12px text-[#f59e0b]">未满足使用门槛</text>
+          </view>
+          <view v-if="selectableCoupons.length === 0" class="py-12rpx items-center">
+            <text class="text-12px text-[#94a3b8]">暂无可用优惠券，</text>
+            <text class="text-12px text-[#0957DE]" @click="goCoupons">去领取 ›</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 买家备注 -->
+      <view v-if="lineItems.length > 0" class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #ffffff; border-width: 1px; border-color: #e2e8f0; border-style: solid;">
+        <text class="text-15px font-bold text-[#1e293b] mb-12rpx">买家备注</text>
+        <textarea
+          v-model="buyerRemark"
+          class="w-full text-13px text-[#1e293b]"
+          placeholder="选填，可填写配送要求等"
+          maxlength="200"
+          :auto-height="true"
+        />
+      </view>
+
+      <!-- 金额明细 -->
+      <view v-if="lineItems.length > 0" class="mx-30rpx mt-20rpx px-24rpx py-20rpx rounded-12px" style="background-color: #f8fafc;">
+        <view class="flex flex-row items-center justify-between mb-12rpx">
+          <text class="text-13px text-[#64748b]">商品合计</text>
+          <text class="text-13px text-[#1e293b]">¥{{ fenToYuan(goodsTotal) }}</text>
+        </view>
+        <view v-if="discountAmount > 0" class="flex flex-row items-center justify-between mb-12rpx">
+          <text class="text-13px text-[#64748b]">优惠券</text>
+          <text class="text-13px text-[#ef4444]">-¥{{ fenToYuan(discountAmount) }}</text>
+        </view>
+        <view class="flex flex-row items-center justify-between pt-12rpx" style="border-top-width: 1px; border-top-color: #e2e8f0; border-top-style: solid;">
+          <text class="text-14px font-bold text-[#1e293b]">应付</text>
+          <text class="text-16px font-bold text-[#ef4444]">¥{{ fenToYuan(payAmount) }}</text>
+        </view>
+      </view>
+    </view>
+
+    <view v-if="lineItems.length > 0" class="fixed bottom-0 left-0 right-0 px-30rpx py-20rpx flex flex-row items-center justify-between" style="background-color: #ffffff; border-top-width: 1px; border-top-color: #e2e8f0; border-top-style: solid;">
+      <view>
+        <text class="text-12px text-[#64748b]">应付</text>
+        <text class="text-18px font-bold text-[#ef4444]"> ¥{{ fenToYuan(payAmount) }}</text>
+      </view>
+      <view class="px-40rpx py-20rpx rounded-12rpx" :style="{ backgroundColor: submitting ? '#94a3b8' : '#0957DE' }" @click="submit">
+        <text class="text-15px font-bold text-[#ffffff]">{{ submitting ? '提交中…' : '提交订单' }}</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { listShopCart, listShopAddresses, createShopOrder, deleteShopCartItems } from '../../api/shop'
+import { payShopOrder, PayCancelledError } from '../../api/pay'
+import { listAppCoupons, listAppMyCoupons } from '../../api/app'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { fenToYuan } from '../../utils/format'
+import { enrichShopLineItems, sumLineItems } from '../../utils/shopDisplay'
+import { buildSelectableCoupons, calcCouponDiscount, isCouponUsable } from '../../utils/couponDisplay'
+import type { IShopAddress, IShopCartItem } from '../../api/shop'
+import type { IShopLineItem } from '../../utils/shopDisplay'
+import type { ISelectableCoupon } from '../../utils/couponDisplay'
+import type { IAppCoupon, IAppMyCoupon } from '../../api/app'
+
+const buyNowMode = ref<boolean>(false)
+const buyNowRaw = ref<{ product_id: number; sku_id: number; quantity: number }[]>([])
+const cartFilterIds = ref<number[]>([])
+const pendingCouponCode = ref<string>('')
+const lineItems = ref<IShopLineItem[]>([])
+const addresses = ref<IShopAddress[]>([])
+const selectedAddressId = ref<number>(0)
+const submitting = ref<boolean>(false)
+const loading = ref<boolean>(false)
+const selectableCoupons = ref<ISelectableCoupon[]>([])
+const selectedCoupon = ref<ISelectableCoupon | null>(null)
+const showCouponPanel = ref<boolean>(false)
+const buyerRemark = ref<string>('')
+
+const goodsTotal = computed<number>(() => sumLineItems(lineItems.value))
+const discountAmount = computed<number>(() => calcCouponDiscount(selectedCoupon.value, goodsTotal.value))
+const payAmount = computed<number>(() => goodsTotal.value - discountAmount.value)
+
+const couponHint = computed<string>(() => {
+  if (selectableCoupons.value.length === 0) {
+    return '暂无可用'
+  }
+  if (selectedCoupon.value != null) {
+    return selectedCoupon.value!.title
+  }
+  return `${selectableCoupons.value.length} 张可用`
+})
+
+onLoad((options: UTSJSONObject | null) => {
+  if (options != null) {
+    const productId = options['product_id'] as number | null
+    const skuId = options['sku_id'] as number | null
+    const qty = options['qty'] as number | null
+    if (productId != null && skuId != null) {
+      buyNowMode.value = true
+      buyNowRaw.value = [{
+        product_id: productId,
+        sku_id: skuId,
+        quantity: qty != null && qty > 0 ? qty : 1,
+      }]
+    }
+    const cartIdsRaw = options['cart_ids'] as string | null
+    if (cartIdsRaw != null && cartIdsRaw.length > 0) {
+      const parts = cartIdsRaw.split(',')
+      const ids: number[] = []
+      for (let i = 0; i < parts.length; i++) {
+        const n = parseInt(parts[i])
+        if (!isNaN(n) && n > 0) {
+          ids.push(n)
+        }
+      }
+      cartFilterIds.value = ids
+    }
+    const couponCodeRaw = options['coupon_code'] as string | null
+    if (couponCodeRaw != null && couponCodeRaw.length > 0) {
+      pendingCouponCode.value = couponCodeRaw
+    }
+  }
+  load()
+  loadCoupons()
+})
+
+onShow(() => {
+  loadAddresses()
+})
+
+function loadCoupons() {
+  Promise.all([
+    listAppMyCoupons(ZWEQ_ACCOUNT_ID, 1, 50),
+    listAppCoupons(ZWEQ_ACCOUNT_ID, 1, 50),
+  ])
+    .then((results: any[]) => {
+      const myList = (results[0] as UTSJSONObject)['list'] as IAppMyCoupon[]
+      const tplList = (results[1] as UTSJSONObject)['list'] as IAppCoupon[]
+      selectableCoupons.value = buildSelectableCoupons(myList, tplList)
+      if (pendingCouponCode.value.length > 0) {
+        for (let i = 0; i < selectableCoupons.value.length; i++) {
+          const c = selectableCoupons.value[i]
+          if (c.code === pendingCouponCode.value) {
+            selectedCoupon.value = c
+            pendingCouponCode.value = ''
+            break
+          }
+        }
+      }
+      if (selectedCoupon.value != null) {
+        const stillValid = isCouponEligible(selectedCoupon.value!)
+        if (!stillValid) {
+          selectedCoupon.value = null
+        }
+      }
+    })
+    .catch(() => {
+      selectableCoupons.value = []
+    })
+}
+
+function toggleCouponPanel() {
+  showCouponPanel.value = !showCouponPanel.value
+}
+
+function isCouponEligible(coupon: ISelectableCoupon): boolean {
+  return isCouponUsable(coupon, goodsTotal.value)
+}
+
+function selectCoupon(coupon: ISelectableCoupon | null) {
+  if (coupon != null && !isCouponEligible(coupon)) {
+    uni.showToast({ title: '未满足优惠券门槛', icon: 'none' })
+    return
+  }
+  selectedCoupon.value = coupon
+  showCouponPanel.value = false
+}
+
+function couponRowStyle(coupon: ISelectableCoupon | null): string {
+  const active = selectedCoupon.value == coupon || (coupon == null && selectedCoupon.value == null)
+  if (active) {
+    return 'background-color: rgba(9, 87, 222, 0.06); border-width: 1px; border-color: #0957DE; border-style: solid;'
+  }
+  return 'background-color: #f8fafc;'
+}
+
+function goCoupons() {
+  uni.navigateTo({ url: '/src/pages/scene/coupons' })
+}
+
+function load() {
+  loading.value = true
+  if (buyNowMode.value) {
+    Promise.all([
+      enrichShopLineItems(buyNowRaw.value),
+      listShopAddresses(ZWEQ_ACCOUNT_ID),
+    ])
+      .then((results: any[]) => {
+        lineItems.value = results[0] as IShopLineItem[]
+        addresses.value = results[1] as IShopAddress[]
+        pickDefaultAddress()
+      })
+      .catch(() => {
+        lineItems.value = []
+        addresses.value = []
+      })
+      .finally(() => {
+        loading.value = false
+      })
+    return
+  }
+
+  Promise.all([
+    listShopCart(ZWEQ_ACCOUNT_ID),
+    listShopAddresses(ZWEQ_ACCOUNT_ID),
+  ])
+    .then(async (results: any[]) => {
+      let carts = results[0] as IShopCartItem[]
+      addresses.value = results[1] as IShopAddress[]
+      pickDefaultAddress()
+      if (cartFilterIds.value.length > 0) {
+        const filtered: IShopCartItem[] = []
+        for (let i = 0; i < carts.length; i++) {
+          const c = carts[i]
+          for (let j = 0; j < cartFilterIds.value.length; j++) {
+            if (c.id === cartFilterIds.value[j]) {
+              filtered.push(c)
+              break
+            }
+          }
+        }
+        carts = filtered
+      }
+      const items: { product_id: number; sku_id: number; quantity: number }[] = []
+      for (let i = 0; i < carts.length; i++) {
+        const c = carts[i]
+        items.push({
+          product_id: c.product_id,
+          sku_id: c.sku_id,
+          quantity: c.quantity,
+        })
+      }
+      if (items.length === 0) {
+        lineItems.value = []
+        return
+      }
+      lineItems.value = await enrichShopLineItems(items)
+    })
+    .catch(() => {
+      lineItems.value = []
+      addresses.value = []
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function loadAddresses() {
+  listShopAddresses(ZWEQ_ACCOUNT_ID)
+    .then((res: any) => {
+      addresses.value = res as IShopAddress[]
+      pickDefaultAddress()
+    })
+    .catch(() => {})
+}
+
+function pickDefaultAddress() {
+  if (addresses.value.length === 0) {
+    selectedAddressId.value = 0
+    return
+  }
+  if (selectedAddressId.value > 0) {
+    for (let i = 0; i < addresses.value.length; i++) {
+      if (addresses.value[i].id === selectedAddressId.value) {
+        return
+      }
+    }
+  }
+  for (let i = 0; i < addresses.value.length; i++) {
+    if (addresses.value[i].is_default === 1) {
+      selectedAddressId.value = addresses.value[i].id
+      return
+    }
+  }
+  selectedAddressId.value = addresses.value[0].id
+}
+
+function selectAddress(id: number) {
+  selectedAddressId.value = id
+}
+
+function addressItemStyle(id: number): UTSJSONObject {
+  if (selectedAddressId.value === id) {
+    return { backgroundColor: 'rgba(9, 87, 222, 0.06)', borderWidth: '1px', borderColor: '#0957DE', borderStyle: 'solid' } as UTSJSONObject
+  }
+  return { backgroundColor: '#f8fafc' } as UTSJSONObject
+}
+
+function radioStyle(id: number): UTSJSONObject {
+  if (selectedAddressId.value === id) {
+    return { backgroundColor: '#0957DE', borderWidth: '1px', borderColor: '#0957DE', borderStyle: 'solid' } as UTSJSONObject
+  }
+  return { backgroundColor: '#ffffff', borderWidth: '1px', borderColor: '#cbd5e1', borderStyle: 'solid' } as UTSJSONObject
+}
+
+function goAddresses() {
+  uni.navigateTo({ url: '/src/pages/shop/addresses' })
+}
+
+function submit() {
+  if (submitting.value) return
+  if (lineItems.value.length === 0) {
+    uni.showToast({ title: buyNowMode.value ? '商品信息无效' : '购物车为空', icon: 'none' })
+    return
+  }
+  if (selectedAddressId.value <= 0) {
+    uni.showToast({ title: '请选择收货地址', icon: 'none' })
+    return
+  }
+  submitting.value = true
+  const items: { product_id: number; sku_id: number; quantity: number }[] = []
+  for (let i = 0; i < lineItems.value.length; i++) {
+    const line = lineItems.value[i]
+    items.push({
+      product_id: line.product_id,
+      sku_id: line.sku_id,
+      quantity: line.quantity,
+    })
+  }
+  const couponCode = selectedCoupon.value != null ? selectedCoupon.value!.code : ''
+  const remark = buyerRemark.value.trim()
+  createShopOrder(ZWEQ_ACCOUNT_ID, selectedAddressId.value, items, couponCode, remark)
+    .then(async (order: any) => {
+      const orderId = (order as UTSJSONObject)['id'] as number
+      if (!buyNowMode.value && cartFilterIds.value.length > 0) {
+        await deleteShopCartItems(cartFilterIds.value)
+      }
+      try {
+        await payShopOrder(orderId)
+      } catch (err) {
+        if (!(err instanceof PayCancelledError)) {
+          uni.showToast({ title: '支付未完成', icon: 'none' })
+        }
+      }
+      uni.redirectTo({ url: `/src/pages/shop/order-detail?id=${orderId}` })
+    })
+    .catch(() => {
+      uni.showToast({ title: '下单失败', icon: 'none' })
+    })
+    .finally(() => {
+      submitting.value = false
+    })
+}
+</script>

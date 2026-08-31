@@ -1,0 +1,182 @@
+<template>
+  <view>
+    <NavBar title="分销加盟" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view v-if="dist != null" class="mx-30rpx mt-30rpx px-24rpx py-32rpx rounded-12px" style="background-color: rgba(16, 185, 129, 0.1);">
+        <text class="text-12px text-[#64748b]">分销员状态</text>
+        <view class="mt-8rpx">
+          <text class="text-20px font-bold text-[#10b981]">已加盟</text>
+        </view>
+        <view class="mt-20rpx">
+          <text class="text-12px text-[#94a3b8]">可提现佣金</text>
+          <view class="mt-4rpx">
+            <text class="text-24px font-bold text-[#ef4444]">¥{{ fenToYuan(dist!.commission_balance) }}</text>
+          </view>
+        </view>
+        <view class="mt-16rpx">
+          <text class="text-12px text-[#94a3b8]">累计佣金</text>
+          <view class="mt-4rpx">
+            <text class="text-16px font-bold text-[#1e293b]">¥{{ fenToYuan(dist!.total_commission) }}</text>
+          </view>
+        </view>
+        <view v-if="dist!.parent_openid !== ''" class="mt-16rpx">
+          <text class="text-12px text-[#94a3b8]">上级</text>
+          <view class="mt-4rpx">
+            <text class="text-13px text-[#64748b]">{{ maskOpenid(dist!.parent_openid) }}</text>
+          </view>
+        </view>
+
+        <view v-if="dist!.commission_balance > 0" class="mt-24rpx">
+          <view class="flex flex-row items-center justify-between mb-12rpx">
+            <text class="text-13px text-[#64748b]">提现金额（元）</text>
+            <text class="text-12px text-[#0957DE]" @click="fillAllBalance">全部提现</text>
+          </view>
+          <input
+            v-model="withdrawYuan"
+            class="h-72rpx px-16rpx rounded-8rpx text-14px"
+            style="background-color: #ffffff;"
+            type="digit"
+            placeholder="输入提现金额"
+          />
+          <view
+            class="mt-20rpx px-48rpx py-20rpx rounded-12rpx items-center"
+            :style="{ backgroundColor: withdrawing ? '#cbd5e1' : '#10b981' }"
+            @click="doWithdraw"
+          >
+            <text class="text-16px font-bold text-[#ffffff]">{{ withdrawing ? '提交中...' : '申请提现' }}</text>
+          </view>
+          <text class="mt-12rpx block text-11px text-[#94a3b8]">提现后进入审核，佣金将从可提现余额中扣减</text>
+        </view>
+      </view>
+
+      <view v-else class="mx-30rpx mt-30rpx px-24rpx py-40rpx rounded-12px" style="background-color: #f8fafc;">
+        <view class="items-center">
+          <text class="text-48px">💰</text>
+          <view class="mt-16rpx">
+            <text class="text-14px text-[#64748b]">加入分销，分享赚佣金</text>
+          </view>
+        </view>
+        <view class="mt-24rpx px-20rpx py-16rpx rounded-8rpx" style="background-color: #ffffff;">
+          <view class="mb-8rpx">
+            <text class="text-12px text-[#94a3b8]">上级 openid（选填）</text>
+          </view>
+          <input
+            class="text-14px text-[#1e293b]"
+            v-model="parentOpenid"
+            placeholder="留空则无上级"
+          />
+        </view>
+        <view
+          class="mt-24rpx px-48rpx py-20rpx rounded-12rpx items-center"
+          :style="{ backgroundColor: joining ? '#cbd5e1' : '#10b981' }"
+          @click="doJoin"
+        >
+          <text class="text-16px font-bold text-[#ffffff]">{{ joining ? '加盟中...' : '立即加盟' }}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { getAppDistribution, joinAppDistribution, withdrawAppDistribution } from '../../api/app'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import { fenToYuan, maskOpenid } from '../../utils/format'
+import type { IAppDistribution } from '../../api/app'
+
+const dist = ref<IAppDistribution | null>(null)
+const loading = ref<boolean>(false)
+const joining = ref<boolean>(false)
+const withdrawing = ref<boolean>(false)
+const parentOpenid = ref<string>('')
+const withdrawYuan = ref<string>('')
+
+onLoad(() => {
+  load()
+})
+
+onShow(() => {
+  load()
+})
+
+function load() {
+  loading.value = true
+  getAppDistribution(ZWEQ_ACCOUNT_ID)
+    .then((res: any) => {
+      dist.value = res as IAppDistribution | null
+    })
+    .catch(() => {
+      dist.value = null
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function fillAllBalance() {
+  if (dist.value == null) return
+  withdrawYuan.value = fenToYuan(dist.value.commission_balance)
+}
+
+function parseYuanToFen(yuan: string): number {
+  const trimmed = yuan.trim()
+  if (trimmed.length === 0) {
+    return 0
+  }
+  const parts = trimmed.split('.')
+  const intPart = parseInt(parts[0])
+  if (isNaN(intPart) || intPart < 0) {
+    return 0
+  }
+  let fen = intPart * 100
+  if (parts.length > 1) {
+    const dec = parts[1].length > 2 ? parts[1].substring(0, 2) : parts[1]
+    const decNum = parseInt(dec.padEnd(2, '0'))
+    if (!isNaN(decNum)) {
+      fen += decNum
+    }
+  }
+  return fen
+}
+
+function doWithdraw() {
+  if (withdrawing.value || dist.value == null) return
+  const amount = parseYuanToFen(withdrawYuan.value)
+  if (amount <= 0) {
+    uni.showToast({ title: '请输入有效金额', icon: 'none' })
+    return
+  }
+  if (amount > dist.value.commission_balance) {
+    uni.showToast({ title: '超出可提现余额', icon: 'none' })
+    return
+  }
+  withdrawing.value = true
+  withdrawAppDistribution(ZWEQ_ACCOUNT_ID, amount)
+    .then(() => {
+      uni.showToast({ title: '提现申请已提交', icon: 'success' })
+      withdrawYuan.value = ''
+      load()
+    })
+    .catch(() => {
+      uni.showToast({ title: '提现失败', icon: 'none' })
+    })
+    .finally(() => {
+      withdrawing.value = false
+    })
+}
+
+function doJoin() {
+  if (joining.value) return
+  joining.value = true
+  joinAppDistribution(ZWEQ_ACCOUNT_ID, parentOpenid.value)
+    .then(() => {
+      uni.showToast({ title: '加盟成功', icon: 'success' })
+      load()
+    })
+    .catch(() => {})
+    .finally(() => {
+      joining.value = false
+    })
+}
+</script>

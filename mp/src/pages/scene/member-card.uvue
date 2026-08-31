@@ -1,0 +1,115 @@
+<template>
+  <view>
+    <NavBar title="会员卡" :show-back="true" />
+    <view class="content-container pb-20px">
+      <view v-if="card != null" class="mx-30rpx mt-30rpx px-24rpx py-32rpx rounded-12px" style="background-color: rgba(9, 87, 222, 0.1);">
+        <text class="text-12px text-[#64748b]">当前等级</text>
+        <view class="mt-8rpx">
+          <text class="text-28px font-bold text-[#0957DE]">{{ card!.level_name }}</text>
+        </view>
+        <view class="mt-20rpx flex flex-row flex-wrap">
+          <view class="w-300rpx mb-12rpx">
+            <text class="text-12px text-[#94a3b8]">等级</text>
+            <view class="mt-4rpx">
+              <text class="text-14px font-bold text-[#1e293b]">Lv.{{ card!.level }}</text>
+            </view>
+          </view>
+          <view class="w-300rpx mb-12rpx">
+            <text class="text-12px text-[#94a3b8]">折扣</text>
+            <view class="mt-4rpx">
+              <text class="text-14px font-bold text-[#1e293b]">{{ formatDiscount(card!.discount) }}</text>
+            </view>
+          </view>
+          <view class="w-300rpx mb-12rpx">
+            <text class="text-12px text-[#94a3b8]">可用积分</text>
+            <view class="mt-4rpx">
+              <text class="text-14px font-bold text-[#ef4444]">{{ card!.points }}</text>
+            </view>
+          </view>
+          <view class="w-300rpx mb-12rpx">
+            <text class="text-12px text-[#94a3b8]">累计积分</text>
+            <view class="mt-4rpx">
+              <text class="text-14px font-bold text-[#1e293b]">{{ card!.total_points }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <view v-else class="mx-30rpx mt-30rpx px-24rpx py-40rpx rounded-12px items-center" style="background-color: #f8fafc;">
+        <text class="text-48px">💳</text>
+        <view class="mt-16rpx">
+          <text class="text-14px text-[#64748b]">您尚未开通会员卡</text>
+        </view>
+        <view
+          class="mt-30rpx px-48rpx py-20rpx rounded-12rpx"
+          :style="{ backgroundColor: opening ? '#cbd5e1' : '#0957DE' }"
+          @click="doOpen"
+        >
+          <text class="text-16px font-bold text-[#ffffff]">{{ opening ? '办理中...' : '立即办卡' }}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { getAppMemberCard, openAppMemberCard } from '../../api/app'
+import { ZWEQ_ACCOUNT_ID } from '../../config/zweq'
+import type { IAppMemberCard } from '../../api/app'
+
+const card = ref<IAppMemberCard | null>(null)
+const loading = ref<boolean>(false)
+const opening = ref<boolean>(false)
+
+function formatDiscount(discount: number): string {
+  if (discount >= 1000) {
+    return '无折扣'
+  }
+  const zhe = discount / 100
+  const whole = Math.floor(zhe)
+  const dec = Math.round((zhe - whole) * 10)
+  if (dec === 0) {
+    return `${whole} 折`
+  }
+  return `${whole}.${dec} 折`
+}
+
+onLoad(() => {
+  load()
+})
+
+onShow(() => {
+  load()
+})
+
+function load() {
+  loading.value = true
+  getAppMemberCard(ZWEQ_ACCOUNT_ID)
+    .then((res: any) => {
+      card.value = res as IAppMemberCard | null
+    })
+    .catch(() => {
+      card.value = null
+    })
+    .finally(() => {
+      loading.value = false
+    })
+}
+
+function doOpen() {
+  if (opening.value) return
+  opening.value = true
+  openAppMemberCard(ZWEQ_ACCOUNT_ID)
+    .then(() => {
+      uni.showToast({ title: '办卡成功', icon: 'success' })
+      load()
+    })
+    .catch(() => {
+      uni.showToast({ title: '办卡失败', icon: 'none' })
+    })
+    .finally(() => {
+      opening.value = false
+    })
+}
+</script>
