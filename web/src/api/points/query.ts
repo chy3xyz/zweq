@@ -63,8 +63,10 @@ export async function adjustPoints(accountId: number, body: AdjustRequest): Prom
   return unwrapEnvelope(data);
 }
 
+/// 后端返回 `data = { items: [...] }`（非分页信封），此处归一为数组。
 export async function listPointsOrders(accountId: number): Promise<PointsOrder[]> {
-  return getEnvelope<PointsOrder[]>(orderListQuery(accountId));
+  const res = await getEnvelope<{ items?: PointsOrder[] }>(orderListQuery(accountId));
+  return res.items ?? [];
 }
 
 export type { PointsOrder, PointsProduct, PointsProductListResult };

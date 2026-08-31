@@ -1,4 +1,4 @@
-import { Show, createSignal } from 'solid-js';
+import { For, Show, createSignal } from 'solid-js';
 
 import {
   completeRecharge,
@@ -18,9 +18,11 @@ import { usePaged } from '#ui/hooks/usePaged';
 import { formatDateTime } from '#ui/utils';
 
 const PAGE_SIZE = 20;
+const TABS = ['充值支付', '提现管理'] as const;
 
 function Payments() {
   const { accountId, onAccountChange } = useAccountId();
+  const [tab, setTab] = createSignal<(typeof TABS)[number]>('充值支付');
   const [success, setSuccess] = createSignal<string | null>(null);
   const [fanId, setFanId] = createSignal(0);
   const [amount, setAmount] = createSignal(0);
@@ -121,84 +123,110 @@ function Payments() {
 
       <AccountRequiredBanner />
 
-      <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <form onSubmit={onRecharge} class="rounded-lg border border-base-300 bg-base-200/40 p-4 space-y-3">
-          <div class="flex items-center justify-between">
-            <span class="text-sm font-semibold">会员充值</span>
-            <Show when={walletBalance() !== null}>
-              <span class="badge badge-success">钱包余额：{(walletBalance() ?? 0) / 100} 元</span>
-            </Show>
-          </div>
-          <div class="flex items-end gap-2">
-            <label class="form-control">
-              <span class="label-text mb-1">粉丝 ID</span>
-              <input type="number" class="input input-bordered input-sm w-32" value={fanId()} onInput={(e) => setFanId(Number(e.currentTarget.value))} required />
-            </label>
-            <label class="form-control">
-              <span class="label-text mb-1">金额（分）</span>
-              <input type="number" class="input input-bordered input-sm w-32" value={amount()} onInput={(e) => setAmount(Number(e.currentTarget.value))} min={1} required />
-            </label>
-            <button type="submit" class="btn btn-primary btn-sm">
-              充值
-            </button>
-          </div>
-        </form>
-
-        <form onSubmit={onWithdraw} class="rounded-lg border border-base-300 bg-base-200/40 p-4 space-y-3">
-          <span class="text-sm font-semibold">申请提现</span>
-          <div class="flex items-end gap-2">
-            <label class="form-control">
-              <span class="label-text mb-1">粉丝 ID</span>
-              <input type="number" class="input input-bordered input-sm w-32" value={fanId()} onInput={(e) => setFanId(Number(e.currentTarget.value))} required />
-            </label>
-            <label class="form-control">
-              <span class="label-text mb-1">金额（分）</span>
-              <input type="number" class="input input-bordered input-sm w-32" value={amount()} onInput={(e) => setAmount(Number(e.currentTarget.value))} min={1} required />
-            </label>
-            <button type="submit" class="btn btn-outline btn-sm">
-              提现
-            </button>
-          </div>
-        </form>
-      </div>
-
       <Show when={success()}>
         <div role="alert" class="alert alert-success py-2 text-sm">
           {success()}
         </div>
       </Show>
 
-      <div>
-        <h3 class="mb-2 text-sm font-semibold">充值订单</h3>
-        <DataTable
-          columns={orderColumns}
-          rows={orders.items()}
-          rowKey={(o) => o.id}
-          total={orders.total()}
-          page={orders.page()}
-          totalPages={orders.totalPages()}
-          loading={orders.loading()}
-          error={orders.error()}
-          emptyText="暂无订单"
-          onPageChange={(p) => void orders.reload(p)}
-        />
+      <div role="tablist" class="tabs tabs-box">
+        <For each={TABS}>
+          {(item) => (
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              classList={{ 'tab-active': tab() === item }}
+              onClick={() => setTab(item)}
+            >
+              {item}
+            </button>
+          )}
+        </For>
       </div>
 
-      <div>
-        <h3 class="mb-2 text-sm font-semibold">提现记录</h3>
-        <DataTable
-          columns={withdrawColumns}
-          rows={withdraws.items()}
-          rowKey={(w) => w.id}
-          total={withdraws.total()}
-          page={withdraws.page()}
-          totalPages={withdraws.totalPages()}
-          loading={withdraws.loading()}
-          error={withdraws.error()}
-          emptyText="暂无提现记录"
-          onPageChange={(p) => void withdraws.reload(p)}
-        />
-      </div>
+      <Show when={tab() === '充值支付'}>
+        <div class="space-y-4">
+          <form onSubmit={onRecharge} class="rounded-box border border-base-300 bg-base-100 p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-semibold">会员充值</span>
+              <Show when={walletBalance() !== null}>
+                <span class="badge badge-success">钱包余额：{(walletBalance() ?? 0) / 100} 元</span>
+              </Show>
+            </div>
+            <div class="flex items-end gap-2">
+              <label class="form-control">
+                <span class="label-text mb-1">粉丝 ID</span>
+                <input type="number" class="input input-bordered input-sm w-32" value={fanId()} onInput={(e) => setFanId(Number(e.currentTarget.value))} required />
+              </label>
+              <label class="form-control">
+                <span class="label-text mb-1">金额（分）</span>
+                <input type="number" class="input input-bordered input-sm w-32" value={amount()} onInput={(e) => setAmount(Number(e.currentTarget.value))} min={1} required />
+              </label>
+              <button type="submit" class="btn btn-primary btn-sm">
+                充值
+              </button>
+            </div>
+          </form>
+
+          <div class="rounded-box border border-base-300 bg-base-100 p-4">
+            <h3 class="mb-3 text-sm font-semibold">充值订单</h3>
+            <DataTable
+              columns={orderColumns}
+              rows={orders.items()}
+              rowKey={(o) => o.id}
+              total={orders.total()}
+              page={orders.page()}
+              totalPages={orders.totalPages()}
+              pageSize={orders.pageSize()}
+              loading={orders.loading()}
+              error={orders.error()}
+              emptyText="暂无订单"
+              onPageChange={(p) => void orders.reload(p)}
+              onPageSizeChange={(size) => orders.setPageSize(size)}
+            />
+          </div>
+        </div>
+      </Show>
+
+      <Show when={tab() === '提现管理'}>
+        <div class="space-y-4">
+          <form onSubmit={onWithdraw} class="rounded-box border border-base-300 bg-base-100 p-4 space-y-3">
+            <span class="text-sm font-semibold">申请提现</span>
+            <div class="flex items-end gap-2">
+              <label class="form-control">
+                <span class="label-text mb-1">粉丝 ID</span>
+                <input type="number" class="input input-bordered input-sm w-32" value={fanId()} onInput={(e) => setFanId(Number(e.currentTarget.value))} required />
+              </label>
+              <label class="form-control">
+                <span class="label-text mb-1">金额（分）</span>
+                <input type="number" class="input input-bordered input-sm w-32" value={amount()} onInput={(e) => setAmount(Number(e.currentTarget.value))} min={1} required />
+              </label>
+              <button type="submit" class="btn btn-outline btn-sm">
+                提现
+              </button>
+            </div>
+          </form>
+
+          <div class="rounded-box border border-base-300 bg-base-100 p-4">
+            <h3 class="mb-3 text-sm font-semibold">提现记录</h3>
+            <DataTable
+              columns={withdrawColumns}
+              rows={withdraws.items()}
+              rowKey={(w) => w.id}
+              total={withdraws.total()}
+              page={withdraws.page()}
+              totalPages={withdraws.totalPages()}
+              pageSize={withdraws.pageSize()}
+              loading={withdraws.loading()}
+              error={withdraws.error()}
+              emptyText="暂无提现记录"
+              onPageChange={(p) => void withdraws.reload(p)}
+              onPageSizeChange={(size) => withdraws.setPageSize(size)}
+            />
+          </div>
+        </div>
+      </Show>
     </div>
   );
 }
