@@ -9,6 +9,10 @@ zig-pkg/
 web/node_modules/
 web/dist/
 
+# Python (scripts/, tools/gen_module.py)
+__pycache__/
+*.py[cod]
+
 # Frontend env (use web/.env.example as template)
 web/.env
 
@@ -34,6 +38,8 @@ dev.md
 # Local database (dev data)
 zenaipa.db
 *.db
+*.db-wal
+*.db-shm
 
 # Uploaded files (runtime data)
 uploads/
