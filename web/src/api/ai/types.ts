@@ -101,3 +101,7 @@ export interface AiWorkflowResult {
   status: string;
   steps: AiWorkflowStep[];
 }
+
+export interface AiSkillsResult {
+  skills: string[];
+}

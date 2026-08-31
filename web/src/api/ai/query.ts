@@ -5,6 +5,7 @@ import {
   AI_PATH,
   aiApprovalResolve,
   aiApprovalsQuery,
+  aiProviderCheck,
   aiProviderDetail,
   aiProvidersQuery,
   aiRunsQuery,
@@ -20,6 +21,7 @@ import type {
   AiProviderListResult,
   AiRunListResult,
   AiSessionListResult,
+  AiSkillsResult,
   AiWorkflowResult,
 } from './types';
 
@@ -60,7 +62,8 @@ export async function listAiProviders(page: number, pageSize: number): Promise<A
 export async function createAiProvider(body: {
   name: string;
   endpoint: string;
-  api_keys: string;
+  /** One or more provider keys; the backend stores them encrypted. */
+  api_keys: string[];
   models: string;
   fallback_providers?: string;
   enabled?: boolean;
@@ -73,7 +76,8 @@ export async function updateAiProvider(
   body: Partial<{
     name: string;
     endpoint: string;
-    api_keys: string;
+    /** Omit to keep the existing keys (they are never returned by the API). */
+    api_keys: string[];
     models: string;
     fallback_providers: string;
     enabled: boolean;
@@ -88,7 +92,7 @@ export async function deleteAiProvider(id: number): Promise<void> {
 }
 
 export async function checkAiProvider(id: number): Promise<{ status: string }> {
-  return postEnvelope<{ status: string }>(`${AI_PATH.providers}/${id}/check`);
+  return postEnvelope<{ status: string }>(aiProviderCheck(id));
 }
 
 export async function listAiApprovals(page: number, pageSize: number, status?: string): Promise<AiApprovalListResult> {
@@ -105,4 +109,15 @@ export async function listAiRuns(page: number, pageSize: number): Promise<AiRunL
 
 export async function runAiWorkflow(): Promise<AiWorkflowResult> {
   return postEnvelope<AiWorkflowResult>(AI_PATH.workflowRun);
+}
+
+/** Read-only list of registered AI skills (agent capabilities). */
+export async function listAiSkills(): Promise<AiSkillsResult> {
+  return getEnvelope<AiSkillsResult>(AI_PATH.skills);
+}
+
+/** Prometheus-format metrics text from the AI module (raw, not an envelope). */
+export async function listAiMetrics(): Promise<string> {
+  const { data } = await http.get<string>(AI_PATH.metrics, { responseType: 'text' });
+  return data;
 }

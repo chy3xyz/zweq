@@ -10,6 +10,8 @@ export {
   listAiMessages,
   listAiProviders,
   listAiRuns,
+  listAiSkills,
+  listAiMetrics,
   listAiSessions,
   resolveAiApproval,
   runAiWorkflow,
