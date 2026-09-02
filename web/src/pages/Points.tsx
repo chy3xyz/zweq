@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 
 import {
   adjustPoints,
@@ -11,13 +11,21 @@ import {
   type PointsOrder,
   type PointsProduct,
 } from '#ui/api';
+import { fileUrl as publicFileUrl } from '#ui/api/file/types';
 import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import AdminCrudPage from '#ui/components/AdminCrudPage';
 import DataTable, { type Column } from '#ui/components/DataTable';
+import FormField from '#ui/components/FormField';
 import FormModal from '#ui/components/FormModal';
+import ImageManager from '#ui/components/ImageManager';
+import RichEditor from '#ui/components/RichEditor';
 import SearchBar, { type SearchField, type SearchValues } from '#ui/components/SearchBar';
+import Tabs from '#ui/components/Tabs';
 import { useAccountId, useFeedback, useLocalPaged, usePaged } from '#ui/hooks';
 import { formatDateTime, intParam } from '#ui/utils';
+
+const TABS = ['积分商品', '兑换记录'] as const;
+type Tab = (typeof TABS)[number];
 
 const ORDER_FIELDS: SearchField[] = [
   { kind: 'text', key: 'keyword', label: '粉丝 / 商品', placeholder: '输入 openid 或商品名' },
@@ -29,19 +37,36 @@ interface ProductForm {
   points: number;
   stock: number;
   status: number;
+  image: string;
+  detail: string;
 }
 
-const EMPTY_FORM: ProductForm = { id: null, name: '', points: 0, stock: 0, status: 1 };
+const EMPTY_FORM: ProductForm = {
+  id: null,
+  name: '',
+  points: 0,
+  stock: 0,
+  status: 1,
+  image: '',
+  detail: '',
+};
+
+/** 去除富文本 HTML 标签，用于列表摘要展示。 */
+function stripTags(html: string): string {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 function Points() {
   const { accountId, ready, accountName } = useAccountId();
   const feedback = useFeedback();
 
+  const [tab, setTab] = createSignal<Tab>('积分商品');
   const [filters, setFilters] = createSignal<SearchValues>({});
   const [orderFilters, setOrderFilters] = createSignal<SearchValues>({});
 
   const [formOpen, setFormOpen] = createSignal(false);
   const [form, setForm] = createSignal<ProductForm>({ ...EMPTY_FORM });
+  const [imagePickerOpen, setImagePickerOpen] = createSignal(false);
   const [adjustOpen, setAdjustOpen] = createSignal(false);
   const [adjustOpenid, setAdjustOpenid] = createSignal('');
   const [adjustDelta, setAdjustDelta] = createSignal(0);
@@ -89,6 +114,8 @@ function Points() {
       points: row.points,
       stock: row.stock,
       status: row.status,
+      image: row.image,
+      detail: row.detail,
     });
     setFormOpen(true);
   };
@@ -104,6 +131,8 @@ function Points() {
         points: current.points,
         stock: current.stock,
         status: current.status,
+        image: current.image.trim(),
+        detail: current.detail.trim(),
       };
       if (current.id == null) {
         await createProduct(accountId(), body);
@@ -178,6 +207,8 @@ function Points() {
           points: row.points,
           stock: row.stock,
           status: next,
+          image: row.image,
+          detail: row.detail,
         }),
       success: next === 1 ? '商品已上架' : '商品已下架',
       onDone: () => void paged.refresh(),
@@ -185,6 +216,16 @@ function Points() {
   };
 
   const columns: Column<PointsProduct>[] = [
+    {
+      key: 'image',
+      title: '图片',
+      render: (r) =>
+        r.image ? (
+          <img src={r.image} alt={r.name} class="h-10 w-10 rounded object-cover" />
+        ) : (
+          <span class="text-xs text-base-content/40">无图</span>
+        ),
+    },
     { key: 'name', title: '商品', render: (r) => <span class="font-medium">{r.name}</span> },
     { key: 'points', title: '所需积分', render: (r) => <span class="font-semibold">{r.points}</span> },
     {
@@ -202,6 +243,18 @@ function Points() {
           {r.status === 1 ? '上架' : '下架'}
         </span>
       ),
+    },
+    {
+      key: 'detail',
+      title: '详情摘要',
+      render: (r) => {
+        const text = stripTags(r.detail);
+        return (
+          <span class="block max-w-[12rem] truncate text-sm text-base-content/70" title={text}>
+            {text || '-'}
+          </span>
+        );
+      },
     },
     {
       key: 'created_at',
@@ -223,118 +276,128 @@ function Points() {
 
   return (
     <div class="space-y-4">
-      <AdminCrudPage
-        title="积分商城"
-        description={ready() ? `当前公众号：${accountName()}` : undefined}
-        total={paged.total()}
-        onCreate={ready() ? openCreate : undefined}
-        createLabel="新增商品"
-        onRefresh={() => void paged.refresh()}
-        extra={
-          <button
-            type="button"
-            class="btn btn-outline btn-sm"
-            disabled={!ready()}
-            onClick={() => {
-              setError(null);
-              setAdjustOpen(true);
-            }}
-          >
-            调整积分
-          </button>
-        }
-        search={
-          <SearchBar
-            fields={[
-              { kind: 'text', key: 'keyword', label: '商品名', placeholder: '输入商品名关键字' },
-              {
-                kind: 'select',
-                key: 'status',
-                label: '状态',
-                options: [
-                  { value: '', label: '全部' },
-                  { value: '1', label: '上架' },
-                  { value: '0', label: '下架' },
-                ],
-              },
-            ]}
-            loading={paged.loading()}
-            onSearch={setFilters}
-          />
-        }
-      >
-        <AccountRequiredBanner />
+      <div>
+        <h2 class="text-xl font-semibold">积分商城</h2>
+        <p class="text-sm text-base-content/60">积分商品管理与兑换记录</p>
+      </div>
 
-        <DataTable
-          columns={columns}
-          rows={paged.items()}
-          rowKey={(r) => r.id}
+      <AccountRequiredBanner />
+
+      <Tabs tabs={[...TABS]} active={tab()} onChange={setTab} />
+
+      <Show when={tab() === '积分商品'}>
+        <AdminCrudPage
+          title="积分商品"
+          description={ready() ? `当前公众号：${accountName()}` : undefined}
           total={paged.total()}
-          page={paged.page()}
-          totalPages={paged.totalPages()}
-          pageSize={paged.pageSize()}
-          loading={paged.loading()}
-          error={paged.error()}
-          emptyText="暂无积分商品"
-          onPageChange={(p) => void paged.reload(p)}
-          onPageSizeChange={(size) => paged.setPageSize(size)}
-          actions={(row) => (
-            <>
-              <button type="button" class="btn btn-ghost btn-xs" onClick={() => openEdit(row)}>
-                编辑
-              </button>
-              <button
-                type="button"
-                class="btn btn-ghost btn-xs"
-                onClick={() => void onToggleStatus(row)}
-              >
-                {row.status === 1 ? '下架' : '上架'}
-              </button>
-              <button
-                type="button"
-                class="btn btn-ghost btn-xs text-primary"
-                disabled={row.stock <= 0}
-                onClick={() => {
-                  setError(null);
-                  setRedeemOpenid('');
-                  setRedeemTarget(row);
-                }}
-              >
-                兑换
-              </button>
-              <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDelete(row)}>
-                删除
-              </button>
-            </>
-          )}
-        />
-      </AdminCrudPage>
+          onCreate={ready() ? openCreate : undefined}
+          createLabel="新增商品"
+          onRefresh={() => void paged.refresh()}
+          search={
+            <SearchBar
+              fields={[
+                { kind: 'text', key: 'keyword', label: '商品名', placeholder: '输入商品名关键字' },
+                {
+                  kind: 'select',
+                  key: 'status',
+                  label: '状态',
+                  options: [
+                    { value: '', label: '全部' },
+                    { value: '1', label: '上架' },
+                    { value: '0', label: '下架' },
+                  ],
+                },
+              ]}
+              loading={paged.loading()}
+              onSearch={setFilters}
+            />
+          }
+        >
+          <DataTable
+            columns={columns}
+            rows={paged.items()}
+            rowKey={(r) => r.id}
+            total={paged.total()}
+            page={paged.page()}
+            totalPages={paged.totalPages()}
+            pageSize={paged.pageSize()}
+            loading={paged.loading()}
+            error={paged.error()}
+            emptyText="暂无积分商品"
+            onPageChange={(p) => void paged.reload(p)}
+            onPageSizeChange={(size) => paged.setPageSize(size)}
+            actions={(row) => (
+              <>
+                <button type="button" class="btn btn-ghost btn-xs" onClick={() => openEdit(row)}>
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs"
+                  onClick={() => void onToggleStatus(row)}
+                >
+                  {row.status === 1 ? '下架' : '上架'}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs text-primary"
+                  disabled={row.stock <= 0}
+                  onClick={() => {
+                    setError(null);
+                    setRedeemOpenid('');
+                    setRedeemTarget(row);
+                  }}
+                >
+                  兑换
+                </button>
+                <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDelete(row)}>
+                  删除
+                </button>
+              </>
+            )}
+          />
+        </AdminCrudPage>
+      </Show>
 
-      <section class="rounded-box border border-base-300 bg-base-100 p-4">
-        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h3 class="text-lg font-semibold">兑换订单</h3>
-          <button type="button" class="btn btn-ghost btn-sm" onClick={() => void orders.reload()}>
-            刷新
-          </button>
-        </div>
-        <div class="mb-4">
-          <SearchBar fields={ORDER_FIELDS} loading={orders.loading()} onSearch={setOrderFilters} />
-        </div>
-        <DataTable
-          columns={orderColumns}
-          rows={orders.items()}
-          rowKey={(r) => r.id}
+      <Show when={tab() === '兑换记录'}>
+        <AdminCrudPage
+          title="兑换记录"
+          description="粉丝积分兑换订单"
           total={orders.total()}
-          page={orders.page()}
-          totalPages={orders.totalPages()}
-          pageSize={orders.pageSize()}
-          loading={orders.loading()}
-          error={orders.error()}
-          emptyText="暂无兑换订单"
-          onPageChange={(p) => orders.setPage(p)}
-          onPageSizeChange={(size) => orders.setPageSize(size)}
-        />
-      </section>
+          onRefresh={() => void orders.reload()}
+          extra={
+            <button
+              type="button"
+              class="btn btn-outline btn-sm"
+              disabled={!ready()}
+              onClick={() => {
+                setError(null);
+                setAdjustOpen(true);
+              }}
+            >
+              调整积分
+            </button>
+          }
+          search={
+            <SearchBar fields={ORDER_FIELDS} loading={orders.loading()} onSearch={setOrderFilters} />
+          }
+        >
+          <DataTable
+            columns={orderColumns}
+            rows={orders.items()}
+            rowKey={(r) => r.id}
+            total={orders.total()}
+            page={orders.page()}
+            totalPages={orders.totalPages()}
+            pageSize={orders.pageSize()}
+            loading={orders.loading()}
+            error={orders.error()}
+            emptyText="暂无兑换订单"
+            onPageChange={(p) => orders.setPage(p)}
+            onPageSizeChange={(size) => orders.setPageSize(size)}
+          />
+        </AdminCrudPage>
+      </Show>
 
       <FormModal
         open={formOpen()}
@@ -343,52 +406,92 @@ function Points() {
         onClose={() => setFormOpen(false)}
         submitting={submitting()}
         error={error()}
-        size="sm"
       >
-        <label class="form-control">
-          <span class="label-text mb-1">商品名称</span>
+        <FormField label="商品名称" required>
           <input
-            class="input input-bordered input-sm"
+            type="text"
+            class="input input-bordered input-sm w-full"
+            placeholder="商品名称"
             value={form().name}
             onInput={(e) => setForm((prev) => ({ ...prev, name: e.currentTarget.value }))}
             required
           />
-        </label>
-        <label class="form-control">
-          <span class="label-text mb-1">上架状态</span>
+        </FormField>
+        <div class="grid grid-cols-2 gap-3">
+          <FormField label="所需积分" required>
+            <input
+              class="input input-bordered input-sm w-full"
+              type="number"
+              min="1"
+              value={form().points}
+              onInput={(e) =>
+                setForm((prev) => ({ ...prev, points: Math.max(1, Number(e.currentTarget.value) || 0) }))
+              }
+              required
+            />
+          </FormField>
+          <FormField label="库存" required>
+            <input
+              class="input input-bordered input-sm w-full"
+              type="number"
+              min="0"
+              value={form().stock}
+              onInput={(e) =>
+                setForm((prev) => ({ ...prev, stock: Math.max(0, Number(e.currentTarget.value) || 0) }))
+              }
+              required
+            />
+          </FormField>
+        </div>
+        <FormField label="上架状态">
           <select
-            class="select select-bordered select-sm"
+            class="select select-bordered select-sm w-full"
             value={form().status}
             onChange={(e) => setForm((prev) => ({ ...prev, status: Number(e.currentTarget.value) }))}
           >
             <option value={1}>上架</option>
             <option value={0}>下架</option>
           </select>
-        </label>
-        <div class="grid grid-cols-2 gap-3">
-          <label class="form-control">
-            <span class="label-text mb-1">所需积分</span>
+        </FormField>
+        <FormField label="封面图">
+          <div class="flex flex-wrap items-center gap-3">
+            <Show when={form().image}>
+              <img src={form().image} alt="封面" class="h-16 w-16 rounded border object-cover" />
+            </Show>
+            <button type="button" class="btn btn-outline btn-sm" onClick={() => setImagePickerOpen(true)}>
+              选择图片
+            </button>
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm"
+              onClick={() => setForm((prev) => ({ ...prev, image: '' }))}
+              disabled={!form().image}
+            >
+              清除
+            </button>
             <input
-              class="input input-bordered input-sm"
-              type="number"
-              min="0"
-              value={form().points}
-              onInput={(e) => setForm((prev) => ({ ...prev, points: Number(e.currentTarget.value) || 0 }))}
-              required
+              type="text"
+              class="input input-bordered input-sm flex-1"
+              placeholder="/uploads/... 或 https://..."
+              value={form().image}
+              onInput={(e) => setForm((prev) => ({ ...prev, image: e.currentTarget.value }))}
             />
-          </label>
-          <label class="form-control">
-            <span class="label-text mb-1">库存</span>
-            <input
-              class="input input-bordered input-sm"
-              type="number"
-              min="0"
-              value={form().stock}
-              onInput={(e) => setForm((prev) => ({ ...prev, stock: Number(e.currentTarget.value) || 0 }))}
-              required
-            />
-          </label>
-        </div>
+          </div>
+          <ImageManager
+            open={imagePickerOpen()}
+            multiple={false}
+            max={1}
+            onSelect={(items) => items[0] && setForm((prev) => ({ ...prev, image: publicFileUrl(items[0]) }))}
+            onClose={() => setImagePickerOpen(false)}
+          />
+        </FormField>
+        <FormField label="商品详情">
+          <RichEditor
+            value={form().detail}
+            onInput={(v) => setForm((prev) => ({ ...prev, detail: v }))}
+            placeholder="请输入商品详情介绍…"
+          />
+        </FormField>
       </FormModal>
 
       <FormModal

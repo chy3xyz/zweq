@@ -5,6 +5,10 @@ export interface PointsProduct {
   stock: number;
   /** 1 = 上架，0 = 下架。 */
   status: number;
+  /** 商品封面图 URL。 */
+  image: string;
+  /** 商品详情富文本（HTML）。 */
+  detail: string;
   created_at: number;
 }
 
@@ -29,6 +33,10 @@ export interface CreateProductRequest {
   stock: number;
   /** 1 = 上架，0 = 下架；缺省时后端默认 1。 */
   status?: number;
+  /** 商品封面图 URL。 */
+  image?: string;
+  /** 商品详情富文本（HTML）。 */
+  detail?: string;
 }
 
 export interface UpdateProductRequest {
@@ -37,6 +45,10 @@ export interface UpdateProductRequest {
   stock: number;
   /** 1 = 上架，0 = 下架。 */
   status?: number;
+  /** 商品封面图 URL。 */
+  image?: string;
+  /** 商品详情富文本（HTML）。 */
+  detail?: string;
 }
 
 export interface RedeemRequest {
