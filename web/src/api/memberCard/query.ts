@@ -9,6 +9,7 @@ import type {
   MemberCardLevelItem,
   MemberLevelListResult,
   MemberView,
+  UpdateLevelRequest,
 } from './types';
 
 export async function listMemberLevels(
@@ -37,6 +38,23 @@ export async function setMemberLevelStatus(id: number, status: number): Promise<
   const { data } = await http.put<{ code: number; msg: string; data: null }>(
     MEMBER_CARD_PATH.levelStatus(id),
     { status },
+  );
+  unwrapEnvelope(data);
+}
+
+/** 整体更新等级（account 作用域不变，请求体不含 account_id）。 */
+export async function updateMemberLevel(id: number, body: UpdateLevelRequest): Promise<{ id: number }> {
+  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(
+    MEMBER_CARD_PATH.memberLevel(id),
+    body,
+  );
+  return unwrapEnvelope(data);
+}
+
+/** 删除等级（不级联）：等级下仍有会员时后端返回 400「该等级下存在会员，无法删除」。 */
+export async function deleteMemberLevel(id: number): Promise<void> {
+  const { data } = await http.delete<{ code: number; msg: string; data: null }>(
+    MEMBER_CARD_PATH.memberLevel(id),
   );
   unwrapEnvelope(data);
 }
@@ -82,4 +100,5 @@ export type {
   MemberCardLevelItem,
   MemberLevelListResult,
   MemberView,
+  UpdateLevelRequest,
 };

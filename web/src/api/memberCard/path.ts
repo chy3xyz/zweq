@@ -9,6 +9,7 @@ export const MEMBER_CARD_PATH = {
   view: `${P}/view`,
   open: `${P}/open`,
   adjust: `${P}/adjust`,
+  memberLevel: (id: number) => `${P}/${id}`,
   levelStatus: (id: number) => `${P}/${id}/status`,
 } as const;
 

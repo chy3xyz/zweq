@@ -54,3 +54,6 @@ export interface CreateLevelRequest {
   threshold?: number;
   status?: number;
 }
+
+/** 整体更新：字段同 `CreateLevelRequest` 去 account_id（account 作用域不变）。 */
+export type UpdateLevelRequest = Omit<CreateLevelRequest, 'account_id'>;
