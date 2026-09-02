@@ -74,6 +74,8 @@ pub const CatalogStore = struct {
         errdefer self.allocator.free(name);
         const image = try self.allocator.dupe(u8, e.image);
         errdefer self.allocator.free(image);
+        const images = try self.allocator.dupe(u8, e.images);
+        errdefer self.allocator.free(images);
         const content = try self.allocator.dupe(u8, e.content);
         errdefer self.allocator.free(content);
         const price = try self.allocator.dupe(u8, e.price);
@@ -86,6 +88,7 @@ pub const CatalogStore = struct {
             .category_id = e.category_id,
             .name = name,
             .image = image,
+            .images = images,
             .content = content,
             .price = price,
             .original_price = original_price,
@@ -175,6 +178,7 @@ pub const CatalogStore = struct {
             .category_id = p.category_id,
             .name = p.name,
             .image = p.image,
+            .images = p.images,
             .content = p.content,
             .price = price,
             .original_price = original_price,
@@ -212,6 +216,7 @@ pub const CatalogStore = struct {
         _ = try upd.set("category_id", .{ .int = p.category_id });
         _ = try upd.set("name", .{ .string = p.name });
         _ = try upd.set("image", .{ .string = p.image });
+        _ = try upd.set("images", .{ .string = p.images });
         _ = try upd.set("content", .{ .string = p.content });
         _ = try upd.set("price", .{ .string = price });
         _ = try upd.set("original_price", .{ .string = original_price });

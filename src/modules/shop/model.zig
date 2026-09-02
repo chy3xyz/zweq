@@ -27,6 +27,7 @@ pub const ShopProduct = Schema("ShopProduct", .{
         field.Int("category_id").Default(0),
         field.String("name"),
         field.String("image").Default(""),
+        field.String("images").Default("[]"),
         field.String("content").Default(""),
         field.Decimal("price").Default("0"),
         field.Decimal("original_price").Default("0"),

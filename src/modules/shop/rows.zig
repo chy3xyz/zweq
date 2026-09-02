@@ -24,6 +24,7 @@ pub const ShopProductRow = struct {
     category_id: i64,
     name: []const u8,
     image: []const u8,
+    images: []const u8,
     content: []const u8,
     price: []const u8,
     original_price: []const u8,
@@ -35,6 +36,7 @@ pub const ShopProductRow = struct {
     pub fn free(self: ShopProductRow, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.image);
+        allocator.free(self.images);
         allocator.free(self.content);
         allocator.free(self.price);
         allocator.free(self.original_price);

@@ -48,6 +48,7 @@ pub const ProductInput = struct {
     category_id: i64,
     name: []const u8,
     image: []const u8,
+    images: []const u8,
     content: []const u8,
     price: i64,
     original_price: i64,
