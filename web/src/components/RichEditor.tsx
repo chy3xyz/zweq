@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, onMount, Show, type JSX } from 'solid-js';
+import { createEffect, createSignal, For, Show, type JSX } from 'solid-js';
 
 import ImageManager from '#ui/components/ImageManager';
 import { fileUrl } from '#ui/api/file/types';
@@ -39,16 +39,15 @@ const TOOLS: ToolButton[] = [
 export default function RichEditor(props: Props) {
   let ref: HTMLDivElement | undefined;
   const [pickerOpen, setPickerOpen] = createSignal(false);
-  const [lastHtml, setLastHtml] = createSignal(props.value);
+  // Tracks the last value this component itself emitted. Initializing to an
+  // empty sentinel (not `props.value`) lets the effect sync the first external
+  // `value` into the DOM on mount, while still skipping later echoes of our
+  // own `onInput` events so typing never loses the caret.
+  const [lastHtml, setLastHtml] = createSignal('');
 
-  onMount(() => {
-    if (ref) ref.innerHTML = props.value ?? '';
-  });
-
-  // External resets (e.g. form clear) flow in through `value`.
   createEffect(() => {
     const v = props.value ?? '';
-    if (ref && v !== lastHtml() && v !== ref.innerHTML) {
+    if (ref && v !== ref.innerHTML && v !== lastHtml()) {
       ref.innerHTML = v;
       setLastHtml(v);
     }
@@ -141,7 +140,7 @@ export default function RichEditor(props: Props) {
       <div
         ref={ref}
         contentEditable
-        class="prose max-w-none min-h-[200px] flex-1 overflow-y-auto px-3 py-2 text-sm leading-6 outline-none focus:ring-1 focus:ring-primary/40"
+        class="prose max-w-none min-h-[200px] flex-1 select-text overflow-y-auto px-3 py-2 text-sm leading-6 outline-none focus:ring-1 focus:ring-primary/40"
         data-placeholder={props.placeholder ?? '请输入正文…'}
         onInput={emit}
         onBlur={emit}
