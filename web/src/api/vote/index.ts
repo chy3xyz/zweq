@@ -1,2 +1,2 @@
 export * from './types';
-export { castVote, createVote, getVoteResults, listVotes } from './query';
+export { castVote, createVote, deleteVote, getVoteResults, listVotes, updateVote } from './query';

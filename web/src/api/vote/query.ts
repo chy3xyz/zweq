@@ -2,7 +2,12 @@ import { http } from '#ui/api/client';
 import { unwrapEnvelope } from '#ui/api/envelope';
 
 import { voteListQuery, VOTE_PATH } from './path';
-import type { CreateVoteRequest, VoteItem, VoteListResult } from './types';
+import type {
+  CreateVoteRequest,
+  UpdateVoteRequest,
+  VoteItem,
+  VoteListResult,
+} from './types';
 
 export async function listVotes(
   accountId: number,
@@ -30,6 +35,19 @@ export async function getVoteResults(id: number): Promise<number[]> {
   return unwrapEnvelope(data).tally;
 }
 
+export async function updateVote(id: number, body: UpdateVoteRequest): Promise<{ id: number }> {
+  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(
+    VOTE_PATH.vote(id),
+    body,
+  );
+  return unwrapEnvelope(data);
+}
+
+export async function deleteVote(id: number): Promise<void> {
+  const { data } = await http.delete<{ code: number; msg: string; data: null }>(VOTE_PATH.vote(id));
+  unwrapEnvelope(data);
+}
+
 export async function castVote(id: number, openid: string, option_index: number): Promise<void> {
   const { data } = await http.post<{ code: number; msg: string; data: null }>(VOTE_PATH.cast(id), {
     openid,
@@ -38,4 +56,4 @@ export async function castVote(id: number, openid: string, option_index: number)
   unwrapEnvelope(data);
 }
 
-export type { CreateVoteRequest, VoteItem, VoteListResult };
+export type { CreateVoteRequest, UpdateVoteRequest, VoteItem, VoteListResult };

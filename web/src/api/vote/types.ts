@@ -20,3 +20,10 @@ export interface CreateVoteRequest {
   options: string[];
   end_at?: number;
 }
+
+/** 整体更新：字段同 `CreateVoteRequest` 去 account_id（account 作用域不变）。 */
+export interface UpdateVoteRequest {
+  title: string;
+  options: string[];
+  end_at?: number;
+}

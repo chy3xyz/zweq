@@ -5,6 +5,7 @@ const P = `${APP_CONFIG.apiPrefix}/votes`;
 export const VOTE_PATH = {
   list: P,
   create: P,
+  vote: (id: number) => `${P}/${id}`,
   results: (id: number) => `${P}/${id}/results`,
   cast: (id: number) => `${P}/${id}/vote`,
 } as const;
