@@ -9,8 +9,11 @@ export const MODULE_PATH = {
 export const accountModules = (accountId: number) => `${APP_CONFIG.apiPrefix}/accounts/${accountId}/modules`;
 export const accountModule = (accountId: number, module: string) =>
   `${APP_CONFIG.apiPrefix}/accounts/${accountId}/modules/${module}`;
+export const accountModuleConfig = (accountId: number, module: string) =>
+  `${APP_CONFIG.apiPrefix}/accounts/${accountId}/modules/${module}/config`;
 
-export const moduleListQuery = (page: number, pageSize: number) => {
+export const moduleListQuery = (page: number, pageSize: number, keyword?: string) => {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (keyword?.trim()) params.set('keyword', keyword.trim());
   return `${MODULE_PATH.list}?${params.toString()}`;
 };

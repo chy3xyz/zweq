@@ -33,6 +33,14 @@ export interface BindModuleRequest {
   status?: 'active' | 'disabled';
 }
 
+export interface ModuleConfigResponse {
+  config: string;
+}
+
+export interface UpdateModuleConfigRequest {
+  config: string;
+}
+
 export interface AdminNavItem {
   module: string;
   group: string;

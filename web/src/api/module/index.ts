@@ -1,2 +1,11 @@
 export * from './types';
-export { bindModule, getAdminNav, listAccountModules, listModules, registerModule, unbindModule } from './query';
+export {
+  bindModule,
+  getAdminNav,
+  getModuleConfig,
+  listAccountModules,
+  listModules,
+  registerModule,
+  unbindModule,
+  updateModuleConfig,
+} from './query';

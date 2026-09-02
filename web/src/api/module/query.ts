@@ -1,16 +1,16 @@
 import { http } from '#ui/api/client';
 import { unwrapEnvelope } from '#ui/api/envelope';
 
-import { accountModule, accountModules, MODULE_PATH, moduleListQuery } from './path';
-import type { AdminNavItem, BindingItem, BindModuleRequest, ModuleItem, ModuleListResult, RegisterModuleRequest } from './types';
+import { accountModule, accountModuleConfig, accountModules, MODULE_PATH, moduleListQuery } from './path';
+import type { AdminNavItem, BindingItem, BindModuleRequest, ModuleConfigResponse, ModuleItem, ModuleListResult, RegisterModuleRequest, UpdateModuleConfigRequest } from './types';
 
 async function getEnvelope<T>(path: string): Promise<T> {
   const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
   return unwrapEnvelope(data);
 }
 
-export async function listModules(page: number, pageSize: number): Promise<ModuleListResult> {
-  return getEnvelope<ModuleListResult>(moduleListQuery(page, pageSize));
+export async function listModules(page: number, pageSize: number, keyword?: string): Promise<ModuleListResult> {
+  return getEnvelope<ModuleListResult>(moduleListQuery(page, pageSize, keyword));
 }
 
 export async function registerModule(body: RegisterModuleRequest): Promise<{ id: number }> {
@@ -31,6 +31,19 @@ export async function bindModule(accountId: number, body: BindModuleRequest): Pr
 export async function unbindModule(accountId: number, module: string): Promise<void> {
   const { data } = await http.delete<{ code: number; msg: string; data: null }>(accountModule(accountId, module));
   unwrapEnvelope(data);
+}
+
+export async function getModuleConfig(accountId: number, module: string): Promise<ModuleConfigResponse> {
+  return getEnvelope<ModuleConfigResponse>(accountModuleConfig(accountId, module));
+}
+
+export async function updateModuleConfig(
+  accountId: number,
+  module: string,
+  body: UpdateModuleConfigRequest,
+): Promise<{ id: number }> {
+  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(accountModuleConfig(accountId, module), body);
+  return unwrapEnvelope(data);
 }
 
 export async function getAdminNav(accountId?: number | null): Promise<AdminNavItem[]> {
