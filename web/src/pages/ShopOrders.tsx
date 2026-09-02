@@ -405,6 +405,7 @@ function ShopOrders() {
         onSubmit={onPickup}
         onClose={() => setPickupOrder(null)}
         submitting={pickupSubmitting()}
+        submitDisabled={!pickupOrder()?.pickup_code}
         error={pickupError()}
         submitLabel="确认核销"
         size="sm"

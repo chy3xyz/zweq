@@ -107,9 +107,10 @@ export async function listShopOrders(
 }
 
 export async function getShopOrderDetail(id: number): Promise<ShopOrderDetail> {
-  // Public endpoint returns raw JSON (not the usual {code,msg,data} envelope).
-  const { data } = await http.get<ShopOrderDetail>(SHOP_PATH.order(id));
-  return data;
+  const { data } = await http.get<{ code: number; msg: string; data: ShopOrderDetail }>(
+    SHOP_PATH.order(id),
+  );
+  return unwrapEnvelope(data);
 }
 
 export async function shipShopOrder(id: number, company: string, no: string): Promise<void> {

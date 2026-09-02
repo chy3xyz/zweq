@@ -9,6 +9,7 @@ interface Props {
   onSubmit?: (e: SubmitEvent) => void;
   onClose: () => void;
   submitting?: boolean;
+  submitDisabled?: boolean;
   error?: string | null;
   submitLabel?: string;
   cancelLabel?: string;
@@ -50,7 +51,7 @@ export default function FormModal(props: Props) {
             <button type="button" class="btn btn-ghost btn-sm" onClick={props.onClose} disabled={props.submitting}>
               {props.cancelLabel ?? '取消'}
             </button>
-            <button type="submit" class="btn btn-primary btn-sm" disabled={props.submitting}>
+            <button type="submit" class="btn btn-primary btn-sm" disabled={props.submitting || props.submitDisabled}>
               <Show when={props.submitting}>
                 <span class="loading loading-spinner loading-xs" />
               </Show>
