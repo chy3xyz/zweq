@@ -47,6 +47,17 @@ const CouponUserDto = struct {
     created_at: i64,
 };
 
+const CouponUserDtoEx = struct {
+    id: i64,
+    coupon_id: i64,
+    code: []const u8,
+    status: []const u8,
+    created_at: i64,
+    title: []const u8,
+    amount: i64,
+    min_amount: i64,
+};
+
 const DrawRecordDto = struct {
     id: i64,
     prize_name: []const u8,
@@ -360,15 +371,30 @@ pub fn FanAppApi(
                 return;
             };
             defer result.free(self.coupon_svc.allocator);
-            const dtos = try ctx.allocator.alloc(CouponUserDto, result.items.len);
+            var tmp_coupons = std.ArrayList(coupon_svc.CouponRow).empty;
+            defer tmp_coupons.deinit(ctx.allocator);
+            const dtos = try ctx.allocator.alloc(CouponUserDtoEx, result.items.len);
             defer ctx.allocator.free(dtos);
             for (result.items, 0..) |row, i| {
+                var title: []const u8 = "";
+                var amount: i64 = 0;
+                var min_amount: i64 = 0;
+                const c_opt = self.coupon_svc.getCoupon(row.coupon_id) catch null;
+                if (c_opt) |c| {
+                    try tmp_coupons.append(ctx.allocator, c);
+                    title = c.title;
+                    amount = std.fmt.parseInt(i64, c.amount, 10) catch 0;
+                    min_amount = std.fmt.parseInt(i64, c.min_amount, 10) catch 0;
+                }
                 dtos[i] = .{
                     .id = row.id,
                     .coupon_id = row.coupon_id,
                     .code = row.code,
                     .status = row.status,
                     .created_at = row.created_at,
+                    .title = title,
+                    .amount = amount,
+                    .min_amount = min_amount,
                 };
             }
             try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
@@ -377,6 +403,8 @@ pub fn FanAppApi(
                 .page = params.page,
                 .pageSize = params.page_size,
             } });
+            // jsonStruct 已完成，释放关联的券模板行（内部 owned 字符串）
+            for (tmp_coupons.items) |c| c.free(self.coupon_svc.allocator);
         }
 
         fn luckyDrawConfig(ctx: *http.Context) !void {
