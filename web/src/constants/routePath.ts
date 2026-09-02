@@ -14,7 +14,7 @@ export const ROUTE_PATH = {
   payments: '/payments',
   modules: '/modules',
   cloud: '/cloud',
-  logs: '/message-logs',
+  logs: '/logs',
   materials: '/materials',
   points: '/points',
   menu: '/menu',

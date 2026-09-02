@@ -2,6 +2,7 @@ import { APP_CONFIG } from '#ui/config';
 
 export const LOG_PATH = {
   list: `${APP_CONFIG.apiPrefix}/message-logs`,
+  customerText: `${APP_CONFIG.apiPrefix}/messages/customer-text`,
 } as const;
 
 export const logListQuery = (page: number, pageSize: number, accountId: number) => {

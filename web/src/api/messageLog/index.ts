@@ -1,2 +1,2 @@
 export * from './types';
-export { listLogs } from './query';
+export { listLogs, sendCustomerText } from './query';
