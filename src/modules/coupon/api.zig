@@ -75,6 +75,18 @@ const CreateCouponReq = struct {
     status: i64 = 1,
 };
 
+/// 整体更新：字段同 `CreateCouponReq`，不含 account_id（account 作用域不变）。
+const UpdateCouponReq = struct {
+    title: []const u8,
+    amount: i64 = 0,
+    min_amount: i64 = 0,
+    total: i64 = 0,
+    per_user: i64 = 1,
+    start_at: i64 = 0,
+    end_at: i64 = 0,
+    status: i64 = 1,
+};
+
 const SetStatusReq = struct {
     status: i64,
 };
@@ -102,6 +114,8 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
         pub const routes: []const http.RouteSpec(Self) = &.{
             .{ .method = .GET, .path = "coupons", .handler = http.wrapHandler(Self, listCoupons), .meta = .{ .permission = "coupon:read" } },
             .{ .method = .POST, .path = "coupons", .handler = http.wrapHandler(Self, createCoupon), .meta = .{ .permission = "coupon:write" } },
+            .{ .method = .GET, .path = "coupons/{id}", .handler = http.wrapHandler(Self, getCoupon), .meta = .{ .permission = "coupon:read" } },
+            .{ .method = .PUT, .path = "coupons/{id}", .handler = http.wrapHandler(Self, updateCoupon), .meta = .{ .permission = "coupon:write" } },
             .{ .method = .DELETE, .path = "coupons/{id}", .handler = http.wrapHandler(Self, deleteCoupon), .meta = .{ .permission = "coupon:write" } },
             .{ .method = .PUT, .path = "coupons/{id}/status", .handler = http.wrapHandler(Self, setStatus), .meta = .{ .permission = "coupon:write" } },
             .{ .method = .POST, .path = "coupons/{id}/claim", .handler = http.wrapHandler(Self, claim), .meta = .{ .permission = "coupon:write" } },
@@ -118,6 +132,8 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
             try g.get("/coupons", listCoupons, @ptrCast(@alignCast(self)));
             try g.post("/coupons", createCoupon, @ptrCast(@alignCast(self)));
+            try g.get("/coupons/{id}", getCoupon, @ptrCast(@alignCast(self)));
+            try g.put("/coupons/{id}", updateCoupon, @ptrCast(@alignCast(self)));
             try g.delete("/coupons/{id}", deleteCoupon, @ptrCast(@alignCast(self)));
             try g.put("/coupons/{id}/status", setStatus, @ptrCast(@alignCast(self)));
             try g.post("/coupons/{id}/claim", claim, @ptrCast(@alignCast(self)));
@@ -177,6 +193,62 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             const det1 = try std.fmt.bufPrint(&d1, "创建优惠券 {s}", .{req.title});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.create", "coupon", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+        }
+
+        /// 单条详情（tenant 过滤）：券不存在或不属于本 tenant 均 404。DTO 与列表同构。
+        fn getCoupon(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const tid = tenantScope(ctx, self);
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的券 ID");
+                return;
+            };
+            const row_opt = self.svc.getCouponById(tid, id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
+                return;
+            };
+            const row = row_opt orelse {
+                try ctx.sendErrorResponse(404, 404, "优惠券不存在");
+                return;
+            };
+            defer row.free(self.svc.allocator);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toCouponDto(row) });
+        }
+
+        /// 整体更新券模板（account 作用域不变）。请求体同 `CreateCouponReq` 去 account_id。
+        fn updateCoupon(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的券 ID");
+                return;
+            };
+            const req = ctx.bindJson(UpdateCouponReq) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer ctx.allocator.free(req.title);
+            self.svc.updateCoupon(tid, id, req.title, req.amount, req.min_amount, req.total, req.per_user, req.start_at, req.end_at, req.status) catch |err| switch (err) {
+                error.NotFound => {
+                    try ctx.sendErrorResponse(404, 404, "优惠券不存在");
+                    return;
+                },
+                error.InvalidInput => {
+                    try ctx.sendErrorResponse(400, 400, "参数非法");
+                    return;
+                },
+                else => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
+                    return;
+                },
+            };
+            var d1: [128]u8 = undefined;
+            const det1 = try std.fmt.bufPrint(&d1, "更新优惠券 #{d}", .{id});
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.update", "coupon", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = .{ .id = id } });
         }
 
         /// 上下架：body `{"status": 1|0}`。

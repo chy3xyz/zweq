@@ -64,6 +64,25 @@ pub const CouponService = struct {
         self.store.deleteCoupon(id) catch return error.Unexpected;
     }
 
+    /// 按 id 取单条（tenant 过滤）——管理端详情读取（C 端领券仍走
+    /// 无 tenant 过滤的 `getCoupon`，券先经本租户列表校验）。
+    pub fn getCouponById(self: *CouponService, tenant_id: i64, id: i64) CouponError!?CouponRow {
+        return self.store.getById(tenant_id, id) catch error.Unexpected;
+    }
+
+    /// 整体更新券模板（account 作用域不变：account_id 不参与更新）。
+    /// `title` 空 → InvalidInput；券不存在或不属于本 tenant → NotFound；
+    /// store 影响 0 行也视为成功（幂等）。校验规则跟随 `createCoupon`。
+    pub fn updateCoupon(self: *CouponService, tenant_id: i64, id: i64, title: []const u8, amount: i64, min_amount: i64, total: i64, per_user: i64, start_at: i64, end_at: i64, status: i64) CouponError!void {
+        if (std.mem.trim(u8, title, " \t").len == 0) return error.InvalidInput;
+        if (amount < 0 or min_amount < 0 or total < 0) return error.InvalidInput;
+        if (per_user < 1) return error.InvalidInput;
+        const row_opt = self.store.getById(tenant_id, id) catch return error.Unexpected;
+        const row = row_opt orelse return error.NotFound;
+        defer row.free(self.allocator);
+        _ = self.store.update(id, title, amount, min_amount, total, @max(1, per_user), start_at, end_at, status, self.now()) catch return error.Unexpected;
+    }
+
     /// 领券：库存 + 每人限领 + 有效期校验，通过后生成券码落库。返回券码（caller free）。
     pub fn claimCoupon(self: *CouponService, allocator: std.mem.Allocator, tenant_id: i64, account_id: i64, openid: []const u8, coupon_id: i64) CouponError![]u8 {
         const c_opt = self.store.getCoupon(coupon_id) catch return error.Unexpected;

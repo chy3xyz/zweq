@@ -158,6 +158,14 @@ pub const CouponStore = struct {
         return self.getCouponOn(self.client, id);
     }
 
+    /// 按 id 取单条（tenant 过滤），供 service 校验存在性与管理端详情读取。
+    pub fn getById(self: *CouponStore, tenant_id: i64, id: i64) !?CouponRow {
+        const preds = self.client.coupon.predicates;
+        var entity = (try crud.first(self.client.coupon, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
+        defer zent.codegen.deinitEntity(infos, CouponInfo, &entity, self.allocator);
+        return try self.dupCoupon(entity);
+    }
+
     /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
     pub fn listCoupons(self: *CouponStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) !CouponListResult {
         var q = self.client.coupon.Query();
@@ -191,6 +199,28 @@ pub const CouponStore = struct {
             .updated_at = now,
         }, .{preds.idEQ(.{ .int = id })});
         return affected > 0;
+    }
+
+    /// 整体更新券模板（account 作用域不变：account_id 不参与更新）。
+    /// 返回受影响行数（调用方已先经 `getById` 校验存在性，0 行视为幂等成功）。
+    pub fn update(self: *CouponStore, id: i64, title: []const u8, amount: i64, min_amount: i64, total: i64, per_user: i64, start_at: i64, end_at: i64, status: i64, now: i64) !usize {
+        const amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{amount});
+        defer self.allocator.free(amount_str);
+        const min_amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{min_amount});
+        defer self.allocator.free(min_amount_str);
+        const preds = self.client.coupon.predicates;
+        return crud.update(self.client.coupon, .{
+            .title = title,
+            .amount = amount_str,
+            .min_amount = min_amount_str,
+            .total = total,
+            .per_user = per_user,
+            .start_at = start_at,
+            .end_at = end_at,
+            // 显式写入，不依赖 DB 默认值（迁移加的列在老库上是 nullable）。
+            .status = status,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
     }
 
     pub fn deleteCoupon(self: *CouponStore, id: i64) !void {
