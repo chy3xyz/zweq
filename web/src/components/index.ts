@@ -4,6 +4,7 @@ export { default as AdminCrudPage } from './AdminCrudPage';
 export { default as BaseModal } from './BaseModal';
 export { default as DataTable } from './DataTable';
 export { default as FormModal } from './FormModal';
+export { default as MenuButtonFormModal } from './MenuButtonFormModal';
 export { default as Pagination, DEFAULT_PAGE_SIZES } from './Pagination';
 export { default as SearchBar } from './SearchBar';
 export { default as Tabs } from './Tabs';

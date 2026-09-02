@@ -21,6 +21,7 @@ import FormField from '#ui/components/FormField';
 import FormModal from '#ui/components/FormModal';
 import ImageManager from '#ui/components/ImageManager';
 import RichEditor from '#ui/components/RichEditor';
+import Tabs from '#ui/components/Tabs';
 import { fileUrl as publicFileUrl } from '#ui/api/file/types';
 import { useAccountId, useFeedback, usePaged } from '#ui/hooks';
 import { formatDateTime } from '#ui/utils';
@@ -262,21 +263,7 @@ function Materials() {
 
       <AccountRequiredBanner />
 
-      <div role="tablist" class="tabs tabs-box">
-        <For each={TABS}>
-          {(item) => (
-            <button
-              type="button"
-              role="tab"
-              class="tab"
-              classList={{ 'tab-active': tab() === item }}
-              onClick={() => setTab(item)}
-            >
-              {item}
-            </button>
-          )}
-        </For>
-      </div>
+      <Tabs tabs={[...TABS]} active={tab()} onChange={setTab} />
 
       <Show when={tab() === '图文素材'}>
         <section class="rounded-box border border-base-300 bg-base-100 p-4">
