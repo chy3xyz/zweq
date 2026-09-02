@@ -85,6 +85,9 @@ function LuckyDraw() {
   const [prizeSubmitting, setPrizeSubmitting] = createSignal(false);
   const [imageOpen, setImageOpen] = createSignal(false);
 
+  const [costError, setCostError] = createSignal<string | null>(null);
+  const [dailyLimitError, setDailyLimitError] = createSignal<string | null>(null);
+
   const paged = usePaged<DrawRecord>(
     (page, pageSize) => listDrawRecords(accountId(), page, pageSize),
     PAGE_SIZE,
@@ -92,6 +95,8 @@ function LuckyDraw() {
   );
 
   const loadConfig = async (id: number) => {
+    setCostError(null);
+    setDailyLimitError(null);
     if (id === 0) {
       setConfig(DEFAULT_CONFIG);
       setSavedConfigJson(JSON.stringify(DEFAULT_CONFIG));
@@ -112,11 +117,29 @@ function LuckyDraw() {
     void loadConfig(accountId());
   });
 
+  const clampNonNegativeNumber = (raw: string): { value: number; error: string | null } => {
+    if (raw.trim() === '') return { value: 0, error: null };
+    const num = Number(raw);
+    if (Number.isNaN(num)) return { value: 0, error: '请输入有效数字' };
+    if (num < 0) return { value: 0, error: '不能为负数' };
+    return { value: num, error: null };
+  };
+
+  const normalizeConfig = (cfg: LuckyDrawConfig): LuckyDrawConfig => ({
+    ...cfg,
+    cost: Number.isNaN(cfg.cost) || cfg.cost < 0 ? 0 : cfg.cost,
+    daily_limit: Number.isNaN(cfg.daily_limit) || cfg.daily_limit < 0 ? 0 : cfg.daily_limit,
+  });
+
   const saveConfig = async () => {
     if (accountId() === 0 || saving()) return;
     setSaving(true);
     try {
-      const json = JSON.stringify(config());
+      const cfg = normalizeConfig(config());
+      setConfig(cfg);
+      setCostError(null);
+      setDailyLimitError(null);
+      const json = JSON.stringify(cfg);
       await updateConfig(accountId(), json);
       setSavedConfigJson(json);
       feedback.toast('配置已保存');
@@ -276,8 +299,15 @@ function LuckyDraw() {
                 class="input input-bordered input-sm w-full"
                 min={0}
                 value={config().cost}
-                onInput={(e) => setConfig((prev) => ({ ...prev, cost: Number(e.currentTarget.value) }))}
+                onInput={(e) => {
+                  const { value, error } = clampNonNegativeNumber(e.currentTarget.value);
+                  setCostError(error);
+                  setConfig((prev) => ({ ...prev, cost: value }));
+                }}
               />
+              <Show when={costError()}>
+                <p class="mt-1 text-xs text-error">{costError()}</p>
+              </Show>
             </FormField>
             <FormField label="每日次数限制">
               <input
@@ -285,8 +315,15 @@ function LuckyDraw() {
                 class="input input-bordered input-sm w-full"
                 min={0}
                 value={config().daily_limit}
-                onInput={(e) => setConfig((prev) => ({ ...prev, daily_limit: Number(e.currentTarget.value) }))}
+                onInput={(e) => {
+                  const { value, error } = clampNonNegativeNumber(e.currentTarget.value);
+                  setDailyLimitError(error);
+                  setConfig((prev) => ({ ...prev, daily_limit: value }));
+                }}
               />
+              <Show when={dailyLimitError()}>
+                <p class="mt-1 text-xs text-error">{dailyLimitError()}</p>
+              </Show>
             </FormField>
             <div class="flex justify-end">
               <button
