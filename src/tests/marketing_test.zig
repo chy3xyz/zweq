@@ -58,7 +58,7 @@ test "points: redeem deducts points + stock, rejects insufficient/out-of-stock" 
     try std.testing.expectEqual(@as(i64, 100), newp);
 
     // 商品（100 积分，库存 5）。
-    const pid = try svc.createProduct(1, 5, "马克杯", 100, 5, 1);
+    const pid = try svc.createProduct(1, 5, "马克杯", 100, 5, 1, "", "");
 
     // 兑换成功：积分 100→0，库存 5→4，订单 1 条。
     const order_id = try svc.redeem(1, 5, "o_p", pid);
@@ -82,11 +82,11 @@ test "points: redeem deducts points + stock, rejects insufficient/out-of-stock" 
 
     // 库存清空 → OutOfStock。
     _ = try svc.adjustPoints(1, 5, "o_p", 100);
-    try svc.updateProduct(pid, "马克杯", 100, 0, 1);
+    try svc.updateProduct(pid, "马克杯", 100, 0, 1, "", "");
     try std.testing.expectError(error.OutOfStock, svc.redeem(1, 5, "o_p", pid));
 
     // 粉丝不存在 → FanNotFound（用有库存的商品）。
-    const pid2 = try svc.createProduct(1, 5, "新商品", 50, 1, 1);
+    const pid2 = try svc.createProduct(1, 5, "新商品", 50, 1, 1, "", "");
     try std.testing.expectError(error.FanNotFound, svc.redeem(1, 5, "o_nobody", pid2));
 }
 
