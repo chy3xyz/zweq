@@ -31,8 +31,7 @@ function Menu() {
     if (accountId() === 0) return;
     setBusy(true);
     try {
-      const buttons = JSON.parse(menuJson());
-      await saveMenu(accountId(), { buttons });
+      await saveMenu(accountId(), { menu_json: menuJson() });
       setSuccess('菜单已保存');
     } catch {
       setError('菜单 JSON 格式错误');

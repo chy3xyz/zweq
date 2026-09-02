@@ -179,8 +179,7 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer ctx.allocator.free(data);
-            // 透传微信返回的原始 JSON（含 type 字段，绕过 Button.type_ 反射丢失）。
-            try ctx.text(200, data);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .menu_json = data } });
         }
     };
 }
