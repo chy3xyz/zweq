@@ -493,7 +493,7 @@ pub fn main(init: std.process.Init) !void {
     var module_api = appmod.api.ModuleApi(@TypeOf(module_svc), @TypeOf(user_svc)).init(&module_svc, &user_svc, &audit_svc, default_tenant_id);
     var payment_api = payment.api.PaymentApi(@TypeOf(payment_svc), @TypeOf(user_svc)).init(&payment_svc, &user_svc, &audit_svc, default_tenant_id, &setting_store);
     var app_bff_api = app_bff.api.AppBffApi(@TypeOf(account_svc), @TypeOf(module_svc), @TypeOf(user_svc)).init(&account_svc, &module_svc, &user_svc, default_tenant_id);
-    var fan_app_api = app_bff.fan_api.FanAppApi(@TypeOf(user_svc), @TypeOf(fan_store), @TypeOf(points_svc), @TypeOf(coupon_svc), @TypeOf(lucky_draw_svc), @TypeOf(module_svc)).init(&user_svc, &fan_store, &points_svc, &coupon_svc, &lucky_draw_svc, &module_svc, default_tenant_id);
+    var fan_app_api = app_bff.fan_api.FanAppApi(@TypeOf(user_svc), @TypeOf(fan_store), @TypeOf(points_svc), @TypeOf(coupon_svc), @TypeOf(lucky_draw_svc), @TypeOf(module_svc), @TypeOf(payment_svc)).init(&user_svc, &fan_store, &points_svc, &coupon_svc, &lucky_draw_svc, &module_svc, &payment_svc, default_tenant_id);
     var fan_scene_api = app_bff.fan_scene_api.FanSceneApi(@TypeOf(user_svc), @TypeOf(checkin_svc), @TypeOf(vote_svc), @TypeOf(seckill_svc), @TypeOf(member_card_svc), @TypeOf(distribution_svc), @TypeOf(module_svc)).init(&user_svc, &checkin_svc, &vote_svc, &seckill_svc, &member_card_svc, &distribution_svc, &module_svc, default_tenant_id);
     var cloud_api = cloud.api.CloudApi(@TypeOf(cloud_svc), @TypeOf(user_svc)).init(&cloud_svc, &user_svc, &audit_svc, default_tenant_id);
     var material_api = material.api.MaterialApi(@TypeOf(material_svc), @TypeOf(user_svc)).init(&material_svc, &user_svc, &audit_svc, default_tenant_id);
@@ -648,7 +648,7 @@ pub fn main(init: std.process.Init) !void {
     try v1_scope.mount(appmod.api.ModuleApi(@TypeOf(module_svc), @TypeOf(user_svc)), &module_api);
     try v1_scope.mount(payment.api.PaymentApi(@TypeOf(payment_svc), @TypeOf(user_svc)), &payment_api);
     try v1_scope.mount(app_bff.api.AppBffApi(@TypeOf(account_svc), @TypeOf(module_svc), @TypeOf(user_svc)), &app_bff_api);
-    try v1_scope.mount(app_bff.fan_api.FanAppApi(@TypeOf(user_svc), @TypeOf(fan_store), @TypeOf(points_svc), @TypeOf(coupon_svc), @TypeOf(lucky_draw_svc), @TypeOf(module_svc)), &fan_app_api);
+    try v1_scope.mount(app_bff.fan_api.FanAppApi(@TypeOf(user_svc), @TypeOf(fan_store), @TypeOf(points_svc), @TypeOf(coupon_svc), @TypeOf(lucky_draw_svc), @TypeOf(module_svc), @TypeOf(payment_svc)), &fan_app_api);
     try v1_scope.mount(app_bff.fan_scene_api.FanSceneApi(@TypeOf(user_svc), @TypeOf(checkin_svc), @TypeOf(vote_svc), @TypeOf(seckill_svc), @TypeOf(member_card_svc), @TypeOf(distribution_svc), @TypeOf(module_svc)), &fan_scene_api);
     try v1_scope.mount(cloud.api.CloudApi(@TypeOf(cloud_svc), @TypeOf(user_svc)), &cloud_api);
     try v1_scope.mount(material.api.MaterialApi(@TypeOf(material_svc), @TypeOf(user_svc)), &material_api);

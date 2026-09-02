@@ -10,6 +10,7 @@ const points_svc = @import("../points/service.zig");
 const coupon_svc = @import("../coupon/service.zig");
 const lucky_draw_svc = @import("../lucky_draw/service.zig");
 const module_svc = @import("../module/service.zig");
+const payment_service = @import("../payment/service.zig");
 
 const FanProfileDto = struct {
     openid: []const u8,
@@ -87,6 +88,7 @@ pub fn FanAppApi(
     comptime CouponService: type,
     comptime LuckyDrawService: type,
     comptime ModuleService: type,
+    comptime PaymentService: type,
 ) type {
     return struct {
         const Self = @This();
@@ -96,6 +98,7 @@ pub fn FanAppApi(
         coupon_svc: *CouponService,
         lucky_draw_svc: *LuckyDrawService,
         module_svc: *ModuleService,
+        payment_svc: *PaymentService,
         default_tenant_id: i64,
 
         pub const module_name = "app_fan";
@@ -113,6 +116,7 @@ pub fn FanAppApi(
             .{ .method = .GET, .path = "app/lucky-draw/records", .handler = http.wrapHandler(Self, listDrawRecords), .meta = .{ .auth = .public } },
             .{ .method = .GET, .path = "app/lucky-draw/config", .handler = http.wrapHandler(Self, luckyDrawConfig), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "app/lucky-draw/draw", .handler = http.wrapHandler(Self, draw), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "app/wallet", .handler = http.wrapHandler(Self, walletBalance), .meta = .{ .auth = .public } },
         };
 
         pub fn init(
@@ -122,6 +126,7 @@ pub fn FanAppApi(
             coupons: *CouponService,
             lucky: *LuckyDrawService,
             mods: *ModuleService,
+            payments: *PaymentService,
             default_tenant_id: i64,
         ) Self {
             return .{
@@ -131,6 +136,7 @@ pub fn FanAppApi(
                 .coupon_svc = coupons,
                 .lucky_draw_svc = lucky,
                 .module_svc = mods,
+                .payment_svc = payments,
                 .default_tenant_id = default_tenant_id,
             };
         }
@@ -454,6 +460,38 @@ pub fn FanAppApi(
                 .points = result.points,
             } });
         }
+
+        /// C 端钱包余额查询（粉丝 JWT，openid → fan_id → wallet）。
+        fn walletBalance(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const openid_owned = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
+                return;
+            };
+            defer ctx.allocator.free(openid_owned);
+            const tid = tenantScope(ctx, self);
+            const account_id = ctx.queryInt(i64, "account_id", 0);
+            const fan_opt = self.fan_store.getByOpenid(tid, account_id, openid_owned) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
+                return;
+            };
+            const fan = fan_opt orelse {
+                try ctx.sendErrorResponse(404, 404, "粉丝不存在");
+                return;
+            };
+            defer fan.free(self.fan_store.allocator);
+            const wallet_opt = self.payment_svc.walletBalance(tid, account_id, fan.id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
+                return;
+            };
+            const wallet = wallet_opt orelse {
+                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .balance = 0 } });
+                return;
+            };
+            defer wallet.free(self.payment_svc.allocator);
+            const balance = std.fmt.parseInt(i64, wallet.balance, 10) catch 0;
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .balance = balance } });
+        }
     };
 }
 
@@ -464,4 +502,5 @@ pub const DefaultFanAppApi = FanAppApi(
     coupon_svc.CouponService,
     lucky_draw_svc.DrawService,
     module_svc.ModuleService,
+    payment_service.PaymentService,
 );
