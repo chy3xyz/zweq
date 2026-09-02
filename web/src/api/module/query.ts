@@ -2,7 +2,7 @@ import { http } from '#ui/api/client';
 import { unwrapEnvelope } from '#ui/api/envelope';
 
 import { accountModule, accountModuleConfig, accountModules, MODULE_PATH, moduleListQuery } from './path';
-import type { AdminNavItem, BindingItem, BindModuleRequest, ModuleConfigResponse, ModuleItem, ModuleListResult, RegisterModuleRequest, UpdateModuleConfigRequest } from './types';
+import type { AdminNavItem, BindingItem, BindModuleRequest, ModuleConfigResponse, ModuleItem, ModuleListResult, RegisterModuleRequest, UpdateModuleConfigRequest, UpdateModuleRequest } from './types';
 
 async function getEnvelope<T>(path: string): Promise<T> {
   const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
@@ -15,6 +15,11 @@ export async function listModules(page: number, pageSize: number, keyword?: stri
 
 export async function registerModule(body: RegisterModuleRequest): Promise<{ id: number }> {
   const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(MODULE_PATH.create, body);
+  return unwrapEnvelope(data);
+}
+
+export async function updateModule(id: number, body: UpdateModuleRequest): Promise<{ id: number }> {
+  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(MODULE_PATH.update(id), body);
   return unwrapEnvelope(data);
 }
 

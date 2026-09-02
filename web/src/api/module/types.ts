@@ -28,6 +28,12 @@ export interface RegisterModuleRequest {
   version: string;
 }
 
+export interface UpdateModuleRequest {
+  title: string;
+  version: string;
+  status: 'active' | 'disabled';
+}
+
 export interface BindModuleRequest {
   module: string;
   status?: 'active' | 'disabled';

@@ -8,9 +8,11 @@ import {
   registerModule,
   toApiError,
   unbindModule,
+  updateModule,
   updateModuleConfig,
   type BindingItem,
   type ModuleItem,
+  type UpdateModuleRequest,
 } from '#ui/api';
 import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import AdminCrudPage from '#ui/components/AdminCrudPage';
@@ -129,16 +131,31 @@ function Modules() {
     setModuleSubmitting(true);
     setModuleError(null);
     try {
-      await registerModule({
-        name: moduleForm().name.trim(),
-        title: moduleForm().title.trim(),
-        version: moduleForm().version.trim(),
-      });
+      const editing = editingModule();
+      if (editing) {
+        const body: UpdateModuleRequest = {
+          title: moduleForm().title.trim(),
+          version: moduleForm().version.trim(),
+          status: moduleForm().status,
+        };
+        await updateModule(editing.id, body);
+      } else {
+        await registerModule({
+          name: moduleForm().name.trim(),
+          title: moduleForm().title.trim(),
+          version: moduleForm().version.trim(),
+        });
+      }
       setModuleModalOpen(false);
-      feedback.toast(editingModule() ? `模块「${moduleForm().name}」已更新` : '模块已创建', 'success');
+      feedback.toast(editing ? `模块「${moduleForm().name}」已更新` : '模块已创建', 'success');
       void paged.refresh();
     } catch (err) {
-      setModuleError(toApiError(err).message);
+      const status = (err as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        setModuleError('该模块已不存在，请刷新列表后重试');
+      } else {
+        setModuleError(toApiError(err).message);
+      }
     } finally {
       setModuleSubmitting(false);
     }

@@ -7,5 +7,6 @@ export {
   listModules,
   registerModule,
   unbindModule,
+  updateModule,
   updateModuleConfig,
 } from './query';

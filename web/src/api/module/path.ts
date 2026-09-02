@@ -3,6 +3,7 @@ import { APP_CONFIG } from '#ui/config';
 export const MODULE_PATH = {
   list: `${APP_CONFIG.apiPrefix}/modules`,
   create: `${APP_CONFIG.apiPrefix}/modules`,
+  update: (id: number) => `${APP_CONFIG.apiPrefix}/modules/${id}`,
   adminNav: `${APP_CONFIG.apiPrefix}/admin/nav`,
 } as const;
 
