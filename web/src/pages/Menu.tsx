@@ -34,7 +34,7 @@ function Menu() {
       await saveMenu(accountId(), { menu_json: menuJson() });
       setSuccess('菜单已保存');
     } catch {
-      setError('菜单 JSON 格式错误');
+      setError('保存失败，请检查菜单 JSON 后重试');
     }
     setBusy(false);
   };
