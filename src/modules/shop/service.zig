@@ -311,29 +311,53 @@ pub const ShopService = struct {
             tx.deinit();
         };
         for (items) |it| {
-            const sp = tx.client.shop_product_sku.predicates;
             // 事务内读写必须走 tx.client：连接池下事务独占借用的连接，
             // 再从池里借会 PoolExhausted；即便借得到，也读不到本事务未提交的写。
-            const sku_opt = self.store.catalog.getSkuOn(tx.client, it.sku_id) catch return error.Unexpected;
-            const sku = sku_opt orelse return error.NotFound;
-            defer sku.free(self.allocator);
-            const guard = std.fmt.allocPrint(self.allocator, "stock >= {d}", .{it.quantity}) catch return error.Unexpected;
-            defer self.allocator.free(guard);
-            const affected = crud.increment(tx.client.shop_product_sku, "stock", -it.quantity, &.{
-                sp.idEQ(.{ .int = it.sku_id }),
-                zent.sql.Predicate{ .raw = guard },
-            }) catch {
-                tx.rollback() catch {};
-                return error.OutOfStock;
-            };
-            if (affected == 0) {
-                tx.rollback() catch {};
-                return error.OutOfStock;
+            if (it.sku_id == 0) {
+                // 无 SKU 商品：回退商品主数据（价格/库存）下单。
+                const product_opt = self.store.catalog.getProductOn(tx.client, it.product_id) catch return error.Unexpected;
+                const product = product_opt orelse return error.NotFound;
+                defer product.free(self.allocator);
+                const pp = tx.client.shop_product.predicates;
+                const guard = std.fmt.allocPrint(self.allocator, "stock >= {d}", .{it.quantity}) catch return error.Unexpected;
+                defer self.allocator.free(guard);
+                const affected = crud.increment(tx.client.shop_product, "stock", -it.quantity, &.{
+                    pp.idEQ(.{ .int = it.product_id }),
+                    zent.sql.Predicate{ .raw = guard },
+                }) catch {
+                    tx.rollback() catch {};
+                    return error.OutOfStock;
+                };
+                if (affected == 0) {
+                    tx.rollback() catch {};
+                    return error.OutOfStock;
+                }
+                const product_price = std.fmt.parseInt(i64, product.price, 10) catch return error.Unexpected;
+                total += product_price * it.quantity;
+                _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch {};
+            } else {
+                const sp = tx.client.shop_product_sku.predicates;
+                const sku_opt = self.store.catalog.getSkuOn(tx.client, it.sku_id) catch return error.Unexpected;
+                const sku = sku_opt orelse return error.NotFound;
+                defer sku.free(self.allocator);
+                const guard = std.fmt.allocPrint(self.allocator, "stock >= {d}", .{it.quantity}) catch return error.Unexpected;
+                defer self.allocator.free(guard);
+                const affected = crud.increment(tx.client.shop_product_sku, "stock", -it.quantity, &.{
+                    sp.idEQ(.{ .int = it.sku_id }),
+                    zent.sql.Predicate{ .raw = guard },
+                }) catch {
+                    tx.rollback() catch {};
+                    return error.OutOfStock;
+                };
+                if (affected == 0) {
+                    tx.rollback() catch {};
+                    return error.OutOfStock;
+                }
+                const sku_price = std.fmt.parseInt(i64, sku.price, 10) catch return error.Unexpected;
+                total += sku_price * it.quantity;
+                const pp = tx.client.shop_product.predicates;
+                _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch {};
             }
-            const sku_price = std.fmt.parseInt(i64, sku.price, 10) catch return error.Unexpected;
-            total += sku_price * it.quantity;
-            const pp = tx.client.shop_product.predicates;
-            _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch {};
         }
 
         // 优惠券减免：code 可选，校验归属/未用/门槛后减免。
