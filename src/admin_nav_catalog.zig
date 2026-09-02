@@ -45,11 +45,11 @@ pub const items = [_]NavItem{
     // ── 应用模块（按账号绑定）────────────────────────────
     .{ .module = "checkin", .group = "应用", .subgroup = "营销", .href = "/checkin", .label = "签到", .permission = "checkin:read", .order = 310, .account_scoped = true },
     .{ .module = "lucky_draw", .group = "应用", .subgroup = "营销", .href = "/lucky-draw", .label = "大转盘", .permission = "lucky_draw:read", .order = 320, .account_scoped = true },
-    .{ .module = "coupon", .group = "应用", .subgroup = "营销", .href = "/coupon", .label = "优惠券", .permission = "coupon:read", .order = 330, .account_scoped = true },
-    .{ .module = "vote", .group = "应用", .subgroup = "营销", .href = "/vote", .label = "投票", .permission = "vote:read", .order = 340, .account_scoped = true },
-    .{ .module = "seckill", .group = "应用", .subgroup = "营销", .href = "/seckill", .label = "秒杀", .permission = "seckill:read", .order = 350, .account_scoped = true },
-    .{ .module = "member_card", .group = "应用", .subgroup = "会员", .href = "/member-card", .label = "会员卡", .permission = "member_card:read", .order = 360, .account_scoped = true },
-    .{ .module = "distribution", .group = "应用", .subgroup = "会员", .href = "/distribution", .label = "分销", .permission = "distribution:read", .order = 370, .account_scoped = true },
+    .{ .module = "coupon", .group = "应用", .subgroup = "营销", .href = "/coupons", .label = "优惠券", .permission = "coupon:read", .order = 330, .account_scoped = true },
+    .{ .module = "vote", .group = "应用", .subgroup = "营销", .href = "/votes", .label = "投票", .permission = "vote:read", .order = 340, .account_scoped = true },
+    .{ .module = "seckill", .group = "应用", .subgroup = "营销", .href = "/seckills", .label = "秒杀", .permission = "seckill:read", .order = 350, .account_scoped = true },
+    .{ .module = "member_card", .group = "应用", .subgroup = "会员", .href = "/member-cards", .label = "会员卡", .permission = "member_card:read", .order = 360, .account_scoped = true },
+    .{ .module = "distribution", .group = "应用", .subgroup = "会员", .href = "/distributions", .label = "分销", .permission = "distribution:read", .order = 370, .account_scoped = true },
     .{ .module = "points", .group = "应用", .subgroup = "积分", .href = "/points", .label = "积分商城", .permission = "points:read", .order = 380, .account_scoped = true },
 
     // ── 商城 ─────────────────────────────────────────────
