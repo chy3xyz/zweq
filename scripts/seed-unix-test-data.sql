@@ -81,3 +81,9 @@ VALUES
 -- 11. Wallet for test fan
 INSERT INTO wallet (tenant_id, account_id, fan_id, balance, created_at, updated_at)
 VALUES (1, 1, (SELECT id FROM fan WHERE openid='dev_test_user_001'), 15680, strftime('%s','now'), strftime('%s','now'));
+
+-- 12. 余额充值套餐（C 端钱包充值入口）
+INSERT INTO shop_balance_plan (tenant_id, account_id, name, amount, bonus, status, created_at, updated_at) VALUES
+(1, 1, '充100送10', 10000, 1000, 1, strftime('%s','now'), strftime('%s','now')),
+(1, 1, '充200送30', 20000, 3000, 1, strftime('%s','now'), strftime('%s','now')),
+(1, 1, '充500送100', 50000, 10000, 1, strftime('%s','now'), strftime('%s','now'));
