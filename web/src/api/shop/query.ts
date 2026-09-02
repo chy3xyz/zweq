@@ -2,7 +2,7 @@ import { http } from '#ui/api/client';
 import { APP_CONFIG } from '#ui/config';
 import { unwrapEnvelope } from '#ui/api/envelope';
 
-import { shopCategoriesQuery, shopProductsQuery, SHOP_PATH } from './path';
+import { shopCategoriesQuery, shopOrdersQuery, shopProductsQuery, SHOP_PATH } from './path';
 import type {
   CreateShopProductRequest,
   ShopArticleItem,
@@ -97,15 +97,8 @@ export async function listShopOrders(
   status = -1,
   openid = '',
 ): Promise<ShopOrderListResult> {
-  const params = new URLSearchParams({
-    account_id: String(accountId),
-    page: String(page),
-    page_size: String(pageSize),
-    status: String(status),
-  });
-  if (openid) params.set('openid', openid);
   const { data } = await http.get<{ code: number; msg: string; data: ShopOrderListResult }>(
-    `${SHOP_PATH.adminProducts.replace('/products', '/admin/orders')}?${params.toString()}`,
+    shopOrdersQuery(accountId, page, pageSize, status, openid),
   );
   return unwrapEnvelope(data);
 }

@@ -6,6 +6,7 @@ export const SHOP_PATH = {
   categories: `${P}/categories`,
   products: `${P}/products`,
   adminProducts: `${P}/admin/products`,
+  adminOrders: `${P}/admin/orders`,
   product: (id: number) => `${P}/products/${id}`,
 } as const;
 
@@ -47,4 +48,21 @@ export const shopPublicProductsQuery = (
 export const shopCategoriesQuery = (accountId: number) => {
   const params = new URLSearchParams({ account_id: String(accountId) });
   return `${SHOP_PATH.categories}?${params.toString()}`;
+};
+
+export const shopOrdersQuery = (
+  accountId: number,
+  page: number,
+  pageSize: number,
+  status = -1,
+  openid = '',
+) => {
+  const params = new URLSearchParams({
+    account_id: String(accountId),
+    page: String(page),
+    page_size: String(pageSize),
+    status: String(status),
+  });
+  if (openid) params.set('openid', openid);
+  return `${SHOP_PATH.adminOrders}?${params.toString()}`;
 };
