@@ -10,8 +10,10 @@ import type {
   ShopCategoryItem,
   ShopGrouponItem,
   ShopInviteGiftItem,
+  ShopOrderDetail,
   ShopOrderItem,
   ShopOrderListResult,
+  ShopOrderProductItem,
   ShopOutletItem,
   ShopProductDetail,
   ShopProductItem,
@@ -96,17 +98,32 @@ export async function listShopOrders(
   pageSize: number,
   status = -1,
   openid = '',
+  pickupType = '',
 ): Promise<ShopOrderListResult> {
   const { data } = await http.get<{ code: number; msg: string; data: ShopOrderListResult }>(
-    shopOrdersQuery(accountId, page, pageSize, status, openid),
+    shopOrdersQuery(accountId, page, pageSize, status, openid, pickupType),
   );
   return unwrapEnvelope(data);
+}
+
+export async function getShopOrderDetail(id: number): Promise<ShopOrderDetail> {
+  // Public endpoint returns raw JSON (not the usual {code,msg,data} envelope).
+  const { data } = await http.get<ShopOrderDetail>(SHOP_PATH.order(id));
+  return data;
 }
 
 export async function shipShopOrder(id: number, company: string, no: string): Promise<void> {
   const { data } = await http.post<{ code: number; msg: string; data: null }>(
     `${APP_CONFIG.apiPrefix}/shop/admin/orders/${id}/ship`,
     { company, no },
+  );
+  unwrapEnvelope(data);
+}
+
+export async function pickupShopOrder(id: number, code: string): Promise<void> {
+  const { data } = await http.post<{ code: number; msg: string; data: null }>(
+    `${APP_CONFIG.apiPrefix}/shop/admin/orders/${id}/pickup`,
+    { code },
   );
   unwrapEnvelope(data);
 }
@@ -274,8 +291,10 @@ export type {
   ShopCategoryItem,
   ShopProductDetail,
   ShopProductItem,
+  ShopOrderDetail,
   ShopOrderItem,
   ShopOrderListResult,
+  ShopOrderProductItem,
   ShopProductListResult,
   ShopSkuItem,
 };

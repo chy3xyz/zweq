@@ -67,6 +67,30 @@ export interface ShopOrderItem {
   express_no: string;
   paid_at: number;
   created_at: number;
+  /** '' | 'delivery' | 'self' */
+  pickup_type?: string;
+  pickup_code?: string;
+  store_id?: number;
+  address_json?: string;
+}
+
+export interface ShopOrderProductItem {
+  id: number;
+  order_id: number;
+  product_id: number;
+  sku_id: number;
+  name: string;
+  image: string;
+  spec_json: string;
+  price: number;
+  quantity: number;
+  created_at: number;
+}
+
+export interface ShopOrderDetail {
+  order: ShopOrderItem;
+  items: ShopOrderProductItem[];
+  commented_order_product_ids: number[];
 }
 
 export interface ShopOrderListResult {

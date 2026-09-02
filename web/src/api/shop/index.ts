@@ -14,6 +14,7 @@ export {
   deleteShopCategory,
   deleteShopOutlet,
   deleteShopProduct,
+  getShopOrderDetail,
   getShopProduct,
   listInviteGifts,
   listShopArticles,
@@ -23,6 +24,7 @@ export {
   listShopOutlets,
   listShopProducts,
   listShopRefunds,
+  pickupShopOrder,
   shipShopOrder,
   updateShopProduct,
 } from './query';

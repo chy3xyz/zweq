@@ -8,6 +8,7 @@ export const SHOP_PATH = {
   adminProducts: `${P}/admin/products`,
   adminOrders: `${P}/admin/orders`,
   product: (id: number) => `${P}/products/${id}`,
+  order: (id: number) => `${P}/orders/${id}`,
 } as const;
 
 export const shopProductsQuery = (
@@ -56,6 +57,7 @@ export const shopOrdersQuery = (
   pageSize: number,
   status = -1,
   openid = '',
+  pickupType = '',
 ) => {
   const params = new URLSearchParams({
     account_id: String(accountId),
@@ -64,5 +66,6 @@ export const shopOrdersQuery = (
     status: String(status),
   });
   if (openid) params.set('openid', openid);
+  if (pickupType) params.set('pickup_type', pickupType);
   return `${SHOP_PATH.adminOrders}?${params.toString()}`;
 };
