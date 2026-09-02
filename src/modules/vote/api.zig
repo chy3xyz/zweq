@@ -36,6 +36,13 @@ const CreateVoteReq = struct {
     end_at: i64 = 0,
 };
 
+/// 整体更新：字段同 `CreateVoteReq`，不含 account_id（account 作用域不变）。
+const UpdateVoteReq = struct {
+    title: []const u8,
+    options: []const []const u8,
+    end_at: i64 = 0,
+};
+
 const CastVoteReq = struct {
     openid: []const u8,
     option_index: i64,
@@ -56,6 +63,8 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
         pub const routes: []const http.RouteSpec(Self) = &.{
             .{ .method = .GET, .path = "votes", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "vote:read" } },
             .{ .method = .POST, .path = "votes", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "vote:write" } },
+            .{ .method = .PUT, .path = "votes/{id}", .handler = http.wrapHandler(Self, update), .meta = .{ .permission = "vote:write" } },
+            .{ .method = .DELETE, .path = "votes/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "vote:write" } },
             .{ .method = .GET, .path = "votes/{id}/results", .handler = http.wrapHandler(Self, results), .meta = .{ .permission = "vote:read" } },
             .{ .method = .POST, .path = "votes/{id}/vote", .handler = http.wrapHandler(Self, cast), .meta = .{ .permission = "vote:write" } },
         };
@@ -69,6 +78,8 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
             try g.get("/votes", list, @ptrCast(@alignCast(self)));
             try g.post("/votes", create, @ptrCast(@alignCast(self)));
+            try g.put("/votes/{id}", update, @ptrCast(@alignCast(self)));
+            try g.delete("/votes/{id}", delete, @ptrCast(@alignCast(self)));
             try g.get("/votes/{id}/results", results, @ptrCast(@alignCast(self)));
             try g.post("/votes/{id}/vote", cast, @ptrCast(@alignCast(self)));
         }
@@ -146,6 +157,69 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
             const det1 = try std.fmt.bufPrint(&d1, "创建投票 {s}", .{req.title});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "vote.create", "vote", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+        }
+
+        /// 整体更新投票主题（account 作用域不变）。请求体同 `CreateVoteReq` 去 account_id。
+        fn update(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的投票 ID");
+                return;
+            };
+            const req = ctx.bindJson(UpdateVoteReq) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer {
+                ctx.allocator.free(req.title);
+                for (req.options) |o| ctx.allocator.free(o);
+                ctx.allocator.free(req.options);
+            }
+            self.svc.updateVote(tid, id, req.title, req.options, req.end_at) catch |err| switch (err) {
+                error.NotFound => {
+                    try ctx.sendErrorResponse(404, 404, "投票不存在");
+                    return;
+                },
+                error.InvalidInput => {
+                    try ctx.sendErrorResponse(400, 400, "参数非法");
+                    return;
+                },
+                else => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
+                    return;
+                },
+            };
+            var d1: [128]u8 = undefined;
+            const det1 = try std.fmt.bufPrint(&d1, "更新投票 #{d}", .{id});
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "vote.update", "vote", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = .{ .id = id } });
+        }
+
+        /// 删除投票及其全部投票记录。
+        fn delete(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的投票 ID");
+                return;
+            };
+            self.svc.deleteVote(tid, id) catch |err| switch (err) {
+                error.NotFound => {
+                    try ctx.sendErrorResponse(404, 404, "投票不存在");
+                    return;
+                },
+                else => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
+                    return;
+                },
+            };
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "vote.delete", "vote", id, "删除投票", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
         }
 
         fn results(ctx: *http.Context) !void {

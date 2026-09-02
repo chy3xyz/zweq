@@ -80,6 +80,14 @@ pub const VoteStore = struct {
         return try self.dup(entity);
     }
 
+    /// 按 id 取单条（tenant 过滤），供 service 校验存在性与管理端更新/删除。
+    pub fn getById(self: *VoteStore, tenant_id: i64, id: i64) !?VoteRow {
+        const preds = self.client.vote.predicates;
+        var entity = (try crud.first(self.client.vote, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
+        defer zent.codegen.deinitEntity(infos, VoteInfo, &entity, self.allocator);
+        return try self.dup(entity);
+    }
+
     /// 该账号最新的投票主题（receiver 用）。
     pub fn latestVote(self: *VoteStore, tenant_id: i64, account_id: i64) !?VoteRow {
         var q = self.client.vote.Query();
@@ -117,6 +125,25 @@ pub const VoteStore = struct {
         return .{ .items = out, .total = paged.total };
     }
 
+    // ── 管理端更新/删除 ─────────────────────────────────────
+
+    /// 整体更新投票主题（tenant 过滤；account 作用域不变，account_id 不参与更新）。
+    pub fn update(self: *VoteStore, tenant_id: i64, id: i64, title: []const u8, options_json: []const u8, end_at: i64, now: i64) !usize {
+        const preds = self.client.vote.predicates;
+        return crud.update(self.client.vote, .{
+            .title = title,
+            .options_json = options_json,
+            .end_at = end_at,
+            .updated_at = now,
+        }, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) });
+    }
+
+    /// 删除投票主题（tenant 过滤）。调用方应先删投票记录（`deleteRecordsByVoteId`）。
+    pub fn deleteById(self: *VoteStore, tenant_id: i64, id: i64) !void {
+        const preds = self.client.vote.predicates;
+        _ = try crud.delete(self.client.vote, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) });
+    }
+
     // ── 投票记录 ─────────────────────────────────────────────
 
     /// 某 openid 对某投票是否已投（防重）。
@@ -144,6 +171,12 @@ pub const VoteStore = struct {
         });
         defer zent.codegen.deinitEntity(infos, VoteRecordInfo, &row, self.allocator);
         return row.id;
+    }
+
+    /// 删除某投票的全部投票记录（删除投票前调用，避免孤儿记录）。
+    pub fn deleteRecordsByVoteId(self: *VoteStore, vote_id: i64) !void {
+        const preds = self.client.vote_record.predicates;
+        _ = try crud.delete(self.client.vote_record, .{preds.vote_idEQ(.{ .int = vote_id })});
     }
 
     /// 计票：某投票各选项的票数（返回 []i64，长度 = 选项数）。

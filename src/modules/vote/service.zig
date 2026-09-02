@@ -47,6 +47,36 @@ pub const VoteService = struct {
         return self.store.getVote(id) catch error.Unexpected;
     }
 
+    /// 按 id 取单条（tenant 过滤）——管理端更新/删除先经此校验存在性
+    /// （跨租户不可见，效果同 NotFound）。
+    pub fn getVoteById(self: *VoteService, tenant_id: i64, id: i64) VoteError!?VoteRow {
+        return self.store.getById(tenant_id, id) catch error.Unexpected;
+    }
+
+    /// 整体更新投票主题（account 作用域不变：account_id 不参与更新）。
+    /// `title` 空或 `options` 空列表 → InvalidInput；投票不存在或不属于本
+    /// tenant → NotFound。options_json 序列化与 create 一致（`["选项A",...]`）。
+    pub fn updateVote(self: *VoteService, tenant_id: i64, id: i64, title: []const u8, options: []const []const u8, end_at: i64) VoteError!void {
+        if (std.mem.trim(u8, title, " \t").len == 0) return error.InvalidInput;
+        if (options.len == 0) return error.InvalidInput;
+        const v_opt = self.getVoteById(tenant_id, id) catch return error.Unexpected;
+        const v = v_opt orelse return error.NotFound;
+        defer v.free(self.allocator);
+        const options_json = std.json.Stringify.valueAlloc(self.allocator, options, .{}) catch return error.Unexpected;
+        defer self.allocator.free(options_json);
+        _ = self.store.update(tenant_id, id, title, options_json, end_at, self.now()) catch return error.Unexpected;
+    }
+
+    /// 删除投票及其全部投票记录。投票不存在或不属于本 tenant → NotFound；
+    /// 先删投票记录再删主题（避免孤儿记录）。
+    pub fn deleteVote(self: *VoteService, tenant_id: i64, id: i64) VoteError!void {
+        const v_opt = self.getVoteById(tenant_id, id) catch return error.Unexpected;
+        const v = v_opt orelse return error.NotFound;
+        defer v.free(self.allocator);
+        self.store.deleteRecordsByVoteId(id) catch return error.Unexpected;
+        self.store.deleteById(tenant_id, id) catch return error.Unexpected;
+    }
+
     /// 投票：防重 + 选项合法性 + 截止校验。
     pub fn vote(self: *VoteService, tenant_id: i64, account_id: i64, openid: []const u8, vote_id: i64, option_index: i64) VoteError!void {
         const v_opt = self.store.getVote(vote_id) catch return error.Unexpected;
