@@ -115,6 +115,27 @@ pub const ModuleStore = struct {
         return try self.dupModule(entity);
     }
 
+    /// Fetch a module row by (tenant_id, id). Cross-tenant id reads as null.
+    pub fn getModuleById(self: *ModuleStore, tenant_id: i64, id: i64) !?AppModuleRow {
+        const preds = self.client.app_module.predicates;
+        var entity = (try crud.first(self.client.app_module, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
+        defer zent.codegen.deinitEntity(infos, AppModuleInfo, &entity, self.allocator);
+        return try self.dupModule(entity);
+    }
+
+    /// Update a module row by id (title/version/status/updated_at only; name
+    /// is the registry key and stays immutable). Existence must be pre-checked
+    /// by the caller via the tenant-scoped `getModuleById`.
+    pub fn updateModuleById(self: *ModuleStore, id: i64, title: []const u8, version: []const u8, status: []const u8, now: i64) !usize {
+        const preds = self.client.app_module.predicates;
+        return crud.update(self.client.app_module, .{
+            .title = title,
+            .version = version,
+            .status = status,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
+    }
+
     /// Upsert a module by (tenant_id, name). Returns the module id.
     pub fn upsertModule(self: *ModuleStore, tenant_id: i64, name: []const u8, title: []const u8, version: []const u8, status: []const u8, now: i64) !i64 {
         if (try self.getModuleByName(tenant_id, name)) |row| {

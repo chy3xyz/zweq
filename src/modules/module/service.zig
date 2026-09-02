@@ -11,6 +11,7 @@ pub const ModuleListResult = persist.ModuleListResult;
 
 pub const ModuleError = error{
     InvalidName,
+    InvalidInput,
     InvalidStatus,
     NotFound,
     Unexpected,
@@ -54,6 +55,18 @@ pub const ModuleService = struct {
 
     pub fn list(self: *ModuleService, page: usize, page_size: usize, tenant_id: i64) ModuleError!ModuleListResult {
         return self.store.listModules(page, page_size, tenant_id) catch error.Unexpected;
+    }
+
+    /// Update a module row by id (title/version/status; name is immutable).
+    /// `status` outside active/disabled → InvalidInput; module missing or not
+    /// belonging to this tenant → NotFound. Tenant scoping is enforced by the
+    /// `getModuleById` existence pre-check.
+    pub fn updateModule(self: *ModuleService, tenant_id: i64, id: i64, title: []const u8, version: []const u8, status: []const u8) ModuleError!void {
+        if (!validStatus(status)) return error.InvalidInput;
+        const row_opt = self.store.getModuleById(tenant_id, id) catch return error.Unexpected;
+        const row = row_opt orelse return error.NotFound;
+        defer row.free(self.allocator);
+        _ = self.store.updateModuleById(id, title, version, status, self.now()) catch return error.Unexpected;
     }
 
     pub fn bind(self: *ModuleService, tenant_id: i64, account_id: i64, module: []const u8, status: []const u8) ModuleError!i64 {

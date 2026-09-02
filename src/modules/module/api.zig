@@ -46,6 +46,13 @@ const RegisterModuleReq = struct {
     version: []const u8,
 };
 
+/// 整体更新：字段同注册去 name（name 为注册表键，不可变）。
+const UpdateModuleReq = struct {
+    title: []const u8,
+    version: []const u8,
+    status: []const u8,
+};
+
 const BindModuleReq = struct {
     module: []const u8,
     status: ?[]const u8 = null,
@@ -66,6 +73,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
         pub const routes: []const http.RouteSpec(Self) = &.{
             .{ .method = .GET, .path = "modules", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "module:read" } },
             .{ .method = .POST, .path = "modules", .handler = http.wrapHandler(Self, register), .meta = .{ .permission = "module:write" } },
+            .{ .method = .PUT, .path = "modules/{id}", .handler = http.wrapHandler(Self, update), .meta = .{ .permission = "module:write" } },
             .{ .method = .GET, .path = "accounts/{id}/modules", .handler = http.wrapHandler(Self, listBindings), .meta = .{ .permission = "module:read" } },
             .{ .method = .PUT, .path = "accounts/{id}/modules", .handler = http.wrapHandler(Self, bind), .meta = .{ .permission = "module:write" } },
             .{ .method = .DELETE, .path = "accounts/{id}/modules/{module}", .handler = http.wrapHandler(Self, unbind), .meta = .{ .permission = "module:write" } },
@@ -83,6 +91,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
             try g.get("/modules", list, @ptrCast(@alignCast(self)));
             try g.post("/modules", register, @ptrCast(@alignCast(self)));
+            try g.put("/modules/{id}", update, @ptrCast(@alignCast(self)));
             try g.get("/accounts/{id}/modules", listBindings, @ptrCast(@alignCast(self)));
             try g.put("/accounts/{id}/modules", bind, @ptrCast(@alignCast(self)));
             try g.delete("/accounts/{id}/modules/{module}", unbind, @ptrCast(@alignCast(self)));
@@ -148,6 +157,46 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             const det1 = try std.fmt.bufPrint(&d1, "注册模块 {s} v{s}", .{ req.name, req.version });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.register", "module", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.jsonStruct(201, .{ .code = 0, .msg = "模块已注册", .data = .{ .id = id } });
+        }
+
+        /// 整体更新模块（title/version/status）。status 仅接受 active/disabled。
+        fn update(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的模块 ID");
+                return;
+            };
+            const req = ctx.bindJson(UpdateModuleReq) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer {
+                ctx.allocator.free(req.title);
+                ctx.allocator.free(req.version);
+                ctx.allocator.free(req.status);
+            }
+            self.svc.updateModule(tid, id, req.title, req.version, req.status) catch |err| switch (err) {
+                error.NotFound => {
+                    try ctx.sendErrorResponse(404, 404, "模块不存在");
+                    return;
+                },
+                error.InvalidInput => {
+                    try ctx.sendErrorResponse(400, 400, "状态仅支持 active/disabled");
+                    return;
+                },
+                else => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
+                    return;
+                },
+            };
+            var d1: [128]u8 = undefined;
+            const det1 = try std.fmt.bufPrint(&d1, "更新模块 #{d}", .{id});
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.update", "module", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = .{ .id = id } });
         }
 
         fn listBindings(ctx: *http.Context) !void {
