@@ -7,6 +7,7 @@ import type {
   SeckillActivityItem,
   SeckillListResult,
   SeckillOrderItem,
+  UpdateSeckillRequest,
 } from './types';
 
 export async function listSeckills(
@@ -28,6 +29,31 @@ export async function createSeckill(body: CreateSeckillRequest): Promise<{ id: n
     body,
   );
   return unwrapEnvelope(data);
+}
+
+export async function getSeckill(id: number): Promise<SeckillActivityItem> {
+  const { data } = await http.get<{ code: number; msg: string; data: SeckillActivityItem }>(
+    SECKILL_PATH.seckill(id),
+  );
+  return unwrapEnvelope(data);
+}
+
+export async function updateSeckill(
+  id: number,
+  body: UpdateSeckillRequest,
+): Promise<{ id: number }> {
+  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(
+    SECKILL_PATH.seckill(id),
+    body,
+  );
+  return unwrapEnvelope(data);
+}
+
+export async function deleteSeckill(id: number): Promise<void> {
+  const { data } = await http.delete<{ code: number; msg: string; data: null }>(
+    SECKILL_PATH.seckill(id),
+  );
+  unwrapEnvelope(data);
 }
 
 export async function rushSeckill(id: number, openid: string, quantity = 1): Promise<void> {
@@ -65,4 +91,10 @@ export async function listSeckillOrders(
   return unwrapEnvelope(data);
 }
 
-export type { CreateSeckillRequest, SeckillActivityItem, SeckillListResult, SeckillOrderItem };
+export type {
+  CreateSeckillRequest,
+  SeckillActivityItem,
+  SeckillListResult,
+  SeckillOrderItem,
+  UpdateSeckillRequest,
+};

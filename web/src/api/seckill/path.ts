@@ -5,9 +5,10 @@ const P = `${APP_CONFIG.apiPrefix}/seckills`;
 export const SECKILL_PATH = {
   list: P,
   create: P,
-  orders: `${P}/orders`,
+  seckill: (id: number) => `${P}/${id}`,
   rush: (id: number) => `${P}/${id}/rush`,
   status: (id: number) => `${P}/${id}/status`,
+  orders: `${P}/orders`,
 } as const;
 
 export const seckillListQuery = (
