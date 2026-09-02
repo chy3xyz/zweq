@@ -66,6 +66,10 @@ INSERT INTO shop_product (tenant_id, account_id, category_id, name, image, conte
 (1, 1, (SELECT id FROM shop_category WHERE account_id=1 AND name='食品饮料'), '精品咖啡豆 500g', 'https://picsum.photos/seed/prod3/400/400', '<p>埃塞俄比亚耶加雪菲</p>', 8900, 12900, 200, 56, 1),
 (1, 1, (SELECT id FROM shop_category WHERE account_id=1 AND name='日用百货'), '纯棉毛巾套装', 'https://picsum.photos/seed/prod4/400/400', '<p>3条装纯棉毛巾</p>', 4500, 6900, 300, 112, 1);
 
+-- 10. 为全部 account_id=1 商品建默认 SKU（下单依赖 sku_id，无 sku 会报"商品不存在"）
+INSERT INTO shop_product_sku (tenant_id, account_id, product_id, spec_json, image, price, stock, created_at, updated_at)
+SELECT tenant_id, account_id, id, '[]', image, price, stock, strftime('%s','now'), strftime('%s','now') FROM shop_product WHERE account_id=1;
+
 -- 10. Shop orders for test fan
 -- status: 0=待支付 1=已支付 2=已发货 3=已完成 4=已取消
 INSERT INTO shop_order (tenant_id, account_id, order_no, openid, total_amount, pay_amount, status, paid_at, pickup_type, created_at, updated_at)
