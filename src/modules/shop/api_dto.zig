@@ -341,6 +341,9 @@ pub const OrderDto = struct {
     address_json: []const u8,
     express_company: []const u8,
     express_no: []const u8,
+    pickup_type: []const u8,
+    pickup_code: []const u8,
+    store_id: i64,
     paid_at: i64,
     created_at: i64,
 };
@@ -357,6 +360,9 @@ pub fn toOrderDto(row: service.ShopOrderRow) OrderDto {
         .address_json = row.address_json,
         .express_company = row.express_company,
         .express_no = row.express_no,
+        .pickup_type = row.pickup_type,
+        .pickup_code = row.pickup_code,
+        .store_id = row.store_id,
         .paid_at = row.paid_at,
         .created_at = row.created_at,
     };

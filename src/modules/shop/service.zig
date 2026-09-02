@@ -468,8 +468,8 @@ pub const ShopService = struct {
         return self.store.trade.getOrder(id) catch error.Unexpected;
     }
 
-    pub fn listOrders(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64) ShopError!OrderListResult {
-        return self.store.trade.listOrders(page, page_size, tenant_id, account_id, openid, status) catch error.Unexpected;
+    pub fn listOrders(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64, pickup_type: []const u8) ShopError!OrderListResult {
+        return self.store.trade.listOrders(page, page_size, tenant_id, account_id, openid, status, pickup_type) catch error.Unexpected;
     }
 
     pub fn listOrderProducts(self: *ShopService, order_id: i64) ShopError![]ShopOrderProductRow {
@@ -785,7 +785,7 @@ pub const ShopService = struct {
 
         // 订单状态
         if (std.mem.indexOf(u8, q, "订单") != null or std.mem.indexOf(u8, q, "order") != null) {
-            var orders = self.store.trade.listOrders(1, 3, tenant_id, account_id, openid, -1) catch return error.Unexpected;
+            var orders = self.store.trade.listOrders(1, 3, tenant_id, account_id, openid, -1, "") catch return error.Unexpected;
             defer orders.free(self.allocator);
             if (orders.items.len == 0) {
                 buf.appendSlice(allocator, "您还没有订单，快去商城逛逛吧～") catch return error.Unexpected;
@@ -818,7 +818,7 @@ pub const ShopService = struct {
 
         // 物流
         if (std.mem.indexOf(u8, q, "物流") != null or std.mem.indexOf(u8, q, "快递") != null) {
-            var orders = self.store.trade.listOrders(1, 1, tenant_id, account_id, openid, 2) catch return error.Unexpected;
+            var orders = self.store.trade.listOrders(1, 1, tenant_id, account_id, openid, 2, "") catch return error.Unexpected;
             defer orders.free(self.allocator);
             if (orders.items.len == 0) {
                 buf.appendSlice(allocator, "您没有已发货的订单") catch return error.Unexpected;

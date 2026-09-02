@@ -360,7 +360,7 @@ pub const TradeStore = struct {
         };
     }
 
-    pub fn listOrders(self: *TradeStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64) !OrderListResult {
+    pub fn listOrders(self: *TradeStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64, pickup_type: []const u8) !OrderListResult {
         var q = self.client.shop_order.Query();
         defer q.deinit();
         const preds = self.client.shop_order.predicates;
@@ -368,6 +368,7 @@ pub const TradeStore = struct {
         if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         if (openid.len > 0) _ = try q.Where(.{preds.openidEQ(.{ .string = openid })});
         if (status >= 0) _ = try q.Where(.{preds.statusEQ(.{ .int = status })});
+        if (pickup_type.len > 0) _ = try q.Where(.{preds.pickup_typeEQ(.{ .string = pickup_type })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var paged = try q.paged(page, page_size);
         defer paged.deinit();

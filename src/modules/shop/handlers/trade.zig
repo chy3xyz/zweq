@@ -345,7 +345,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 _ = self.svc.autoCancelExpired(tid, account_id, self.order_timeout_secs) catch {};
             }
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 50 });
-            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id, openid, status) catch {
+            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id, openid, status, "") catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -438,8 +438,13 @@ pub fn Mixin(comptime ApiT: type) type {
             const tid = ApiT.tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const status = ctx.queryInt(i64, "status", -1);
+            const pickup_type = ctx.query.get("pickup_type") orelse "";
+            if (pickup_type.len > 0 and !std.mem.eql(u8, pickup_type, "delivery") and !std.mem.eql(u8, pickup_type, "self")) {
+                try ctx.sendErrorResponse(400, 400, "配送方式仅支持 delivery/self");
+                return;
+            }
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id, "", status) catch {
+            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id, "", status, pickup_type) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
