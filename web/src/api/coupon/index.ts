@@ -1,2 +1,12 @@
 export * from './types';
-export { claimCoupon, createCoupon, deleteCoupon, listCoupons, listCouponUsers, setCouponStatus, useCoupon } from './query';
+export {
+  claimCoupon,
+  createCoupon,
+  deleteCoupon,
+  getCoupon,
+  listCoupons,
+  listCouponUsers,
+  setCouponStatus,
+  updateCoupon,
+  useCoupon,
+} from './query';

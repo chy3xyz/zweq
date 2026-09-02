@@ -49,3 +49,15 @@ export interface CreateCouponRequest {
   end_at?: number;
   status?: number;
 }
+
+/** 整体更新：字段同 `CreateCouponRequest` 去 account_id（account 作用域不变）。 */
+export interface UpdateCouponRequest {
+  title: string;
+  amount: number;
+  min_amount?: number;
+  total?: number;
+  per_user?: number;
+  start_at?: number;
+  end_at?: number;
+  status?: number;
+}

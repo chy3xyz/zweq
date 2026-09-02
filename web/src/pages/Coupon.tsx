@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 
 import {
   claimCoupon,
@@ -7,6 +7,7 @@ import {
   listCoupons,
   listCouponUsers,
   setCouponStatus,
+  updateCoupon,
   useCoupon,
   type CouponItem,
   type CouponUserItem,
@@ -14,11 +15,16 @@ import {
 import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import AdminCrudPage from '#ui/components/AdminCrudPage';
 import DataTable, { type Column } from '#ui/components/DataTable';
+import FormField from '#ui/components/FormField';
 import FormModal from '#ui/components/FormModal';
 import SearchBar, { type SearchField, type SearchValues } from '#ui/components/SearchBar';
+import Tabs from '#ui/components/Tabs';
 import { useAccountId, useFeedback, usePaged } from '#ui/hooks';
 import { formatDateTime, intParam } from '#ui/utils';
 import { fenToYuan, formatYuan } from '#ui/utils/money';
+
+const TABS = ['优惠券模板', '领取记录'] as const;
+type Tab = (typeof TABS)[number];
 
 const COUPON_FIELDS: SearchField[] = [
   { kind: 'text', key: 'keyword', label: '券名', placeholder: '输入券名关键字' },
@@ -49,25 +55,74 @@ const USER_FIELDS: SearchField[] = [
   },
 ];
 
+/** 新建/编辑共用的券模板表单（金额字段以「元」字符串编辑，提交时转分）。 */
+interface CouponFormState {
+  title: string;
+  /** 元 */
+  amount: string;
+  /** 元 */
+  min_amount: string;
+  total: number;
+  per_user: number;
+  /** 生效时间（epoch 秒），0 = 不限 */
+  start_at: number;
+  /** 失效时间（epoch 秒），0 = 不限 */
+  end_at: number;
+  /** 1 = 上架，0 = 下架 */
+  status: number;
+}
+
+const EMPTY_FORM: CouponFormState = {
+  title: '',
+  amount: '10.00',
+  min_amount: '0.00',
+  total: 0,
+  per_user: 1,
+  start_at: 0,
+  end_at: 0,
+  status: 1,
+};
+
+/** epoch 秒 → datetime-local 输入值（空/0 → 空串）。 */
+function toLocalInput(unixSeconds: number): string {
+  if (!unixSeconds) return '';
+  const d = new Date(unixSeconds * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** datetime-local 输入值（"YYYY-MM-DDTHH:mm"，按本地时区解析）→ epoch 秒；空串/非法 → 0。 */
+function parseLocalInput(value: string): number {
+  const v = value.trim();
+  if (!v) return 0;
+  const ms = new Date(v).getTime();
+  return Number.isNaN(ms) ? 0 : Math.floor(ms / 1000);
+}
+
 function Coupon() {
-  const { accountId, ready, accountName } = useAccountId();
+  const { accountId, ready, accountName, onAccountChange } = useAccountId();
   const feedback = useFeedback();
 
+  const [tab, setTab] = createSignal<Tab>('优惠券模板');
   const [keyword, setKeyword] = createSignal<SearchValues>({});
   const [userFilters, setUserFilters] = createSignal<SearchValues>({});
 
-  const [createOpen, setCreateOpen] = createSignal(false);
-  const [verifyOpen, setVerifyOpen] = createSignal(false);
+  // 券模板 新建/编辑
+  const [formOpen, setFormOpen] = createSignal(false);
+  const [editing, setEditing] = createSignal<CouponItem | null>(null);
+  const [form, setForm] = createSignal<CouponFormState>({ ...EMPTY_FORM });
+  const [formSubmitting, setFormSubmitting] = createSignal(false);
+  const [formError, setFormError] = createSignal<string | null>(null);
+
+  // 发券 / 核销
   const [claimTarget, setClaimTarget] = createSignal<CouponItem | null>(null);
   const [openid, setOpenid] = createSignal('');
+  const [claimSubmitting, setClaimSubmitting] = createSignal(false);
+  const [claimError, setClaimError] = createSignal<string | null>(null);
+  const [verifyOpen, setVerifyOpen] = createSignal(false);
   const [useCode, setUseCode] = createSignal('');
-  const [submitting, setSubmitting] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
-
-  const [title, setTitle] = createSignal('');
-  const [amount, setAmount] = createSignal('10.00');
-  const [minAmount, setMinAmount] = createSignal('0.00');
-  const [total, setTotal] = createSignal(0);
+  const [verifySubmitting, setVerifySubmitting] = createSignal(false);
+  const [verifyError, setVerifyError] = createSignal<string | null>(null);
 
   const paged = usePaged<CouponItem>(
     (page, pageSize) =>
@@ -95,44 +150,89 @@ function Coupon() {
     () => [accountId(), userFilters()],
   );
 
-  const openCreate = () => {
-    setError(null);
-    setTitle('');
-    setAmount('10.00');
-    setMinAmount('0.00');
-    setTotal(0);
-    setCreateOpen(true);
+  const setFormField = <K extends keyof CouponFormState>(key: K, value: CouponFormState[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const onCreate = async () => {
-    if (submitting()) return;
-    setSubmitting(true);
-    setError(null);
+  const resetFormModals = () => {
+    setFormOpen(false);
+    setEditing(null);
+    setForm({ ...EMPTY_FORM });
+    setClaimTarget(null);
+    setOpenid('');
+    setVerifyOpen(false);
+    setUseCode('');
+  };
+
+  // 账号切换：关闭所有弹窗并重置表单，列表由 usePaged 的 watch 自动回到第 1 页。
+  onAccountChange(() => {
+    resetFormModals();
+  });
+
+  const openCreate = () => {
+    setFormError(null);
+    setEditing(null);
+    setForm({ ...EMPTY_FORM });
+    setFormOpen(true);
+  };
+
+  const openEdit = (row: CouponItem) => {
+    setFormError(null);
+    setEditing(row);
+    setForm({
+      title: row.title,
+      amount: fenToYuan(row.amount),
+      min_amount: fenToYuan(row.min_amount),
+      total: row.total,
+      per_user: row.per_user,
+      start_at: row.start_at,
+      end_at: row.end_at,
+      status: row.status,
+    });
+    setFormOpen(true);
+  };
+
+  const onFormSubmit = async () => {
+    if (formSubmitting() || !ready()) return;
+    const current = form();
+    const title = current.title.trim();
+    if (!title) {
+      setFormError('券名不能为空');
+      return;
+    }
+    const body = {
+      title,
+      amount: Math.round(Number(current.amount) * 100),
+      min_amount: Math.round(Number(current.min_amount || 0) * 100),
+      total: current.total,
+      per_user: current.per_user,
+      start_at: current.start_at,
+      end_at: current.end_at,
+      status: current.status,
+    };
+    setFormSubmitting(true);
+    setFormError(null);
     try {
-      await createCoupon({
-        account_id: accountId(),
-        title: title().trim(),
-        amount: Math.round(Number(amount()) * 100),
-        min_amount: Math.round(Number(minAmount()) * 100),
-        total: total(),
-        per_user: 1,
-        status: 1,
-      });
-      setCreateOpen(false);
-      feedback.toast('优惠券已创建');
-      void paged.reload(1);
+      if (editing()) {
+        await updateCoupon(editing()!.id, body);
+      } else {
+        await createCoupon({ account_id: accountId(), ...body });
+      }
+      setFormOpen(false);
+      feedback.toast(editing() ? '优惠券已更新' : '优惠券已创建');
+      void paged.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '创建失败，请稍后重试');
+      setFormError(err instanceof Error ? err.message : '保存失败，请稍后重试');
     } finally {
-      setSubmitting(false);
+      setFormSubmitting(false);
     }
   };
 
   const onClaim = async () => {
     const coupon = claimTarget();
-    if (submitting() || !coupon) return;
-    setSubmitting(true);
-    setError(null);
+    if (claimSubmitting() || !coupon) return;
+    setClaimSubmitting(true);
+    setClaimError(null);
     try {
       const result = await claimCoupon(coupon.id, openid().trim());
       setClaimTarget(null);
@@ -140,16 +240,16 @@ function Coupon() {
       feedback.toast(`发券成功：${result.code}`);
       void users.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '发券失败，请稍后重试');
+      setClaimError(err instanceof Error ? err.message : '发券失败，请稍后重试');
     } finally {
-      setSubmitting(false);
+      setClaimSubmitting(false);
     }
   };
 
   const onVerify = async () => {
-    if (submitting()) return;
-    setSubmitting(true);
-    setError(null);
+    if (verifySubmitting()) return;
+    setVerifySubmitting(true);
+    setVerifyError(null);
     try {
       await useCoupon(useCode().trim());
       setVerifyOpen(false);
@@ -157,9 +257,9 @@ function Coupon() {
       feedback.toast('已核销');
       void users.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '核销失败，请稍后重试');
+      setVerifyError(err instanceof Error ? err.message : '核销失败，请稍后重试');
     } finally {
-      setSubmitting(false);
+      setVerifySubmitting(false);
     }
   };
 
@@ -197,6 +297,23 @@ function Coupon() {
       render: (r) => (r.min_amount > 0 ? formatYuan(r.min_amount) : <span class="text-base-content/40">无门槛</span>),
     },
     { key: 'total', title: '总量', render: (r) => (r.total === 0 ? '不限' : r.total) },
+    { key: 'per_user', title: '每人限领', render: (r) => r.per_user },
+    {
+      key: 'start_at',
+      title: '有效期',
+      render: (r) => {
+        if (r.start_at && r.end_at) {
+          return (
+            <span class="text-sm text-base-content/70">
+              {formatDateTime(r.start_at)} ~ {formatDateTime(r.end_at)}
+            </span>
+          );
+        }
+        if (r.start_at) return <span class="text-sm text-base-content/70">自 {formatDateTime(r.start_at)} 起</span>;
+        if (r.end_at) return <span class="text-sm text-base-content/70">至 {formatDateTime(r.end_at)} 止</span>;
+        return <span class="text-base-content/40">长期</span>;
+      },
+    },
     {
       key: 'status',
       title: '状态',
@@ -232,160 +349,208 @@ function Coupon() {
 
   return (
     <div class="space-y-4">
-      <AdminCrudPage
-        title="优惠券"
-        description={ready() ? `当前公众号：${accountName()}` : undefined}
-        total={paged.total()}
-        onCreate={ready() ? openCreate : undefined}
-        createLabel="新增优惠券"
-        onRefresh={() => void paged.refresh()}
-        extra={
-          <button
-            type="button"
-            class="btn btn-outline btn-sm"
-            disabled={!ready()}
-            onClick={() => {
-              setError(null);
-              setVerifyOpen(true);
-            }}
-          >
-            核销券码
-          </button>
-        }
-        search={
-          <SearchBar
-            fields={COUPON_FIELDS}
-            values={{ status: '-1' }}
-            loading={paged.loading()}
-            onSearch={setKeyword}
-          />
-        }
-      >
-        <AccountRequiredBanner />
+      <div>
+        <h2 class="text-xl font-semibold">优惠券</h2>
+        <p class="text-sm text-base-content/60">券模板管理、发放与核销记录</p>
+      </div>
 
-        <DataTable
-          columns={columns}
-          rows={paged.items()}
-          rowKey={(r) => r.id}
+      <AccountRequiredBanner />
+
+      <Tabs tabs={[...TABS]} active={tab()} onChange={setTab} />
+
+      <Show when={tab() === '优惠券模板'}>
+        <AdminCrudPage
+          title="优惠券模板"
+          description={ready() ? `当前公众号：${accountName()}` : undefined}
           total={paged.total()}
-          page={paged.page()}
-          totalPages={paged.totalPages()}
-          pageSize={paged.pageSize()}
-          loading={paged.loading()}
-          error={paged.error()}
-          emptyText="暂无优惠券"
-          onPageChange={(p) => void paged.reload(p)}
-          onPageSizeChange={(size) => paged.setPageSize(size)}
-          actions={(row) => (
-            <>
-              <button
-                type="button"
-                class="btn btn-ghost btn-xs text-primary"
-                onClick={() => {
-                  setError(null);
-                  setOpenid('');
-                  setClaimTarget(row);
-                }}
-              >
-                发券
-              </button>
-              <button
-                type="button"
-                class="btn btn-ghost btn-xs"
-                onClick={() => void onToggleStatus(row)}
-              >
-                {row.status === 1 ? '下架' : '上架'}
-              </button>
-              <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDelete(row)}>
-                删除
-              </button>
-            </>
-          )}
-        />
-      </AdminCrudPage>
+          onCreate={ready() ? openCreate : undefined}
+          createLabel="新增优惠券"
+          onRefresh={() => void paged.refresh()}
+          search={
+            <SearchBar
+              fields={COUPON_FIELDS}
+              values={{ status: '-1' }}
+              loading={paged.loading()}
+              onSearch={setKeyword}
+            />
+          }
+        >
+          <DataTable
+            columns={columns}
+            rows={paged.items()}
+            rowKey={(r) => r.id}
+            total={paged.total()}
+            page={paged.page()}
+            totalPages={paged.totalPages()}
+            pageSize={paged.pageSize()}
+            loading={paged.loading()}
+            error={paged.error()}
+            emptyText="暂无优惠券"
+            onPageChange={(p) => void paged.reload(p)}
+            onPageSizeChange={(size) => paged.setPageSize(size)}
+            actions={(row) => (
+              <>
+                <button type="button" class="btn btn-ghost btn-xs" onClick={() => openEdit(row)}>
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs"
+                  onClick={() => void onToggleStatus(row)}
+                >
+                  {row.status === 1 ? '下架' : '上架'}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs text-primary"
+                  onClick={() => {
+                    setClaimError(null);
+                    setOpenid('');
+                    setClaimTarget(row);
+                  }}
+                >
+                  发券
+                </button>
+                <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => void onDelete(row)}>
+                  删除
+                </button>
+              </>
+            )}
+          />
+        </AdminCrudPage>
+      </Show>
 
-      <section class="rounded-box border border-base-300 bg-base-100 p-4">
-        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h3 class="text-lg font-semibold">领取记录</h3>
-          <button type="button" class="btn btn-ghost btn-sm" onClick={() => void users.refresh()}>
-            刷新
-          </button>
-        </div>
-        <div class="mb-4">
-          <SearchBar fields={USER_FIELDS} loading={users.loading()} onSearch={setUserFilters} />
-        </div>
-        <DataTable
-          columns={userColumns}
-          rows={users.items()}
-          rowKey={(r) => r.id}
+      <Show when={tab() === '领取记录'}>
+        <AdminCrudPage
+          title="领取记录"
+          description="用户领取的券码与核销状态"
           total={users.total()}
-          page={users.page()}
-          totalPages={users.totalPages()}
-          pageSize={users.pageSize()}
-          loading={users.loading()}
-          error={users.error()}
-          emptyText="暂无领取记录"
-          onPageChange={(p) => void users.reload(p)}
-          onPageSizeChange={(size) => users.setPageSize(size)}
-        />
-      </section>
+          onRefresh={() => void users.refresh()}
+          extra={
+            <button
+              type="button"
+              class="btn btn-outline btn-sm"
+              disabled={!ready()}
+              onClick={() => {
+                setVerifyError(null);
+                setVerifyOpen(true);
+              }}
+            >
+              核销券码
+            </button>
+          }
+          search={
+            <SearchBar fields={USER_FIELDS} loading={users.loading()} onSearch={setUserFilters} />
+          }
+        >
+          <DataTable
+            columns={userColumns}
+            rows={users.items()}
+            rowKey={(r) => r.id}
+            total={users.total()}
+            page={users.page()}
+            totalPages={users.totalPages()}
+            pageSize={users.pageSize()}
+            loading={users.loading()}
+            error={users.error()}
+            emptyText="暂无领取记录"
+            onPageChange={(p) => void users.reload(p)}
+            onPageSizeChange={(size) => users.setPageSize(size)}
+          />
+        </AdminCrudPage>
+      </Show>
 
       <FormModal
-        open={createOpen()}
-        title="新增优惠券"
-        onSubmit={onCreate}
-        onClose={() => setCreateOpen(false)}
-        submitting={submitting()}
-        error={error()}
+        open={formOpen()}
+        title={editing() ? `编辑优惠券 #${editing()!.id}` : '新增优惠券'}
+        onSubmit={onFormSubmit}
+        onClose={() => setFormOpen(false)}
+        submitting={formSubmitting()}
+        error={formError()}
+        submitLabel={editing() ? '保存修改' : '创建'}
       >
-        <label class="form-control">
-          <span class="label-text mb-1">券名</span>
+        <FormField label="券名" required>
           <input
-            class="input input-bordered input-sm"
+            type="text"
+            class="input input-bordered input-sm w-full"
             placeholder="例如：满 100 减 10"
-            value={title()}
-            onInput={(e) => setTitle(e.currentTarget.value)}
+            value={form().title}
+            onInput={(e) => setFormField('title', e.currentTarget.value)}
             required
           />
-        </label>
+        </FormField>
         <div class="grid grid-cols-2 gap-3">
-          <label class="form-control">
-            <span class="label-text mb-1">面额（元）</span>
+          <FormField label="面额（元）" required>
             <input
-              class="input input-bordered input-sm"
               type="number"
               step="0.01"
               min="0"
-              value={amount()}
-              onInput={(e) => setAmount(e.currentTarget.value)}
+              class="input input-bordered input-sm w-full"
+              value={form().amount}
+              onInput={(e) => setFormField('amount', e.currentTarget.value)}
               required
             />
-          </label>
-          <label class="form-control">
-            <span class="label-text mb-1">使用门槛（元）</span>
+          </FormField>
+          <FormField label="使用门槛（元）" hint="订单满该金额可用，0 表示无门槛">
             <input
-              class="input input-bordered input-sm"
               type="number"
               step="0.01"
               min="0"
-              value={minAmount()}
-              onInput={(e) => setMinAmount(e.currentTarget.value)}
+              class="input input-bordered input-sm w-full"
+              value={form().min_amount}
+              onInput={(e) => setFormField('min_amount', e.currentTarget.value)}
             />
-          </label>
+          </FormField>
         </div>
-        <label class="form-control">
-          <span class="label-text mb-1">发放总量（0 表示不限）</span>
-          <input
-            class="input input-bordered input-sm"
-            type="number"
-            min="0"
-            value={total()}
-            onInput={(e) => setTotal(Number(e.currentTarget.value) || 0)}
-          />
-        </label>
-        <p class="text-xs text-base-content/50">
-          面额 {fenToYuan(Math.round(Number(amount() || 0) * 100))} 元，每人限领 1 张
-        </p>
+        <div class="grid grid-cols-2 gap-3">
+          <FormField label="发放总量" hint="0 表示不限">
+            <input
+              type="number"
+              min="0"
+              class="input input-bordered input-sm w-full"
+              value={form().total}
+              onInput={(e) => setFormField('total', Math.max(0, Math.floor(Number(e.currentTarget.value) || 0)))}
+            />
+          </FormField>
+          <FormField label="每人限领" required hint="每个用户最多可领取的张数">
+            <input
+              type="number"
+              min="1"
+              class="input input-bordered input-sm w-full"
+              value={form().per_user}
+              onInput={(e) => setFormField('per_user', Math.max(1, Math.floor(Number(e.currentTarget.value) || 1)))}
+              required
+            />
+          </FormField>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <FormField label="生效时间" hint="留空表示立即生效">
+            <input
+              type="datetime-local"
+              class="input input-bordered input-sm w-full"
+              value={toLocalInput(form().start_at)}
+              onInput={(e) => setFormField('start_at', parseLocalInput(e.currentTarget.value))}
+            />
+          </FormField>
+          <FormField label="失效时间" hint="留空表示长期有效">
+            <input
+              type="datetime-local"
+              class="input input-bordered input-sm w-full"
+              value={toLocalInput(form().end_at)}
+              onInput={(e) => setFormField('end_at', parseLocalInput(e.currentTarget.value))}
+            />
+          </FormField>
+        </div>
+        <FormField label="状态">
+          <select
+            class="select select-bordered select-sm w-full"
+            value={form().status}
+            onChange={(e) => setFormField('status', Number(e.currentTarget.value))}
+          >
+            <option value={1}>上架</option>
+            <option value={0}>下架</option>
+          </select>
+        </FormField>
       </FormModal>
 
       <FormModal
@@ -394,21 +559,21 @@ function Coupon() {
         description={claimTarget() ? `将「${claimTarget()!.title}」发放给指定粉丝` : undefined}
         onSubmit={onClaim}
         onClose={() => setClaimTarget(null)}
-        submitting={submitting()}
-        error={error()}
+        submitting={claimSubmitting()}
+        error={claimError()}
         submitLabel="发放"
         size="sm"
       >
-        <label class="form-control">
-          <span class="label-text mb-1">粉丝 openid</span>
+        <FormField label="粉丝 openid" required>
           <input
-            class="input input-bordered input-sm"
+            type="text"
+            class="input input-bordered input-sm w-full"
             placeholder="输入粉丝 openid"
             value={openid()}
             onInput={(e) => setOpenid(e.currentTarget.value)}
             required
           />
-        </label>
+        </FormField>
       </FormModal>
 
       <FormModal
@@ -416,21 +581,21 @@ function Coupon() {
         title="核销券码"
         onSubmit={onVerify}
         onClose={() => setVerifyOpen(false)}
-        submitting={submitting()}
-        error={error()}
+        submitting={verifySubmitting()}
+        error={verifyError()}
         submitLabel="核销"
         size="sm"
       >
-        <label class="form-control">
-          <span class="label-text mb-1">券码</span>
+        <FormField label="券码" required>
           <input
-            class="input input-bordered input-sm"
+            type="text"
+            class="input input-bordered input-sm w-full"
             placeholder="输入用户券码"
             value={useCode()}
             onInput={(e) => setUseCode(e.currentTarget.value)}
             required
           />
-        </label>
+        </FormField>
       </FormModal>
     </div>
   );

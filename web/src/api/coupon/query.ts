@@ -8,6 +8,7 @@ import type {
   CouponUserItem,
   CouponUserListResult,
   CreateCouponRequest,
+  UpdateCouponRequest,
 } from './types';
 
 export async function listCoupons(
@@ -34,6 +35,19 @@ export async function setCouponStatus(id: number, status: number): Promise<void>
 export async function createCoupon(body: CreateCouponRequest): Promise<{ id: number }> {
   const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(
     COUPON_PATH.create,
+    body,
+  );
+  return unwrapEnvelope(data);
+}
+
+export async function getCoupon(id: number): Promise<CouponItem> {
+  const { data } = await http.get<{ code: number; msg: string; data: CouponItem }>(COUPON_PATH.coupon(id));
+  return unwrapEnvelope(data);
+}
+
+export async function updateCoupon(id: number, body: UpdateCouponRequest): Promise<{ id: number }> {
+  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(
+    COUPON_PATH.coupon(id),
     body,
   );
   return unwrapEnvelope(data);
@@ -70,4 +84,4 @@ export async function listCouponUsers(
   return unwrapEnvelope(data);
 }
 
-export type { CouponItem, CouponListResult, CouponUserItem, CouponUserListResult, CreateCouponRequest };
+export type { CouponItem, CouponListResult, CouponUserItem, CouponUserListResult, CreateCouponRequest, UpdateCouponRequest };
