@@ -3,6 +3,9 @@ import { APP_CONFIG } from '#ui/config';
 export const MATERIAL_PATH = {
   news: `${APP_CONFIG.apiPrefix}/materials/news`,
   files: `${APP_CONFIG.apiPrefix}/materials/files`,
+  syncNews: `${APP_CONFIG.apiPrefix}/materials/sync-news`,
+  syncFiles: `${APP_CONFIG.apiPrefix}/materials/sync-files`,
+  uploadNews: `${APP_CONFIG.apiPrefix}/materials/news/upload`,
 } as const;
 
 export const newsDetail = (id: number) => `${APP_CONFIG.apiPrefix}/materials/news/${id}`;

@@ -6,5 +6,8 @@ export {
   deleteNews,
   listMaterialFiles,
   listNews,
+  syncFiles,
+  syncNews,
   updateNews,
+  uploadNews,
 } from './query';

@@ -7,7 +7,10 @@ import {
   deleteNews,
   listMaterialFiles,
   listNews,
+  syncFiles,
+  syncNews,
   updateNews,
+  uploadNews,
   type MaterialFileItem,
   type MaterialKind,
   type NewsItem,
@@ -36,7 +39,6 @@ function Materials() {
   const { accountId, onAccountChange } = useAccountId();
   const feedback = useFeedback();
   const [tab, setTab] = createSignal<(typeof TABS)[number]>('图文素材');
-  const [success, setSuccess] = createSignal<string | null>(null);
 
   // 图文编辑弹窗
   const [newsOpen, setNewsOpen] = createSignal(false);
@@ -50,6 +52,17 @@ function Materials() {
   const [saving, setSaving] = createSignal(false);
   const [newsError, setNewsError] = createSignal<string | null>(null);
   const [thumbPicker, setThumbPicker] = createSignal(false);
+
+  // 上传到微信弹窗（add_news）
+  const [uploadOpen, setUploadOpen] = createSignal(false);
+  const [upTitle, setUpTitle] = createSignal('');
+  const [upAuthor, setUpAuthor] = createSignal('');
+  const [upDigest, setUpDigest] = createSignal('');
+  const [upContent, setUpContent] = createSignal('');
+  const [upThumbMediaId, setUpThumbMediaId] = createSignal('');
+  const [upSourceUrl, setUpSourceUrl] = createSignal('');
+  const [uploading, setUploading] = createSignal(false);
+  const [uploadError, setUploadError] = createSignal<string | null>(null);
 
   // 素材文件弹窗
   const [fileOpen, setFileOpen] = createSignal(false);
@@ -136,6 +149,59 @@ function Materials() {
       onDone: () => void news.refresh(),
     });
 
+  const openUploadNews = () => {
+    setUpTitle('');
+    setUpAuthor('');
+    setUpDigest('');
+    setUpContent('');
+    setUpThumbMediaId('');
+    setUpSourceUrl('');
+    setUploadError(null);
+    setUploadOpen(true);
+  };
+
+  const onUploadNews = async () => {
+    if (uploading() || accountId() === 0) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      await uploadNews({
+        account_id: accountId(),
+        title: upTitle().trim(),
+        author: upAuthor().trim(),
+        digest: upDigest().trim(),
+        content: upContent().trim(),
+        thumb_media_id: upThumbMediaId().trim(),
+        content_source_url: upSourceUrl().trim(),
+      });
+      setUploadOpen(false);
+      feedback.toast('图文已上传到微信');
+      void news.refresh();
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : '上传失败，请稍后重试');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onSyncNews = () =>
+    feedback.runAction({
+      confirm: { title: '同步图文', message: '从微信后台拉取图文素材到本地？', danger: false },
+      action: () => syncNews(accountId()),
+      success: '图文已同步',
+      onDone: () => void news.refresh(),
+    });
+
+  const onSyncFiles = () => {
+    const kind = kindFilter() || 'image';
+    return feedback.runAction({
+      confirm: { title: '同步素材文件', message: `从微信后台拉取${KIND_LABEL[kind]}素材到本地？`, danger: false },
+      action: () => syncFiles(accountId(), kind),
+      success: '素材文件已同步',
+      onDone: () => void files.refresh(),
+    });
+  };
+
   const onAddFile = async () => {
     if (fileSaving() || accountId() === 0) return;
     setFileSaving(true);
@@ -178,6 +244,7 @@ function Materials() {
     { key: 'updated_at', title: '更新时间', render: (n) => <span class="text-sm text-base-content/70">{formatDateTime(n.updated_at)}</span> },
   ];
 
+  // 后端未暴露 PUT /materials/files/{id}，素材文件仅支持新增/删除。
   const fileColumns: Column<MaterialFileItem>[] = [
     { key: 'id', title: 'ID', render: (f) => <span class="font-mono text-xs">{f.id}</span> },
     { key: 'kind', title: '类型', render: (f) => <span class="badge badge-sm badge-ghost">{KIND_LABEL[f.kind]}</span> },
@@ -194,12 +261,6 @@ function Materials() {
       </div>
 
       <AccountRequiredBanner />
-
-      <Show when={success()}>
-        <div role="alert" class="alert alert-success py-2 text-sm">
-          {success()}
-        </div>
-      </Show>
 
       <div role="tablist" class="tabs tabs-box">
         <For each={TABS}>
@@ -221,14 +282,32 @@ function Materials() {
         <section class="rounded-box border border-base-300 bg-base-100 p-4">
           <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h3 class="text-lg font-semibold">图文素材</h3>
-            <button
-              type="button"
-              class="btn btn-primary btn-sm"
-              disabled={accountId() === 0}
-              onClick={openCreateNews}
-            >
-              新建图文
-            </button>
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                class="btn btn-outline btn-sm"
+                disabled={accountId() === 0}
+                onClick={() => void onSyncNews()}
+              >
+                同步图文
+              </button>
+              <button
+                type="button"
+                class="btn btn-outline btn-sm"
+                disabled={accountId() === 0}
+                onClick={openUploadNews}
+              >
+                上传到微信
+              </button>
+              <button
+                type="button"
+                class="btn btn-primary btn-sm"
+                disabled={accountId() === 0}
+                onClick={openCreateNews}
+              >
+                新建图文
+              </button>
+            </div>
           </div>
           <DataTable
             columns={newsColumns}
@@ -273,6 +352,14 @@ function Materials() {
                 <option value="">全部</option>
                 <For each={KIND_OPTIONS}>{(k) => <option value={k.value}>{k.label}</option>}</For>
               </select>
+              <button
+                type="button"
+                class="btn btn-outline btn-sm"
+                disabled={accountId() === 0}
+                onClick={() => void onSyncFiles()}
+              >
+                同步素材文件
+              </button>
               <button
                 type="button"
                 class="btn btn-primary btn-sm"
@@ -387,6 +474,68 @@ function Materials() {
             placeholder="https://..."
             value={linkUrl()}
             onInput={(e) => setLinkUrl(e.currentTarget.value)}
+          />
+        </FormField>
+      </FormModal>
+
+      <FormModal
+        open={uploadOpen()}
+        title="上传图文到微信"
+        description="调用微信 add_news 接口直接发布图文，需要填写封面图 MediaID"
+        onSubmit={onUploadNews}
+        onClose={() => setUploadOpen(false)}
+        submitting={uploading()}
+        error={uploadError()}
+        submitLabel="上传"
+      >
+        <FormField label="标题" required>
+          <input
+            type="text"
+            class="input input-bordered input-sm w-full"
+            placeholder="图文标题"
+            value={upTitle()}
+            onInput={(e) => setUpTitle(e.currentTarget.value)}
+          />
+        </FormField>
+        <div class="grid grid-cols-2 gap-3">
+          <FormField label="作者">
+            <input
+              type="text"
+              class="input input-bordered input-sm w-full"
+              placeholder="作者"
+              value={upAuthor()}
+              onInput={(e) => setUpAuthor(e.currentTarget.value)}
+            />
+          </FormField>
+          <FormField label="摘要">
+            <input
+              type="text"
+              class="input input-bordered input-sm w-full"
+              placeholder="一句话摘要"
+              value={upDigest()}
+              onInput={(e) => setUpDigest(e.currentTarget.value)}
+            />
+          </FormField>
+        </div>
+        <FormField label="正文内容">
+          <RichEditor value={upContent()} onInput={setUpContent} placeholder="支持加粗、标题、列表、链接与图片插入" />
+        </FormField>
+        <FormField label="封面图 MediaID" required hint="需先上传封面图片到微信永久素材并获得 MediaID">
+          <input
+            type="text"
+            class="input input-bordered input-sm w-full font-mono"
+            placeholder="例如：MEDIA_ID_xxxxx"
+            value={upThumbMediaId()}
+            onInput={(e) => setUpThumbMediaId(e.currentTarget.value)}
+          />
+        </FormField>
+        <FormField label="原文链接">
+          <input
+            type="text"
+            class="input input-bordered input-sm w-full"
+            placeholder="https://..."
+            value={upSourceUrl()}
+            onInput={(e) => setUpSourceUrl(e.currentTarget.value)}
           />
         </FormField>
       </FormModal>

@@ -64,3 +64,14 @@ export interface CreateFileRequest {
   media_id: string;
   url?: string;
 }
+
+/// 上传图文到微信（add_news）。
+export interface UploadNewsRequest {
+  account_id: number;
+  title: string;
+  author?: string;
+  digest?: string;
+  content?: string;
+  thumb_media_id: string;
+  content_source_url?: string;
+}
