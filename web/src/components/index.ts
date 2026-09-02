@@ -6,6 +6,7 @@ export { default as DataTable } from './DataTable';
 export { default as FormModal } from './FormModal';
 export { default as Pagination, DEFAULT_PAGE_SIZES } from './Pagination';
 export { default as SearchBar } from './SearchBar';
+export { default as Tabs } from './Tabs';
 export type { ModalSize } from './BaseModal';
 export type { Column } from './DataTable';
 export type { SearchField, SearchOption, SearchValues } from './SearchBar';

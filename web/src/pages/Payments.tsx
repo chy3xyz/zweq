@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 
 import {
   completeRecharge,
@@ -13,6 +13,7 @@ import {
 } from '#ui/api';
 import AccountRequiredBanner from '#ui/components/AccountRequiredBanner';
 import DataTable, { type Column } from '#ui/components/DataTable';
+import { Tabs } from '#ui/components';
 import { useAccountId } from '#ui/hooks/useAccountId';
 import { usePaged } from '#ui/hooks/usePaged';
 import { formatDateTime } from '#ui/utils';
@@ -129,21 +130,7 @@ function Payments() {
         </div>
       </Show>
 
-      <div role="tablist" class="tabs tabs-box">
-        <For each={TABS}>
-          {(item) => (
-            <button
-              type="button"
-              role="tab"
-              class="tab"
-              classList={{ 'tab-active': tab() === item }}
-              onClick={() => setTab(item)}
-            >
-              {item}
-            </button>
-          )}
-        </For>
-      </div>
+      <Tabs tabs={[...TABS]} active={tab()} onChange={setTab} />
 
       <Show when={tab() === '充值支付'}>
         <div class="space-y-4">
