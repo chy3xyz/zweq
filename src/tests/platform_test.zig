@@ -105,7 +105,7 @@ test "file store metadata CRUD" {
     defer env.deinit();
     var file_store = file.persistence.FileStore.init(allocator, env.client);
 
-    const id = try file_store.create("a.txt", "key1", "text/plain", 4, 9, 1, 100);
+    const id = try file_store.create("a.txt", "key1", "text/plain", 4, 9, 1, 0, 100);
     const row = (try file_store.getById(id)).?;
     defer row.free(allocator);
     try std.testing.expectEqualStrings("a.txt", row.name);
@@ -160,10 +160,10 @@ test "file list isolates tenants" {
     defer env.deinit();
     var file_store = file.persistence.FileStore.init(allocator, env.client);
 
-    _ = try file_store.create("t1.txt", "k1", "text/plain", 3, 1, 1, 100);
-    _ = try file_store.create("t2.txt", "k2", "text/plain", 3, 1, 2, 101);
+    _ = try file_store.create("t1.txt", "k1", "text/plain", 3, 1, 1, 0, 100);
+    _ = try file_store.create("t2.txt", "k2", "text/plain", 3, 1, 2, 0, 101);
 
-    var tenant1 = try file_store.list(1, 20, null, 1, null, false);
+    var tenant1 = try file_store.list(1, 20, null, 1, 0, null, null, false);
     defer tenant1.free(allocator);
     try std.testing.expectEqual(@as(i64, 1), tenant1.total);
     try std.testing.expectEqualStrings("t1.txt", tenant1.items[0].name);

@@ -227,7 +227,7 @@ test "dashboard counts: countAll + registration trend buckets" {
     try std.testing.expectEqual(@as(i64, 1), try store.countRegisteredBetween(120, 160)); // 桶边界 [start, end)
     try std.testing.expectEqual(@as(i64, 0), try store.countRegisteredBetween(200, 300));
 
-    _ = try file_store.create("a.txt", "k", "text/plain", 3, 1, 1, 100);
+    _ = try file_store.create("a.txt", "k", "text/plain", 3, 1, 1, 0, 100);
     _ = try notify_store.create(1, "t", "b", "info", 100);
     try std.testing.expectEqual(@as(i64, 1), try file_store.countAll());
     try std.testing.expectEqual(@as(i64, 1), try notify_store.countAll());
