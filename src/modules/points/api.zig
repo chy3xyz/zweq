@@ -194,7 +194,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "points.product.update", "points", id, "更新积分商品", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
         }
 
         fn deleteProduct(ctx: *http.Context) !void {
