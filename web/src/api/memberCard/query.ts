@@ -79,17 +79,18 @@ export async function getMemberView(accountId: number, openid: string): Promise<
 }
 
 export async function openMemberCard(accountId: number, openid: string): Promise<void> {
-  const { data } = await http.post<{ code: number; msg: string; data: null }>(MEMBER_CARD_PATH.open, {
-    openid,
-  });
+  const { data } = await http.post<{ code: number; msg: string; data: null }>(
+    `${MEMBER_CARD_PATH.open}?account_id=${accountId}`,
+    { openid },
+  );
   unwrapEnvelope(data);
 }
 
 export async function adjustMemberPoints(accountId: number, openid: string, delta: number): Promise<void> {
-  const { data } = await http.post<{ code: number; msg: string; data: null }>(MEMBER_CARD_PATH.adjust, {
-    openid,
-    delta,
-  });
+  const { data } = await http.post<{ code: number; msg: string; data: null }>(
+    `${MEMBER_CARD_PATH.adjust}?account_id=${accountId}`,
+    { openid, delta },
+  );
   unwrapEnvelope(data);
 }
 
