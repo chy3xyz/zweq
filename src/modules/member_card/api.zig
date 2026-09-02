@@ -45,6 +45,16 @@ const CreateLevelReq = struct {
     status: i64 = 1,
 };
 
+/// 整体更新：字段同 `CreateLevelReq`，不含 account_id（account 作用域不变）。
+const UpdateLevelReq = struct {
+    name: []const u8,
+    level: i64 = 1,
+    discount: i64 = 1000,
+    points_ratio: i64 = 100,
+    threshold: i64 = 0,
+    status: i64 = 1,
+};
+
 const SetStatusReq = struct {
     status: i64,
 };
@@ -73,6 +83,8 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
         pub const routes: []const http.RouteSpec(Self) = &.{
             .{ .method = .GET, .path = "member-cards", .handler = http.wrapHandler(Self, listLevels), .meta = .{ .permission = "member_card:read" } },
             .{ .method = .POST, .path = "member-cards", .handler = http.wrapHandler(Self, createLevel), .meta = .{ .permission = "member_card:write" } },
+            .{ .method = .PUT, .path = "member-cards/{id}", .handler = http.wrapHandler(Self, updateLevel), .meta = .{ .permission = "member_card:write" } },
+            .{ .method = .DELETE, .path = "member-cards/{id}", .handler = http.wrapHandler(Self, deleteLevel), .meta = .{ .permission = "member_card:write" } },
             .{ .method = .PUT, .path = "member-cards/{id}/status", .handler = http.wrapHandler(Self, setStatus), .meta = .{ .permission = "member_card:write" } },
             .{ .method = .GET, .path = "member-cards/members", .handler = http.wrapHandler(Self, listMembers), .meta = .{ .permission = "member_card:read" } },
             .{ .method = .GET, .path = "member-cards/view", .handler = http.wrapHandler(Self, view), .meta = .{ .permission = "member_card:read" } },
@@ -89,6 +101,8 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
             try g.get("/member-cards", listLevels, @ptrCast(@alignCast(self)));
             try g.post("/member-cards", createLevel, @ptrCast(@alignCast(self)));
+            try g.put("/member-cards/{id}", updateLevel, @ptrCast(@alignCast(self)));
+            try g.delete("/member-cards/{id}", deleteLevel, @ptrCast(@alignCast(self)));
             try g.put("/member-cards/{id}/status", setStatus, @ptrCast(@alignCast(self)));
             try g.get("/member-cards/members", listMembers, @ptrCast(@alignCast(self)));
             try g.get("/member-cards/view", view, @ptrCast(@alignCast(self)));
@@ -165,6 +179,71 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             const det1 = try std.fmt.bufPrint(&d1, "创建会员等级 {s}", .{req.name});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member_card.create_level", "member_card_level", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+        }
+
+        /// 整体更新等级（account 作用域不变）。请求体同 `CreateLevelReq` 去 account_id。
+        fn updateLevel(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的等级 ID");
+                return;
+            };
+            const req = ctx.bindJson(UpdateLevelReq) catch {
+                try ctx.sendErrorResponse(400, 400, "请求体格式错误");
+                return;
+            };
+            defer ctx.allocator.free(req.name);
+            self.svc.updateLevel(tid, id, req.name, req.level, req.discount, req.points_ratio, req.threshold, req.status) catch |err| switch (err) {
+                error.NotFound => {
+                    try ctx.sendErrorResponse(404, 404, "等级不存在");
+                    return;
+                },
+                error.InvalidInput => {
+                    try ctx.sendErrorResponse(400, 400, "参数非法");
+                    return;
+                },
+                else => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
+                    return;
+                },
+            };
+            var d1: [128]u8 = undefined;
+            const det1 = try std.fmt.bufPrint(&d1, "更新会员等级 #{d}", .{id});
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member_card.update", "member_card_level", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = .{ .id = id } });
+        }
+
+        /// 删除等级（不级联）。有会员引用该等级时拒绝（400 提示先迁走会员）。
+        fn deleteLevel(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            try setAuditActor(ctx, self);
+            const admin_id = mw.authUserId(ctx) orelse return;
+            const tid = tenantScope(ctx, self);
+            const id = ctx.paramInt(i64, "id") catch {
+                try ctx.sendErrorResponse(400, 400, "无效的等级 ID");
+                return;
+            };
+            self.svc.deleteLevel(tid, id) catch |err| switch (err) {
+                error.NotFound => {
+                    try ctx.sendErrorResponse(404, 404, "等级不存在");
+                    return;
+                },
+                error.InvalidState => {
+                    try ctx.sendErrorResponse(400, 400, "该等级下存在会员，无法删除");
+                    return;
+                },
+                else => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
+                    return;
+                },
+            };
+            var d1: [128]u8 = undefined;
+            const det1 = try std.fmt.bufPrint(&d1, "删除会员等级 #{d}", .{id});
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member_card.delete", "member_card_level", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
         }
 
         /// 启停等级：body `{"status": 1|0}`。已开卡会员保留原等级。

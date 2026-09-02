@@ -18,6 +18,7 @@ pub const MemberCardError = error{
     NotFound,
     AlreadyOpened,
     InsufficientPoints,
+    InvalidState,
     Unexpected,
 };
 
@@ -62,6 +63,29 @@ pub const MemberCardService = struct {
     /// 启停等级：1 启用 / 0 停用。已开卡会员的等级不受影响。
     pub fn setLevelStatus(self: *MemberCardService, id: i64, status: i64) MemberCardError!bool {
         return self.store.setLevelStatus(id, status, self.now()) catch error.Unexpected;
+    }
+
+    /// 整体更新卡等级（account 作用域不变：account_id 不参与更新）。
+    /// `name` 空或 `discount` 越界（千分比须在 (0,1000]，同 `createLevel`，不做
+    /// 单位换算）→ InvalidInput；等级不存在或不属于本 tenant → NotFound。
+    /// store 影响 0 行也视为成功（幂等）。
+    pub fn updateLevel(self: *MemberCardService, tenant_id: i64, id: i64, name: []const u8, level: i64, discount: i64, points_ratio: i64, threshold: i64, status: i64) MemberCardError!void {
+        if (std.mem.trim(u8, name, " \t").len == 0 or discount <= 0 or discount > 1000) return error.InvalidInput;
+        const l_opt = self.store.getById(tenant_id, id) catch return error.Unexpected;
+        const l = l_opt orelse return error.NotFound;
+        defer l.free(self.allocator);
+        _ = self.store.updateLevel(id, name, level, discount, points_ratio, threshold, status, self.now()) catch return error.Unexpected;
+    }
+
+    /// 删除卡等级（不级联）：等级不存在或不属于本 tenant → NotFound；
+    /// 有会员引用该等级（删除守卫）→ InvalidState（先迁走会员等级再删）。
+    pub fn deleteLevel(self: *MemberCardService, tenant_id: i64, id: i64) MemberCardError!void {
+        const l_opt = self.store.getById(tenant_id, id) catch return error.Unexpected;
+        const l = l_opt orelse return error.NotFound;
+        defer l.free(self.allocator);
+        const refs = self.store.countMembersByLevel(id) catch return error.Unexpected;
+        if (refs > 0) return error.InvalidState;
+        self.store.deleteLevel(id) catch return error.Unexpected;
     }
 
     pub fn listAccounts(self: *MemberCardService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8) MemberCardError!persist.MemberAccountListResult {

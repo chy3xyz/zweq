@@ -178,6 +178,48 @@ pub const MemberCardStore = struct {
         return .{ .items = out, .total = paged.total };
     }
 
+    // ── 管理端更新/删除 ─────────────────────────────────────
+
+    /// 按 id 取单条（tenant 过滤），供 service 校验存在性与管理端更新/删除
+    /// （跨租户不可见，效果同 NotFound）。
+    pub fn getById(self: *MemberCardStore, tenant_id: i64, id: i64) !?MemberCardLevelRow {
+        const preds = self.client.member_card_level.predicates;
+        var entity = (try crud.first(self.client.member_card_level, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
+        defer zent.codegen.deinitEntity(infos, MemberCardLevelInfo, &entity, self.allocator);
+        return try self.dupLevel(entity);
+    }
+
+    /// 整体更新等级（account 作用域不变：account_id 不参与更新）。
+    /// 返回受影响行数（调用方已先经 `getById` 校验存在性，0 行视为幂等成功）。
+    pub fn updateLevel(self: *MemberCardStore, id: i64, name: []const u8, level: i64, discount: i64, points_ratio: i64, threshold: i64, status: i64, now: i64) !usize {
+        const preds = self.client.member_card_level.predicates;
+        return crud.update(self.client.member_card_level, .{
+            .name = name,
+            .level = level,
+            .discount = discount,
+            .points_ratio = points_ratio,
+            .threshold = threshold,
+            // 显式写入，不依赖 DB 默认值（迁移加的列在老库上是 nullable）。
+            .status = status,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
+    }
+
+    /// 删除等级（不级联）。调用方应先确认无会员引用（`countMembersByLevel`）。
+    pub fn deleteLevel(self: *MemberCardStore, id: i64) !void {
+        const preds = self.client.member_card_level.predicates;
+        _ = try crud.delete(self.client.member_card_level, .{preds.idEQ(.{ .int = id })});
+    }
+
+    /// 引用该等级的会员账户数（删除守卫：>0 时禁止删除）。
+    pub fn countMembersByLevel(self: *MemberCardStore, level_id: i64) !i64 {
+        var q = self.client.member_account.Query();
+        defer q.deinit();
+        const preds = self.client.member_account.predicates;
+        _ = try q.Where(.{preds.level_idEQ(.{ .int = level_id })});
+        return try q.Count();
+    }
+
     // ── 会员账户 ─────────────────────────────────────────────
 
     pub fn getAccountByOpenid(self: *MemberCardStore, tenant_id: i64, account_id: i64, openid: []const u8) !?MemberAccountRow {
