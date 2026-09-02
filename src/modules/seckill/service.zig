@@ -11,6 +11,22 @@ const message_mod = @import("../message/service.zig");
 pub const SeckillActivityRow = persist.SeckillActivityRow;
 pub const SeckillListResult = persist.SeckillListResult;
 
+/// 抢购记录视图行 = SeckillOrderRow + `activity_title`（管理端订单列表富化输出）。
+pub const SeckillOrderView = struct {
+    id: i64,
+    account_id: i64,
+    openid: []const u8,
+    activity_id: i64,
+    activity_title: []const u8,
+    quantity: i64,
+    created_at: i64,
+
+    pub fn free(self: SeckillOrderView, allocator: std.mem.Allocator) void {
+        allocator.free(self.openid);
+        allocator.free(self.activity_title);
+    }
+};
+
 pub const SeckillError = error{
     InvalidInput,
     NotFound,
@@ -55,8 +71,80 @@ pub const SeckillService = struct {
         return self.store.getActivity(id) catch error.Unexpected;
     }
 
+    /// 按 id 取单条（tenant 过滤）——管理端详情/更新/删除先经此校验存在性
+    /// （跨租户不可见，效果同 NotFound）。
+    pub fn getActivityById(self: *SeckillService, tenant_id: i64, id: i64) SeckillError!?SeckillActivityRow {
+        return self.store.getById(tenant_id, id) catch error.Unexpected;
+    }
+
+    /// 整体更新秒杀活动（account 作用域不变：account_id 不参与更新）。
+    /// `title` 空 / `stock <= 0` / `per_user < 1` / 时间窗非法 → InvalidInput；
+    /// 库存不得小于已售（`stock < sold`）→ InvalidInput；活动不存在或不属于本
+    /// tenant → NotFound。store 影响 0 行也视为成功（幂等）。校验规则跟随 `createActivity`。
+    pub fn updateActivity(self: *SeckillService, tenant_id: i64, id: i64, title: []const u8, price: i64, original_price: i64, stock: i64, per_user: i64, start_at: i64, end_at: i64, status: i64) SeckillError!void {
+        if (std.mem.trim(u8, title, " \t").len == 0 or stock <= 0) return error.InvalidInput;
+        if (per_user <= 0) return error.InvalidInput;
+        if (start_at > 0 and end_at > 0 and start_at >= end_at) return error.InvalidInput;
+        const a_opt = self.store.getById(tenant_id, id) catch return error.Unexpected;
+        const a = a_opt orelse return error.NotFound;
+        defer a.free(self.allocator);
+        if (stock < a.sold) return error.InvalidInput;
+        _ = self.store.update(id, title, price, original_price, stock, per_user, start_at, end_at, status, self.now()) catch return error.Unexpected;
+    }
+
+    /// 删除活动及其全部抢购记录。活动不存在或不属于本 tenant → NotFound；
+    /// 先删抢购记录再删活动（避免孤儿记录）。
+    pub fn deleteActivity(self: *SeckillService, tenant_id: i64, id: i64) SeckillError!void {
+        const a_opt = self.store.getById(tenant_id, id) catch return error.Unexpected;
+        const a = a_opt orelse return error.NotFound;
+        defer a.free(self.allocator);
+        self.store.deleteOrdersByActivityId(id) catch return error.Unexpected;
+        self.store.deleteById(id) catch return error.Unexpected;
+    }
+
     pub fn listOrders(self: *SeckillService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, keyword: []const u8) SeckillError!persist.SeckillOrderListResult {
         return self.store.listOrders(page, page_size, tenant_id, account_id, openid, keyword) catch error.Unexpected;
+    }
+
+    /// 富化抢购记录：逐行按 activity_id 补齐活动标题（页 ≤ 100，逐行一次小查询
+    /// 可接受；活动已删除/跨租户时该行标题为空串）。返回带 `activity_title` 的
+    /// 视图行列表（caller 逐行 `free` 后 `allocator.free` 切片）。
+    pub fn enrichOrders(self: *SeckillService, allocator: std.mem.Allocator, tenant_id: i64, rows: []const persist.SeckillOrderRow) SeckillError![]SeckillOrderView {
+        const out = allocator.alloc(SeckillOrderView, rows.len) catch return error.Unexpected;
+        var n: usize = 0;
+        errdefer {
+            for (out[0..n]) |v| v.free(allocator);
+            allocator.free(out);
+        }
+        for (rows) |r| {
+            out[n] = try self.dupOrderView(allocator, tenant_id, r);
+            n += 1;
+        }
+        return out;
+    }
+
+    /// 富化 helper：单个订单行 → 视图行（活动已不存在时 `activity_title` 为空串）。
+    fn dupOrderView(self: *SeckillService, allocator: std.mem.Allocator, tenant_id: i64, r: persist.SeckillOrderRow) SeckillError!SeckillOrderView {
+        const openid = allocator.dupe(u8, r.openid) catch return error.Unexpected;
+        errdefer allocator.free(openid);
+        const a_opt = self.store.getById(tenant_id, r.activity_id) catch return error.Unexpected;
+        var title: []const u8 = undefined;
+        if (a_opt) |a| {
+            defer a.free(self.allocator);
+            title = allocator.dupe(u8, a.title) catch return error.Unexpected;
+        } else {
+            title = allocator.dupe(u8, "") catch return error.Unexpected;
+        }
+        errdefer allocator.free(title);
+        return .{
+            .id = r.id,
+            .account_id = r.account_id,
+            .openid = openid,
+            .activity_id = r.activity_id,
+            .activity_title = title,
+            .quantity = r.quantity,
+            .created_at = r.created_at,
+        };
     }
 
     /// 抢购：时间窗 → 限购 → 原子库存 → 落单。

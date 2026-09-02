@@ -146,9 +146,51 @@ pub const SeckillStore = struct {
         return affected > 0;
     }
 
+    /// 整体更新秒杀活动（account 作用域不变：account_id 不参与更新）。
+    /// 返回受影响行数（调用方已先经 `getById` 校验存在性，0 行视为幂等成功）。
+    pub fn update(self: *SeckillStore, id: i64, title: []const u8, price: i64, original_price: i64, stock: i64, per_user: i64, start_at: i64, end_at: i64, status: i64, now: i64) !usize {
+        const price_str = try std.fmt.allocPrint(self.allocator, "{d}", .{price});
+        defer self.allocator.free(price_str);
+        const original_price_str = try std.fmt.allocPrint(self.allocator, "{d}", .{original_price});
+        defer self.allocator.free(original_price_str);
+        const preds = self.client.seckill_activity.predicates;
+        return crud.update(self.client.seckill_activity, .{
+            .title = title,
+            .price = price_str,
+            .original_price = original_price_str,
+            .stock = stock,
+            .per_user = per_user,
+            .start_at = start_at,
+            .end_at = end_at,
+            // 显式写入，不依赖 DB 默认值（迁移加的列在老库上是 nullable）。
+            .status = status,
+            .updated_at = now,
+        }, .{preds.idEQ(.{ .int = id })});
+    }
+
+    /// 删除秒杀活动（调用方应先删抢购记录 `deleteOrdersByActivityId`）。
+    pub fn deleteById(self: *SeckillStore, id: i64) !void {
+        const preds = self.client.seckill_activity.predicates;
+        _ = try crud.delete(self.client.seckill_activity, .{preds.idEQ(.{ .int = id })});
+    }
+
+    /// 删除某活动全部抢购记录（删除活动前调用，避免孤儿记录）。
+    pub fn deleteOrdersByActivityId(self: *SeckillStore, activity_id: i64) !void {
+        const preds = self.client.seckill_order.predicates;
+        _ = try crud.delete(self.client.seckill_order, .{preds.activity_idEQ(.{ .int = activity_id })});
+    }
+
     pub fn getActivity(self: *SeckillStore, id: i64) !?SeckillActivityRow {
         const preds = self.client.seckill_activity.predicates;
         var entity = (try crud.first(self.client.seckill_activity, .{preds.idEQ(.{ .int = id })})) orelse return null;
+        defer zent.codegen.deinitEntity(infos, SeckillActivityInfo, &entity, self.allocator);
+        return try self.dupActivity(entity);
+    }
+
+    /// 按 id 取单条（tenant 过滤），供 service 校验存在性与管理端详情读取/标题富化。
+    pub fn getById(self: *SeckillStore, tenant_id: i64, id: i64) !?SeckillActivityRow {
+        const preds = self.client.seckill_activity.predicates;
+        var entity = (try crud.first(self.client.seckill_activity, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
         defer zent.codegen.deinitEntity(infos, SeckillActivityInfo, &entity, self.allocator);
         return try self.dupActivity(entity);
     }
