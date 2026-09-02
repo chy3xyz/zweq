@@ -15,6 +15,8 @@ pub const PointsProduct = Schema("PointsProduct", .{
         field.Int("points").Default(0),
         field.Int("stock").Default(0),
         field.Int("status").Default(1), // 1=上架 0=下架（下架后不可兑换）
+        field.String("image").Default(""), // 商品图 URL
+        field.String("detail").Default(""), // 富文本 HTML 详情
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

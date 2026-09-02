@@ -37,11 +37,11 @@ pub const PointsService = struct {
 
     // ── 商品 ─────────────────────────────────────────────────────
 
-    pub fn createProduct(self: *PointsService, tenant_id: i64, account_id: i64, name: []const u8, points: i64, stock: i64, status: i64) PointsError!i64 {
+    pub fn createProduct(self: *PointsService, tenant_id: i64, account_id: i64, name: []const u8, points: i64, stock: i64, status: i64, image: []const u8, detail: []const u8) PointsError!i64 {
         if (std.mem.trim(u8, name, " \t").len == 0) return error.InvalidName;
         if (points <= 0) return error.InvalidPoints;
         if (stock < 0) return error.InvalidStock;
-        return self.store.createProduct(tenant_id, account_id, name, points, stock, status, self.now()) catch error.Unexpected;
+        return self.store.createProduct(tenant_id, account_id, name, points, stock, status, image, detail, self.now()) catch error.Unexpected;
     }
 
     pub fn getProduct(self: *PointsService, id: i64) PointsError!?PointsProductRow {
@@ -53,11 +53,11 @@ pub const PointsService = struct {
         return self.store.listProducts(page, page_size, tenant_id, account_id, keyword, status) catch error.Unexpected;
     }
 
-    pub fn updateProduct(self: *PointsService, id: i64, name: []const u8, points: i64, stock: i64, status: i64) PointsError!void {
+    pub fn updateProduct(self: *PointsService, id: i64, name: []const u8, points: i64, stock: i64, status: i64, image: []const u8, detail: []const u8) PointsError!void {
         if (std.mem.trim(u8, name, " \t").len == 0) return error.InvalidName;
         if (points <= 0) return error.InvalidPoints;
         if (stock < 0) return error.InvalidStock;
-        self.store.updateProduct(id, name, points, stock, status, self.now()) catch return error.Unexpected;
+        self.store.updateProduct(id, name, points, stock, status, image, detail, self.now()) catch return error.Unexpected;
     }
 
     pub fn deleteProduct(self: *PointsService, id: i64) PointsError!void {

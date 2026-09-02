@@ -16,10 +16,12 @@ const ProductDto = struct {
     points: i64,
     stock: i64,
     status: i64,
+    image: []const u8,
+    detail: []const u8,
 };
 
 fn toProductDto(row: service.PointsProductRow) ProductDto {
-    return .{ .id = row.id, .account_id = row.account_id, .name = row.name, .points = row.points, .stock = row.stock, .status = row.status };
+    return .{ .id = row.id, .account_id = row.account_id, .name = row.name, .points = row.points, .stock = row.stock, .status = row.status, .image = row.image, .detail = row.detail };
 }
 
 const ProductReq = struct {
@@ -28,6 +30,8 @@ const ProductReq = struct {
     points: i64,
     stock: i64,
     status: i64 = 1,
+    image: []const u8 = "",
+    detail: []const u8 = "",
 };
 
 const RedeemReq = struct {
@@ -128,7 +132,9 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer ctx.allocator.free(req.name);
-            const id = self.svc.createProduct(tid, req.account_id, req.name, req.points, req.stock, req.status) catch |err| {
+            defer ctx.allocator.free(req.image);
+            defer ctx.allocator.free(req.detail);
+            const id = self.svc.createProduct(tid, req.account_id, req.name, req.points, req.stock, req.status, req.image, req.detail) catch |err| {
                 const msg = switch (err) {
                     error.InvalidName => "商品名不能为空",
                     error.InvalidPoints => "积分须大于 0",
@@ -170,12 +176,14 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的商品 ID");
                 return;
             };
-            const req = ctx.bindJson(struct { name: []const u8, points: i64, stock: i64, status: i64 = 1 }) catch {
+            const req = ctx.bindJson(struct { name: []const u8, points: i64, stock: i64, status: i64 = 1, image: []const u8 = "", detail: []const u8 = "" }) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;
             };
             defer ctx.allocator.free(req.name);
-            self.svc.updateProduct(id, req.name, req.points, req.stock, req.status) catch |err| {
+            defer ctx.allocator.free(req.image);
+            defer ctx.allocator.free(req.detail);
+            self.svc.updateProduct(id, req.name, req.points, req.stock, req.status, req.image, req.detail) catch |err| {
                 const msg = switch (err) {
                     error.InvalidName => "商品名不能为空",
                     error.InvalidPoints => "积分须大于 0",

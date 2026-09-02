@@ -20,9 +20,13 @@ pub const PointsProductRow = struct {
     points: i64,
     stock: i64,
     status: i64,
+    image: []const u8,
+    detail: []const u8,
 
     pub fn free(self: PointsProductRow, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
+        allocator.free(self.image);
+        allocator.free(self.detail);
     }
 };
 
@@ -35,6 +39,7 @@ pub const PointsOrderRow = struct {
     product_name: []const u8,
     points_spent: i64,
     status: []const u8,
+    created_at: i64,
 
     pub fn free(self: PointsOrderRow, allocator: std.mem.Allocator) void {
         allocator.free(self.openid);
@@ -65,6 +70,10 @@ pub const PointsStore = struct {
     fn dupProduct(self: *PointsStore, e: anytype) !PointsProductRow {
         const name = try self.allocator.dupe(u8, e.name);
         errdefer self.allocator.free(name);
+        const image = try self.allocator.dupe(u8, e.image);
+        errdefer self.allocator.free(image);
+        const detail = try self.allocator.dupe(u8, e.detail);
+        errdefer self.allocator.free(detail);
         return .{
             .id = e.id,
             .tenant_id = e.tenant_id,
@@ -73,6 +82,8 @@ pub const PointsStore = struct {
             .points = e.points,
             .stock = e.stock,
             .status = e.status,
+            .image = image,
+            .detail = detail,
         };
     }
 
@@ -92,12 +103,13 @@ pub const PointsStore = struct {
             .product_name = product_name,
             .points_spent = e.points_spent,
             .status = status,
+            .created_at = e.created_at orelse 0,
         };
     }
 
     // ── 商品 ─────────────────────────────────────────────────────
 
-    pub fn createProduct(self: *PointsStore, tenant_id: i64, account_id: i64, name: []const u8, points: i64, stock: i64, status: i64, now: i64) !i64 {
+    pub fn createProduct(self: *PointsStore, tenant_id: i64, account_id: i64, name: []const u8, points: i64, stock: i64, status: i64, image: []const u8, detail: []const u8, now: i64) !i64 {
         var b = try self.client.points_product.Create();
         defer b.deinit();
         _ = try b.setFieldValue("tenant_id", tenant_id);
@@ -105,6 +117,8 @@ pub const PointsStore = struct {
         _ = try b.setFieldValue("name", name);
         _ = try b.setFieldValue("points", points);
         _ = try b.setFieldValue("stock", stock);
+        _ = try b.setFieldValue("image", image);
+        _ = try b.setFieldValue("detail", detail);
         // 显式写入，不依赖 DB 默认值（迁移加的列在老库上是 nullable）。
         _ = try b.setFieldValue("status", status);
         _ = try b.setFieldValue("created_at", now);
@@ -149,7 +163,7 @@ pub const PointsStore = struct {
         return .{ .items = out, .total = paged.total };
     }
 
-    pub fn updateProduct(self: *PointsStore, id: i64, name: []const u8, points: i64, stock: i64, status: i64, now: i64) !void {
+    pub fn updateProduct(self: *PointsStore, id: i64, name: []const u8, points: i64, stock: i64, status: i64, image: []const u8, detail: []const u8, now: i64) !void {
         const preds = self.client.points_product.predicates;
         var upd = self.client.points_product.Update();
         defer upd.deinit();
@@ -157,6 +171,8 @@ pub const PointsStore = struct {
         _ = try upd.setFieldValue("points", points);
         _ = try upd.setFieldValue("stock", stock);
         _ = try upd.setFieldValue("status", status);
+        _ = try upd.set("image", .{ .string = image });
+        _ = try upd.set("detail", .{ .string = detail });
         _ = try upd.setFieldValue("updated_at", now);
         _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
         _ = try upd.Save();
