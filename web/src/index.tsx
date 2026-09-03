@@ -37,6 +37,7 @@ const Rules = lazy(() => import('#ui/pages/Rules'));
 const Fans = lazy(() => import('#ui/pages/Fans'));
 const Payments = lazy(() => import('#ui/pages/Payments'));
 const Modules = lazy(() => import('#ui/pages/Modules'));
+const Settings = lazy(() => import('#ui/pages/Settings'));
 const Cloud = lazy(() => import('#ui/pages/Cloud'));
 const Logs = lazy(() => import('#ui/pages/Logs'));
 const Materials = lazy(() => import('#ui/pages/Materials'));
@@ -258,6 +259,14 @@ if (root) {
             component={() => (
               <AdminGate>
                 <Modules />
+              </AdminGate>
+            )}
+          />
+          <Route
+            path={ROUTE_PATH.settings}
+            component={() => (
+              <AdminGate>
+                <Settings />
               </AdminGate>
             )}
           />

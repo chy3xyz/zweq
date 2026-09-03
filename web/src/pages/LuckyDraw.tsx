@@ -66,7 +66,7 @@ function parseConfig(json: string): LuckyDrawConfig {
 function LuckyDraw() {
   const { accountId, onAccountChange } = useAccountId();
   const feedback = useFeedback();
-  const [activeTab, setActiveTab] = createSignal<Tab>('基础设置');
+  const [activeTab, setActiveTab] = createSignal<Tab>('奖品管理');
   const [config, setConfig] = createSignal<LuckyDrawConfig>(DEFAULT_CONFIG);
   const [savedConfigJson, setSavedConfigJson] = createSignal<string>(JSON.stringify(DEFAULT_CONFIG));
   const [saving, setSaving] = createSignal(false);

@@ -1,6 +1,7 @@
 export { default as UserFormModal } from './UserFormModal';
 export { default as AccountFormModal } from './AccountFormModal';
 export { default as AdminCrudPage } from './AdminCrudPage';
+export { default as EmptyState } from './EmptyState';
 export { default as BaseModal } from './BaseModal';
 export { default as DataTable } from './DataTable';
 export { default as FormModal } from './FormModal';

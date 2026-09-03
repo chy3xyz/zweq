@@ -13,6 +13,7 @@ export const ROUTE_PATH = {
   fans: '/fans',
   payments: '/payments',
   modules: '/modules',
+  settings: '/settings',
   cloud: '/cloud',
   logs: '/logs',
   materials: '/materials',

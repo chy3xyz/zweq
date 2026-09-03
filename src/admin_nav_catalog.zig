@@ -32,6 +32,7 @@ pub const items = [_]NavItem{
     // ── 平台 ─────────────────────────────────────────────
     .{ .module = "account", .group = "平台", .subgroup = "基础配置", .href = "/accounts", .label = "账号管理", .permission = "account:read", .order = 110, .account_scoped = false },
     .{ .module = "module", .group = "平台", .subgroup = "基础配置", .href = "/modules", .label = "模块管理", .permission = "module:read", .order = 120, .account_scoped = false },
+    .{ .module = "setting", .group = "平台", .subgroup = "基础配置", .href = "/settings", .label = "站点设置", .permission = "setting:read", .order = 125, .account_scoped = false },
     .{ .module = "cloud", .group = "平台", .subgroup = "云服务", .href = "/cloud", .label = "授权与市场", .permission = "cloud:read", .order = 130, .account_scoped = false },
     .{ .module = "payment", .group = "平台", .subgroup = "资金", .href = "/payments", .label = "充值支付", .permission = "payment:read", .order = 140, .account_scoped = false },
 

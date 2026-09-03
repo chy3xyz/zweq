@@ -7,7 +7,8 @@
     "build": "rsbuild build",
     "dev": "rsbuild dev",
     "preview": "rsbuild preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",
@@ -21,6 +22,7 @@
     "@tailwindcss/postcss": "^4.3.3",
     "daisyui": "^5.7.13",
     "tailwindcss": "^4.3.3",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   }
 }

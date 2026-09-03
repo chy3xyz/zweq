@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 
 import {
   distributeCommission,
@@ -14,6 +14,7 @@ import AdminCrudPage from '#ui/components/AdminCrudPage';
 import DataTable, { type Column } from '#ui/components/DataTable';
 import FormModal from '#ui/components/FormModal';
 import SearchBar, { type SearchField, type SearchValues } from '#ui/components/SearchBar';
+import Tabs from '#ui/components/Tabs';
 import { useAccountId, useFeedback, usePaged } from '#ui/hooks';
 import { formatDateTime, intParam } from '#ui/utils';
 import { fenToYuan, formatYuan, yuanToFen } from '#ui/utils/money';
@@ -34,10 +35,28 @@ const COMMISSION_FIELDS: SearchField[] = [
   },
 ];
 
+const TABS = ['分销员', '佣金记录'] as const;
+type Tab = (typeof TABS)[number];
+
+const DISTRIBUTOR_FIELDS: SearchField[] = [
+  { kind: 'text', key: 'keyword', label: '分销员 openid', placeholder: '输入 openid' },
+  {
+    kind: 'select',
+    key: 'status',
+    label: '状态',
+    options: [
+      { value: '-1', label: '全部' },
+      { value: '1', label: '启用' },
+      { value: '0', label: '停用' },
+    ],
+  },
+];
+
 function Distribution() {
   const { accountId, ready, accountName } = useAccountId();
   const feedback = useFeedback();
 
+  const [tab, setTab] = createSignal<Tab>('分销员');
   const [distKeyword, setDistKeyword] = createSignal<SearchValues>({});
   const [commissionFilters, setCommissionFilters] = createSignal<SearchValues>({});
 
@@ -189,107 +208,105 @@ function Distribution() {
 
   return (
     <div class="space-y-4">
-      <AdminCrudPage
-        title="分销管理"
-        description={ready() ? `当前公众号：${accountName()}` : undefined}
-        total={distributors.total()}
-        onCreate={
-          ready()
-            ? () => {
-                setError(null);
-                setJoinOpen(true);
-              }
-            : undefined
-        }
-        createLabel="开通分销员"
-        onRefresh={() => void distributors.refresh()}
-        extra={
-          <button
-            type="button"
-            class="btn btn-outline btn-sm"
-            disabled={!ready()}
-            onClick={() => {
-              setError(null);
-              setDistributeOpen(true);
-            }}
-          >
-            模拟订单分佣
-          </button>
-        }
-        search={
-          <SearchBar
-            fields={[
-              { kind: 'text', key: 'keyword', label: '分销员 openid', placeholder: '输入 openid' },
-              {
-                kind: 'select',
-                key: 'status',
-                label: '状态',
-                options: [
-                  { value: '-1', label: '全部' },
-                  { value: '1', label: '启用' },
-                  { value: '0', label: '停用' },
-                ],
-              },
-            ]}
-            values={{ status: '-1' }}
-            loading={distributors.loading()}
-            onSearch={setDistKeyword}
-          />
-        }
-      >
-        <AccountRequiredBanner />
+      <div>
+        <h2 class="text-xl font-semibold">分销管理</h2>
+        <p class="text-sm text-base-content/60">分销员与佣金分成记录</p>
+      </div>
 
-        <DataTable
-          columns={distColumns}
-          rows={distributors.items()}
-          rowKey={(r) => r.id}
+      <AccountRequiredBanner />
+
+      <Tabs tabs={[...TABS]} active={tab()} onChange={setTab} />
+
+      <Show when={tab() === '分销员'}>
+        <AdminCrudPage
+          title="分销员"
+          description={ready() ? `当前公众号：${accountName()}` : undefined}
           total={distributors.total()}
-          page={distributors.page()}
-          totalPages={distributors.totalPages()}
-          pageSize={distributors.pageSize()}
-          loading={distributors.loading()}
-          error={distributors.error()}
-          emptyText="暂无分销员"
-          onPageChange={(p) => void distributors.reload(p)}
-          onPageSizeChange={(size) => distributors.setPageSize(size)}
-          actions={(row) => (
+          onCreate={
+            ready()
+              ? () => {
+                  setError(null);
+                  setJoinOpen(true);
+                }
+              : undefined
+          }
+          createLabel="开通分销员"
+          onRefresh={() => void distributors.refresh()}
+          extra={
             <button
               type="button"
-              class="btn btn-ghost btn-xs text-primary"
-              onClick={() => void onWithdraw(row)}
-              disabled={row.commission_balance <= 0}
+              class="btn btn-outline btn-sm"
+              disabled={!ready()}
+              onClick={() => {
+                setError(null);
+                setDistributeOpen(true);
+              }}
             >
-              全额提现
+              模拟订单分佣
             </button>
-          )}
-        />
-      </AdminCrudPage>
+          }
+          search={
+            <SearchBar
+              fields={DISTRIBUTOR_FIELDS}
+              values={{ status: '-1' }}
+              loading={distributors.loading()}
+              onSearch={setDistKeyword}
+            />
+          }
+        >
+          <DataTable
+            columns={distColumns}
+            rows={distributors.items()}
+            rowKey={(r) => r.id}
+            total={distributors.total()}
+            page={distributors.page()}
+            totalPages={distributors.totalPages()}
+            pageSize={distributors.pageSize()}
+            loading={distributors.loading()}
+            error={distributors.error()}
+            emptyText="暂无分销员"
+            onPageChange={(p) => void distributors.reload(p)}
+            onPageSizeChange={(size) => distributors.setPageSize(size)}
+            actions={(row) => (
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs text-primary"
+                onClick={() => void onWithdraw(row)}
+                disabled={row.commission_balance <= 0}
+              >
+                全额提现
+              </button>
+            )}
+          />
+        </AdminCrudPage>
+      </Show>
 
-      <section class="rounded-box border border-base-300 bg-base-100 p-4">
-        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h3 class="text-lg font-semibold">佣金记录</h3>
-          <button type="button" class="btn btn-ghost btn-sm" onClick={() => void commissions.refresh()}>
-            刷新
-          </button>
-        </div>
-        <div class="mb-4">
-          <SearchBar fields={COMMISSION_FIELDS} loading={commissions.loading()} onSearch={setCommissionFilters} />
-        </div>
-        <DataTable
-          columns={commissionColumns}
-          rows={commissions.items()}
-          rowKey={(r) => r.id}
+      <Show when={tab() === '佣金记录'}>
+        <AdminCrudPage
+          title="佣金记录"
+          description="分销佣金的发放与提现明细"
           total={commissions.total()}
-          page={commissions.page()}
-          totalPages={commissions.totalPages()}
-          pageSize={commissions.pageSize()}
-          loading={commissions.loading()}
-          error={commissions.error()}
-          emptyText="暂无佣金记录"
-          onPageChange={(p) => void commissions.reload(p)}
-          onPageSizeChange={(size) => commissions.setPageSize(size)}
-        />
-      </section>
+          onRefresh={() => void commissions.refresh()}
+          search={
+            <SearchBar fields={COMMISSION_FIELDS} loading={commissions.loading()} onSearch={setCommissionFilters} />
+          }
+        >
+          <DataTable
+            columns={commissionColumns}
+            rows={commissions.items()}
+            rowKey={(r) => r.id}
+            total={commissions.total()}
+            page={commissions.page()}
+            totalPages={commissions.totalPages()}
+            pageSize={commissions.pageSize()}
+            loading={commissions.loading()}
+            error={commissions.error()}
+            emptyText="暂无佣金记录"
+            onPageChange={(p) => void commissions.reload(p)}
+            onPageSizeChange={(size) => commissions.setPageSize(size)}
+          />
+        </AdminCrudPage>
+      </Show>
 
       <FormModal
         open={joinOpen()}
