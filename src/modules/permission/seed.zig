@@ -1,8 +1,8 @@
 //! Idempotent seed: default roles + catalog permissions + admin role bindings.
 
 const std = @import("std");
-const catalog = @import("permission_catalog.zig");
-const permission = @import("modules/permission/root.zig");
+const catalog = @import("catalog.zig");
+const permission = @import("root.zig");
 
 pub fn seedDefaults(allocator: std.mem.Allocator, io: std.Io, store: *permission.persistence.RoleStore, tenant_id: i64) !void {
     const now = @import("zigmodu").time.wallClockSeconds(io);

@@ -6,7 +6,7 @@ const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const user_persist = @import("../user/persistence.zig");
 const schema = @import("../../schema.zig");
-const catalog = @import("../../permission_catalog.zig");
+const catalog = @import("catalog.zig");
 
 const graph = zent.codegen.graph.buildGraph(&.{ model.Role, model.Permission, model.UserRole, model.RolePermission });
 pub const infos = graph.types;

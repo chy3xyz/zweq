@@ -3,11 +3,11 @@
 const std = @import("std");
 const zigmodu = @import("zigmodu");
 const http = zigmodu.http;
-const catalog = @import("admin_nav_catalog.zig");
-const catalog_permissions = @import("middleware/catalog_permissions.zig");
-const mw = @import("middleware/auth.zig");
-const module_svc = @import("modules/module/service.zig");
-const user_svc = @import("modules/user/service.zig");
+const catalog = @import("catalog.zig");
+const catalog_permissions = @import("../middleware/catalog_permissions.zig");
+const mw = @import("../middleware/auth.zig");
+const module_svc = @import("../modules/module/service.zig");
+const user_svc = @import("../modules/user/service.zig");
 
 const NavItemDto = struct {
     module: []const u8,

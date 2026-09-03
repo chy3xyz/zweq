@@ -36,6 +36,8 @@ static binary** and ships out of the box with the workflows every WeChat operato
 Every tenant is a WeChat business: rows are isolated by a physical `app_id` column,
 tenants ride in the JWT `aud` claim, and platform admins get cross-tenant tooling.
 
+> **简体中文版：** 本仓库同时提供中文版 [README.zh-CN.md](README.zh-CN.md)。
+
 ## Why zweq?
 
 - **One binary, full stack.** The Zig server serves the compiled SolidJS SPA — deploy

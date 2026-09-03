@@ -19,11 +19,13 @@ web/.env
 # macOS
 .DS_Store
 
-# IDE / local state
+# IDE / AI-agent local state
 .cursor/
 .claude/
 .remember/
 .omo/
+.agents/
+.superpowers/
 
 # Reference materials (read-only inputs, not part of this project)
 _ref/

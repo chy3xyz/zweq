@@ -30,6 +30,8 @@ zweq 是一个用 Zig 编写的**多商户微信运营平台**。后端、管理
 每个租户即一个微信生意：行级数据按物理列 `app_id` 隔离，租户随 JWT 的 `aud` claim
 传递，平台管理员拥有跨租户运维能力。
 
+> **English version:** this README is also available in English at [README.md](README.md).
+
 ## 为什么选择 zweq
 
 - **一个二进制，全栈交付。** Zig 服务端直接托管编译好的 SolidJS SPA —— 只部署一个

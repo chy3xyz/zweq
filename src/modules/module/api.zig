@@ -8,7 +8,7 @@ const user_svc = @import("../user/service.zig");
 const audit_svc = @import("../audit/service.zig");
 
 const service = @import("service.zig");
-const admin_nav = @import("../../admin_nav.zig");
+const admin_nav = @import("../../nav/admin.zig");
 
 const ModuleDto = struct {
     id: i64,
