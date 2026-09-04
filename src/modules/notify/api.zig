@@ -49,16 +49,6 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
             return .{ .svc = svc, .user_svc = users };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/notifications/unread-count", unreadCount, @ptrCast(@alignCast(self)));
-            try g.get("/notifications", list, @ptrCast(@alignCast(self)));
-            try g.post("/notifications/read-all", markAllRead, @ptrCast(@alignCast(self)));
-            try g.post("/notifications/{id}/read", markRead, @ptrCast(@alignCast(self)));
-            try g.delete("/notifications/{id}", delete, @ptrCast(@alignCast(self)));
-        }
-
         fn authUserId(ctx: *http.Context) ?i64 {
             return mw.authUserId(ctx);
         }

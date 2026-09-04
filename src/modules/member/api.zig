@@ -59,16 +59,6 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/fans", list, @ptrCast(@alignCast(self)));
-            try g.get("/fans/{id}", get, @ptrCast(@alignCast(self)));
-            try g.get("/accounts/{id}/fans/tags", listTags, @ptrCast(@alignCast(self)));
-            try g.post("/accounts/{id}/fans/tags", createTag, @ptrCast(@alignCast(self)));
-            try g.post("/fans/tag", tagFan, @ptrCast(@alignCast(self)));
-        }
-
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
             return mw.authTenantId(ctx) orelse self.default_tenant_id;
         }

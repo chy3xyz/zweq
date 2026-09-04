@@ -129,23 +129,6 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/materials/news", listNews, @ptrCast(@alignCast(self)));
-            try g.post("/materials/news", createNews, @ptrCast(@alignCast(self)));
-            try g.get("/materials/news/{id}", getNews, @ptrCast(@alignCast(self)));
-            try g.put("/materials/news/{id}", updateNews, @ptrCast(@alignCast(self)));
-            try g.delete("/materials/news/{id}", deleteNews, @ptrCast(@alignCast(self)));
-            try g.get("/materials/files", listFiles, @ptrCast(@alignCast(self)));
-            try g.post("/materials/files", createFile, @ptrCast(@alignCast(self)));
-            try g.delete("/materials/files/{id}", deleteFile, @ptrCast(@alignCast(self)));
-            try g.post("/materials/sync-news", syncNews, @ptrCast(@alignCast(self)));
-            try g.post("/materials/sync-files", syncFiles, @ptrCast(@alignCast(self)));
-            try g.get("/materials/count", syncCount, @ptrCast(@alignCast(self)));
-            try g.post("/materials/news/upload", uploadNews, @ptrCast(@alignCast(self)));
-        }
-
         /// Sets the `audit_actor` context attribute from the authenticated user.
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = mw.authUserId(ctx) orelse return;

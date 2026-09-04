@@ -57,15 +57,6 @@ pub fn TenantApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            g = try g.use(mw.adminGuard(self.user_svc.store));
-            try g.get("/tenants", list, @ptrCast(@alignCast(self)));
-            try g.post("/tenants", create, @ptrCast(@alignCast(self)));
-            try g.put("/tenants/{id}", update, @ptrCast(@alignCast(self)));
-        }
-
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = mw.authUserId(ctx) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;

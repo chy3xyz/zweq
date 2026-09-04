@@ -73,17 +73,6 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/votes", list, @ptrCast(@alignCast(self)));
-            try g.post("/votes", create, @ptrCast(@alignCast(self)));
-            try g.put("/votes/{id}", update, @ptrCast(@alignCast(self)));
-            try g.delete("/votes/{id}", delete, @ptrCast(@alignCast(self)));
-            try g.get("/votes/{id}/results", results, @ptrCast(@alignCast(self)));
-            try g.post("/votes/{id}/vote", cast, @ptrCast(@alignCast(self)));
-        }
-
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = mw.authUserId(ctx) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;

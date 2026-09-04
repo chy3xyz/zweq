@@ -681,7 +681,7 @@ pub fn main(init: std.process.Init) !void {
         .path = "health/live",
         .handler = struct {
             fn handle(ctx: *zigmodu.http.Context) !void {
-                try ctx.json(200, "{\"code\":0,\"msg\":\"ok\",\"data\":{\"status\":\"UP\"}}");
+                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .status = "UP" } });
             }
         }.handle,
     });
@@ -690,7 +690,7 @@ pub fn main(init: std.process.Init) !void {
         .path = "api/v1/health/live",
         .handler = struct {
             fn handle(ctx: *zigmodu.http.Context) !void {
-                try ctx.json(200, "{\"code\":0,\"msg\":\"ok\",\"data\":{\"status\":\"UP\"}}");
+                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .status = "UP" } });
             }
         }.handle,
     });
@@ -704,7 +704,7 @@ pub fn main(init: std.process.Init) !void {
                     return;
                 };
                 defer probe.free(ctx.allocator);
-                try ctx.json(200, "{\"code\":0,\"msg\":\"ok\",\"data\":{\"status\":\"READY\"}}");
+                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .status = "READY" } });
             }
         }.handle,
     });
@@ -777,16 +777,16 @@ pub fn main(init: std.process.Init) !void {
                         const nonce = ctx.header("Wechatpay-Nonce") orelse "";
                         const ok = PayNotify.svc.verifyV3NotifySignature(ctx.allocator, cert.value, ts, nonce, sig, body) catch false;
                         if (!ok) {
-                            try ctx.json(200, "{\"code\":\"FAIL\",\"message\":\"验签失败\"}");
+                            try ctx.jsonStruct(200, .{ .code = "FAIL", .message = "验签失败" });
                             return;
                         }
                     }
                 }
                 const handled = PayNotify.svc.handleV3Notify(ctx.allocator, api_v3_key, body) catch false;
                 if (handled) {
-                    try ctx.json(200, "{\"code\":\"SUCCESS\",\"message\":\"成功\"}");
+                    try ctx.jsonStruct(200, .{ .code = "SUCCESS", .message = "成功" });
                 } else {
-                    try ctx.json(200, "{\"code\":\"FAIL\",\"message\":\"处理失败\"}");
+                    try ctx.jsonStruct(200, .{ .code = "FAIL", .message = "处理失败" });
                 }
             }
         }.handle,

@@ -127,20 +127,6 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/coupons", listCoupons, @ptrCast(@alignCast(self)));
-            try g.post("/coupons", createCoupon, @ptrCast(@alignCast(self)));
-            try g.get("/coupons/{id}", getCoupon, @ptrCast(@alignCast(self)));
-            try g.put("/coupons/{id}", updateCoupon, @ptrCast(@alignCast(self)));
-            try g.delete("/coupons/{id}", deleteCoupon, @ptrCast(@alignCast(self)));
-            try g.put("/coupons/{id}/status", setStatus, @ptrCast(@alignCast(self)));
-            try g.post("/coupons/{id}/claim", claim, @ptrCast(@alignCast(self)));
-            try g.post("/coupons/use", useCoupon, @ptrCast(@alignCast(self)));
-            try g.get("/coupon-users", listUsers, @ptrCast(@alignCast(self)));
-        }
-
         /// Sets the `audit_actor` context attribute from the authenticated user.
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = mw.authUserId(ctx) orelse return;

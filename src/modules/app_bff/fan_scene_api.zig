@@ -80,22 +80,6 @@ pub fn FanSceneApi(
             };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            try group.post("/app/checkin", doCheckin, @ptrCast(@alignCast(self)));
-            try group.get("/app/checkin/records", checkinRecords, @ptrCast(@alignCast(self)));
-            try group.get("/app/votes", listVotes, @ptrCast(@alignCast(self)));
-            try group.get("/app/votes/{id}", voteDetail, @ptrCast(@alignCast(self)));
-            try group.post("/app/votes/{id}/ballot", voteBallot, @ptrCast(@alignCast(self)));
-            try group.get("/app/seckill/activities", listSeckill, @ptrCast(@alignCast(self)));
-            try group.get("/app/seckill/orders", listSeckillOrders, @ptrCast(@alignCast(self)));
-            try group.post("/app/seckill/activities/{id}/rush", seckillRush, @ptrCast(@alignCast(self)));
-            try group.get("/app/member-card", memberCardView, @ptrCast(@alignCast(self)));
-            try group.post("/app/member-card/open", memberCardOpen, @ptrCast(@alignCast(self)));
-            try group.get("/app/distribution", distributionView, @ptrCast(@alignCast(self)));
-            try group.post("/app/distribution/join", distributionJoin, @ptrCast(@alignCast(self)));
-            try group.post("/app/distribution/withdraw", distributionWithdraw, @ptrCast(@alignCast(self)));
-        }
-
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
             _ = ctx;
             return self.default_tenant_id;

@@ -42,13 +42,6 @@ pub fn AppBffApi(comptime AccountService: type, comptime ModuleService: type, co
             return .{ .account_svc = accounts, .module_svc = mods, .user_svc = users, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/app/accounts/{id}", accountInfo, @ptrCast(@alignCast(self)));
-            try g.get("/app/accounts/{id}/modules", modules, @ptrCast(@alignCast(self)));
-        }
-
         fn requireAuth(ctx: *http.Context) ?i64 {
             return mw.authUserId(ctx);
         }
