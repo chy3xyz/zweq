@@ -4,6 +4,7 @@
 
 const zent = @import("zent");
 const field = zent.core.field;
+const index = zent.core.index;
 const Schema = zent.core.schema.Schema;
 
 pub const Fan = Schema("Fan", .{
@@ -18,6 +19,12 @@ pub const Fan = Schema("Fan", .{
         field.Int("subscribe_time").Default(0),
         field.Int("points").Default(0),
     },
+    // UNIQUE (tenant_id, account_id, openid) — required for zent's
+    // SaveOrUpdateOn atomic upsert; also prevents duplicate fan rows
+    // when concurrent subscribe events race on the same openid.
+    .indexes = &.{
+        index.Fields(&.{ "tenant_id", "account_id", "openid" }).Unique(),
+    },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });
 
@@ -28,6 +35,12 @@ pub const FanTag = Schema("FanTag", .{
         field.Int("account_id"),
         field.Int("wx_tag_id").Default(0),
         field.String("name").Default(""),
+    },
+    // UNIQUE (tenant_id, account_id, wx_tag_id) — required for zent's
+    // SaveOrUpdateOn atomic upsert; also prevents duplicate tag rows
+    // when concurrent /tags/get responses race.
+    .indexes = &.{
+        index.Fields(&.{ "tenant_id", "account_id", "wx_tag_id" }).Unique(),
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

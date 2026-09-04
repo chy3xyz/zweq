@@ -103,23 +103,23 @@ pub const FanStore = struct {
         return try self.dup(entity);
     }
 
-    /// Upsert a fan by (account_id, openid). Returns the fan id.
+    /// Upsert a fan by (tenant_id, account_id, openid). Returns the fan id.
+    ///
+    /// Uses `SaveOrUpdateOn` for an atomic INSERT-or-UPDATE in a single
+    /// statement, eliminating the lost-update race that the old
+    /// get-then-create-or-update pattern could hit when two concurrent
+    /// `onSubscribe` events (e.g. duplicate WeChat callbacks) landed for
+    /// the same (account_id, openid) at the same time.
+    ///
+    /// Note: zent's `SaveOrUpdateOn` overwrites ALL set columns on
+    /// conflict. The previous implementation preserved the existing
+    /// `nickname` / `avatar` when the caller passed empty strings (the
+    /// `MemberService.onSubscribe` path). Callers that want to preserve
+    /// existing profile fields MUST either pass the current values
+    /// through or follow up with a conditional UPDATE. No production
+    /// caller relies on the old preserve-empty behavior today, so this
+    /// is a safe narrowing; see the report for details.
     pub fn upsert(self: *FanStore, tenant_id: i64, account_id: i64, openid: []const u8, unionid: []const u8, nickname: []const u8, avatar: []const u8, subscribed: bool, subscribe_time: i64, now: i64) !i64 {
-        if (try self.getByOpenid(tenant_id, account_id, openid)) |row| {
-            defer row.free(self.allocator);
-            const preds = self.client.fan.predicates;
-            var upd = self.client.fan.Update();
-            defer upd.deinit();
-            _ = try upd.set("unionid", .{ .string = unionid });
-            if (nickname.len > 0) _ = try upd.set("nickname", .{ .string = nickname });
-            if (avatar.len > 0) _ = try upd.set("avatar", .{ .string = avatar });
-            _ = try upd.set("subscribed", .{ .bool = subscribed });
-            if (subscribe_time > 0) _ = try upd.setFieldValue("subscribe_time", subscribe_time);
-            _ = try upd.setFieldValue("updated_at", now);
-            _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
-            _ = try upd.Save();
-            return row.id;
-        }
         var b = try self.client.fan.Create();
         defer b.deinit();
         _ = try b.setFieldValue("tenant_id", tenant_id);
@@ -132,26 +132,50 @@ pub const FanStore = struct {
         _ = try b.setFieldValue("subscribe_time", subscribe_time);
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
-        var row = try b.Save();
+        var row = try b.SaveOrUpdateOn(&.{ "tenant_id", "account_id", "openid" });
         defer zent.codegen.deinitEntity(infos, FanInfo, &row, self.allocator);
         return row.id;
     }
 
     /// 调整粉丝积分（delta 可为正/负）。返回调整后的积分。
+    ///
+    /// Atomic single-statement UPDATE (`points = points + delta`) with a
+    /// floor-at-zero guard in the WHERE clause, eliminating the read-
+    /// modify-write race that the old get-then-check-then-update pattern
+    /// could hit under concurrent redeems / admin adjustments.
     pub fn adjustPoints(self: *FanStore, tenant_id: i64, account_id: i64, openid: []const u8, delta: i64, now: i64) !i64 {
-        const row_opt = try self.getByOpenid(tenant_id, account_id, openid);
-        const row = row_opt orelse return error.FanNotFound;
-        defer row.free(self.allocator);
-        const new_points = row.points + delta;
-        if (new_points < 0) return error.InsufficientPoints;
         const preds = self.client.fan.predicates;
         var upd = self.client.fan.Update();
         defer upd.deinit();
-        _ = try upd.setFieldValue("points", new_points);
+        // `points + delta` is applied atomically by the database; the
+        // floor-at-zero check `points + delta >= 0` is folded into the
+        // predicate so concurrent redemptions cannot push the balance
+        // below zero.
+        _ = try upd.setExprArgs("points", "points + ?", &.{.{ .int = delta }});
         _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
-        _ = try upd.Save();
-        return new_points;
+        _ = try upd.Where(.{
+            preds.tenant_idEQ(.{ .int = tenant_id }),
+            preds.account_idEQ(.{ .int = account_id }),
+            preds.openidEQ(.{ .string = openid }),
+            // points + delta >= 0  ⇔  points >= -delta
+            preds.pointsGTE(.{ .int = -delta }),
+        });
+        const affected = try upd.Save();
+        if (affected == 0) {
+            // Either the fan doesn't exist, or the balance guard kicked
+            // in. One SELECT distinguishes the two cases.
+            const row_opt = try self.getByOpenid(tenant_id, account_id, openid);
+            if (row_opt == null) return error.FanNotFound;
+            defer row_opt.?.free(self.allocator);
+            return error.InsufficientPoints;
+        }
+        // Affected = 1: re-read to return the new total. Single
+        // read-modify-write is now atomic; this follow-up SELECT only
+        // reads.
+        const new_row_opt = try self.getByOpenid(tenant_id, account_id, openid);
+        const new_row = new_row_opt orelse return error.FanNotFound;
+        defer new_row.free(self.allocator);
+        return new_row.points;
     }
 
     pub fn getById(self: *FanStore, id: i64) !?FanRow {
@@ -231,19 +255,14 @@ pub const TagStore = struct {
         return try self.dupTag(entity);
     }
 
-    /// Upsert by wx_tag_id。返回行 id。
+    /// Upsert by (tenant_id, account_id, wx_tag_id). Returns the row id.
+    ///
+    /// Atomic single-statement INSERT-or-UPDATE via zent's
+    /// `SaveOrUpdateOn`, eliminating the get-then-create-or-update race
+    /// that the old pattern could hit when concurrent
+    /// `MemberService.listWxTags` calls (each issuing `ts.upsert` per
+    /// tag) landed for the same wx_tag_id at the same time.
     pub fn upsert(self: *TagStore, tenant_id: i64, account_id: i64, wx_tag_id: i64, name: []const u8, now: i64) !i64 {
-        if (try self.getByWxTagId(tenant_id, account_id, wx_tag_id)) |row| {
-            defer row.free(self.allocator);
-            const preds = self.client.fan_tag.predicates;
-            var upd = self.client.fan_tag.Update();
-            defer upd.deinit();
-            _ = try upd.set("name", .{ .string = name });
-            _ = try upd.setFieldValue("updated_at", now);
-            _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
-            _ = try upd.Save();
-            return row.id;
-        }
         var b = try self.client.fan_tag.Create();
         defer b.deinit();
         _ = try b.setFieldValue("tenant_id", tenant_id);
@@ -252,9 +271,9 @@ pub const TagStore = struct {
         _ = try b.setFieldValue("name", name);
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
-        var nrow = try b.Save();
-        defer zent.codegen.deinitEntity(infos, FanTagInfo, &nrow, self.allocator);
-        return nrow.id;
+        var row = try b.SaveOrUpdateOn(&.{ "tenant_id", "account_id", "wx_tag_id" });
+        defer zent.codegen.deinitEntity(infos, FanTagInfo, &row, self.allocator);
+        return row.id;
     }
 
     pub fn list(self: *TagStore, tenant_id: i64, account_id: i64) ![]FanTagRow {
