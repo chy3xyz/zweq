@@ -5,12 +5,12 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zent = .{
-            .url = "git+https://github.com/chy3xyz/zent?ref=v0.32.2",
-            .hash = "zent-0.32.2-oiur-xP7DwCyv9mm_lt74G6jR5qmlJYBW6hGBJ3bkXUv",
+            .url = "git+https://github.com/chy3xyz/zent?ref=v0.33.0",
+            .hash = "zent-0.33.0-oiur-wshEACkXfOmzXP3wqJ8avtVSl-ND3SWCoUrOwgT",
         },
         .zigmodu = .{
-            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.15.34",
-            .hash = "zigmodu-0.15.34-U40vs-1SQADQzG5sx1NyBp_frfhInqL0xwbzXiZQj8RL",
+            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.15.35",
+            .hash = "zigmodu-0.15.35-U40vs7-4QACl6L3fBta52jt8fDeI5d3iil50ZxJhDUFO",
         },
         .zwechat = .{
             .url = "git+https://github.com/chy3xyz/zwechat?ref=v0.4.3#7ed8f55ca3623d4d68f91d26550bfe0ef172d278",
