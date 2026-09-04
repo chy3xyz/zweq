@@ -622,6 +622,34 @@ pub fn main(init: std.process.Init) !void {
 
     slot.set(try router.finish());
 
+    // OpenAPI/Swagger/Scalar docs: READ-ONLY public routes generated from the
+    // route catalog. Registered via `server.addRoute` (same pattern as the
+    // health/metrics probes) because the catalog is already finalized above and
+    // `openApiRoutes` returns a runtime `[3]RouteSpec` tuple that cannot be fed
+    // to the comptime `Scoped.mount`. The three 1-arg handlers below are exactly
+    // what `openApiRoutes` wraps, and the runtime OpenAPI store is seeded here.
+    // The auth middleware already skips these paths (`skip_prefixes` includes
+    // "openapi.json", "docs", "scalar").
+    try server.addRoute(.{
+        .method = .GET,
+        .path = "openapi.json",
+        .handler = zigmodu.http.openApiFromCatalog(&slot, .{
+            .title = "zweq",
+            .version = "0.1.0",
+            .description = "zweq ComptimeRouter catalog (live)",
+        }),
+    });
+    try server.addRoute(.{
+        .method = .GET,
+        .path = "docs",
+        .handler = zigmodu.http.swaggerUiHandler("openapi.json"),
+    });
+    try server.addRoute(.{
+        .method = .GET,
+        .path = "scalar",
+        .handler = zigmodu.http.scalarUiHandler("openapi.json"),
+    });
+
     // Health: liveness at the server root (probe convention) and readiness
     // under the API prefix (checks the data store).
     const Ready = struct {
@@ -888,8 +916,13 @@ fn staticMiddleware() zigmodu.http.Middleware {
             fn handle(ctx: *zigmodu.http.Context, next: zigmodu.http.HandlerFn, _: ?*anyopaque) anyerror!void {
                 if (ctx.method != .GET) return next(ctx);
                 const raw = ctx.raw_path;
+                // `ctx.path` is query-stripped with a leading slash; match the
+                // OpenAPI docs paths exactly so they reach the router instead of
+                // being served the SPA fallback.
                 if (std.mem.startsWith(u8, raw, "/api") or std.mem.startsWith(u8, raw, "/wx") or
-                    std.mem.startsWith(u8, raw, "/health") or std.mem.startsWith(u8, raw, "/metrics"))
+                    std.mem.startsWith(u8, raw, "/health") or std.mem.startsWith(u8, raw, "/metrics") or
+                    std.mem.eql(u8, ctx.path, "/openapi.json") or std.mem.eql(u8, ctx.path, "/docs") or
+                    std.mem.eql(u8, ctx.path, "/scalar"))
                 {
                     return next(ctx);
                 }
