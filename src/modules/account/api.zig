@@ -155,7 +155,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "创建账号 {s} ({s})", .{ req.name, req.kind });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.create", "account", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "账号已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn get(ctx: *http.Context) !void {
@@ -175,7 +175,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toAccountDto(row) });
+            try ctx.okValue(toAccountDto(row));
         }
 
         fn update(ctx: *http.Context) !void {
@@ -222,7 +222,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
             var d2: [128]u8 = undefined;
             const det2 = try std.fmt.bufPrint(&d2, "更新账号 #{d} → {s}", .{ id, status });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.update", "account", id, det2, zigmodu.http.RequestUtil.getRealIp(ctx), true, mw.authTenantId(ctx) orelse self.default_tenant_id);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn delete(ctx: *http.Context) !void {
@@ -239,7 +239,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.delete", "account", id, "删除账号", zigmodu.http.RequestUtil.getRealIp(ctx), true, mw.authTenantId(ctx) orelse self.default_tenant_id);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn getWechat(ctx: *http.Context) !void {
@@ -255,12 +255,12 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const row = row_opt orelse {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+                try ctx.ok("null");
                 return;
             };
             defer row.free(self.svc.allocator);
             const dto = WechatDto{ .account_id = row.account_id, .appid = row.appid, .token = row.token, .verified = row.verified };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dto });
+            try ctx.okValue(dto);
         }
 
         fn setWechat(ctx: *http.Context) !void {
@@ -313,7 +313,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.wechat", "account", id, "更新微信配置", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
     };
 }

@@ -117,5 +117,5 @@ pub fn handleAdminNav(
         null;
 
     const items = try buildAdminNav(ctx.allocator, uid, row.admin, tid, account_id, mod_svc);
-    try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = items } });
+    try ctx.okValue(.{ .items = items });
 }

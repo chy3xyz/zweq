@@ -196,7 +196,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "新建图文素材 {s}", .{req.title});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.news.create", "material", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "素材已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn getNews(ctx: *http.Context) !void {
@@ -215,7 +215,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toNewsDto(row) });
+            try ctx.okValue(toNewsDto(row));
         }
 
         fn updateNews(ctx: *http.Context) !void {
@@ -255,7 +255,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "更新图文素材 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.news.update", "material", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn deleteNews(ctx: *http.Context) !void {
@@ -271,7 +271,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.news.delete", "material", id, "删除图文素材", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn listFiles(ctx: *http.Context) !void {
@@ -318,7 +318,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "新建 {s} 素材", .{req.kind});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.file.create", "material", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "素材已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn deleteFile(ctx: *http.Context) !void {
@@ -334,7 +334,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.file.delete", "material", id, "删除素材", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn syncNews(ctx: *http.Context) !void {
@@ -356,7 +356,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.sync.news", "material", account_id, "同步微信图文素材", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已同步", .data = null });
+            try ctx.ok("null");
         }
 
         fn syncFiles(ctx: *http.Context) !void {
@@ -383,7 +383,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.sync.files", "material", account_id, "同步微信素材文件", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已同步", .data = null });
+            try ctx.ok("null");
         }
 
         fn syncCount(ctx: *http.Context) !void {
@@ -402,7 +402,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .voice = c.voice, .video = c.video, .image = c.image, .news = c.news } });
+            try ctx.okValue(.{ .voice = c.voice, .video = c.video, .image = c.image, .news = c.news });
         }
 
         fn uploadNews(ctx: *http.Context) !void {
@@ -435,7 +435,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             };
             defer ctx.allocator.free(media_id);
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.news.upload", "material", req.account_id, "上传图文到微信", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已上传", .data = .{ .media_id = media_id } });
+            try ctx.okValue(.{ .media_id = media_id });
         }
     };
 }

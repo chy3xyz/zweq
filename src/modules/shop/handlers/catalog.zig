@@ -87,7 +87,7 @@ pub fn Mixin(comptime ApiT: type) type {
             };
             defer result.free(self.svc.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, CategoryDto, toCategoryDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn publicProducts(ctx: *http.Context) !void {
@@ -128,7 +128,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (skus.len > 0) self.svc.allocator.free(skus);
             }
             const sku_dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, skus, SkuDto, toSkuDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .product = toProductDto(p), .skus = sku_dtos } });
+            try ctx.okValue(.{ .product = toProductDto(p), .skus = sku_dtos });
         }
 
         // ── 管理端 ──────────────────────────────────────────
@@ -148,7 +148,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.category.create", "shop_category", id, "创建分类", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn deleteCategory(ctx: *http.Context) !void {
@@ -164,7 +164,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.category.delete", "shop_category", id, "删除分类", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn createProduct(ctx: *http.Context) !void {
@@ -203,7 +203,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.product.create", "shop_product", id, "创建商品", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn updateProduct(ctx: *http.Context) !void {
@@ -246,7 +246,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.product.update", "shop_product", id, "更新商品", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn deleteProduct(ctx: *http.Context) !void {
@@ -262,7 +262,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.product.delete", "shop_product", id, "删除商品", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         /// 管理端商品列表（含下架，不要求 account_id）。

@@ -188,12 +188,12 @@ pub fn FanAppApi(
                 return;
             };
             defer fan.free(self.fan_store.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = FanProfileDto{
+            try ctx.okValue(FanProfileDto{
                 .openid = fan.openid,
                 .nickname = fan.nickname,
                 .avatar = fan.avatar,
                 .points = fan.points,
-            } });
+            });
         }
 
         fn listPointsProducts(ctx: *http.Context) !void {
@@ -222,12 +222,12 @@ pub fn FanAppApi(
                     .stock = row.stock,
                 };
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .list = dtos,
                 .total = result.total,
                 .page = params.page,
                 .pageSize = params.page_size,
-            } });
+            });
         }
 
         fn redeemPoints(ctx: *http.Context) !void {
@@ -252,7 +252,7 @@ pub fn FanAppApi(
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "兑换成功", .data = .{ .order_id = order_id } });
+            try ctx.okValue(.{ .order_id = order_id });
         }
 
         fn listPointsOrders(ctx: *http.Context) !void {
@@ -283,7 +283,7 @@ pub fn FanAppApi(
                     .status = row.status,
                 };
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         fn listCoupons(ctx: *http.Context) !void {
@@ -316,12 +316,12 @@ pub fn FanAppApi(
                     .end_at = row.end_at,
                 };
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .list = dtos,
                 .total = result.total,
                 .page = params.page,
                 .pageSize = params.page_size,
-            } });
+            });
         }
 
         fn claimCoupon(ctx: *http.Context) !void {
@@ -353,7 +353,7 @@ pub fn FanAppApi(
                 return;
             };
             defer ctx.allocator.free(code);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "领取成功", .data = .{ .code = code } });
+            try ctx.okValue(.{ .code = code });
         }
 
         fn myCoupons(ctx: *http.Context) !void {
@@ -397,12 +397,12 @@ pub fn FanAppApi(
                     .min_amount = min_amount,
                 };
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .list = dtos,
                 .total = result.total,
                 .page = params.page,
                 .pageSize = params.page_size,
-            } });
+            });
             // jsonStruct 已完成，释放关联的券模板行（内部 owned 字符串）
             for (tmp_coupons.items) |c| c.free(self.coupon_svc.allocator);
         }
@@ -418,11 +418,11 @@ pub fn FanAppApi(
             const cfg_json = self.module_svc.getConfig(ctx.allocator, tid, account_id, "lucky_draw") catch null;
             const cfg = self.lucky_draw_svc.parseConfig(ctx.allocator, cfg_json orelse "");
             defer cfg.free(ctx.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = DrawConfigDto{
+            try ctx.okValue(DrawConfigDto{
                 .cost = cfg.cost,
                 .daily_limit = cfg.daily_limit,
                 .prize_count = @intCast(cfg.prizes.len),
-            } });
+            });
         }
 
         fn listDrawRecords(ctx: *http.Context) !void {
@@ -451,12 +451,12 @@ pub fn FanAppApi(
                     .created_at = row.created_at,
                 });
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .list = try dtos.toOwnedSlice(ctx.allocator),
                 .total = @as(i64, @intCast(dtos.items.len)),
                 .page = params.page,
                 .pageSize = params.page_size,
-            } });
+            });
         }
 
         fn draw(ctx: *http.Context) !void {
@@ -483,10 +483,10 @@ pub fn FanAppApi(
                 return;
             };
             defer ctx.allocator.free(result.prize_name);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .prize_name = result.prize_name,
                 .points = result.points,
-            } });
+            });
         }
 
         /// C 端钱包余额查询（粉丝 JWT，openid → fan_id → wallet）。
@@ -513,12 +513,12 @@ pub fn FanAppApi(
                 return;
             };
             const wallet = wallet_opt orelse {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .balance = 0 } });
+                try ctx.okValue(.{ .balance = 0 });
                 return;
             };
             defer wallet.free(self.payment_svc.allocator);
             const balance = std.fmt.parseInt(i64, wallet.balance, 10) catch 0;
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .balance = balance } });
+            try ctx.okValue(.{ .balance = balance });
         }
     };
 }

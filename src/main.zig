@@ -27,6 +27,7 @@ const license_mw = @import("middleware/license.zig");
 const mw_rate = @import("middleware/rate_limit.zig");
 const mw = @import("middleware/auth.zig");
 const catalog_permissions = @import("middleware/catalog_permissions.zig");
+const envelope_mw = @import("middleware/envelope.zig");
 const permission_seed = @import("modules/permission/seed.zig");
 const mail = @import("services/mail.zig");
 const cache_svc = @import("services/cache.zig");
@@ -551,6 +552,7 @@ pub fn main(init: std.process.Init) !void {
     try server.addMiddleware(request_log_mod.requestLog());
     try server.addMiddleware(metrics.middleware());
     try server.addMiddleware(sec_headers.securityHeaders());
+    try server.addMiddleware(envelope_mw.ruoyiEnvelope());
     try server.addMiddleware(access_log.middleware());
     try server.addMiddleware(zigmodu.http.http_middleware.cors(.{ .allow_origins = origins }));
     try server.addMiddleware(license_mw.licenseGate(&cloud_svc));
@@ -661,7 +663,7 @@ pub fn main(init: std.process.Init) !void {
         .path = "health/live",
         .handler = struct {
             fn handle(ctx: *zigmodu.http.Context) !void {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .status = "UP" } });
+                try ctx.okValue(.{ .status = "UP" });
             }
         }.handle,
     });
@@ -670,7 +672,7 @@ pub fn main(init: std.process.Init) !void {
         .path = "api/v1/health/live",
         .handler = struct {
             fn handle(ctx: *zigmodu.http.Context) !void {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .status = "UP" } });
+                try ctx.okValue(.{ .status = "UP" });
             }
         }.handle,
     });
@@ -684,7 +686,7 @@ pub fn main(init: std.process.Init) !void {
                     return;
                 };
                 defer probe.free(ctx.allocator);
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .status = "READY" } });
+                try ctx.okValue(.{ .status = "READY" });
             }
         }.handle,
     });

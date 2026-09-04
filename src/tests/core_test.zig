@@ -165,7 +165,7 @@ test "HTTP dispatch: public auth flow (register -> me) via Testkit" {
 
     var resp = try zigmodu.http.Testkit.dispatch(&server, .POST, "/api/v1/auth/register", "{\"name\":\"Tester\",\"email\":\"t@example.com\",\"password\":\"password123\"}");
     defer resp.deinit(allocator);
-    try std.testing.expectEqual(@as(u16, 201), resp.status_code);
+    try std.testing.expectEqual(@as(u16, 200), resp.status_code);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"code\":0") != null);
 }
 

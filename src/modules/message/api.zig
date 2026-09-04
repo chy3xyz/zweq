@@ -202,7 +202,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "message.customer.send", "message", req.account_id, "发送客服消息", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已发送", .data = null });
+            try ctx.ok("null");
         }
 
         fn sendTemplate(ctx: *http.Context) !void {
@@ -246,7 +246,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "message.template.send", "message", req.account_id, "发送模板消息", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已发送", .data = .{ .msgid = msgid } });
+            try ctx.okValue(.{ .msgid = msgid });
         }
 
         fn sendBroadcast(ctx: *http.Context) !void {
@@ -272,7 +272,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "message.broadcast.send", "message", req.account_id, "群发文本消息", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已群发", .data = .{ .msgid = msgid } });
+            try ctx.okValue(.{ .msgid = msgid });
         }
 
         fn getDatacube(ctx: *http.Context) !void {
@@ -324,7 +324,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer ctx.allocator.free(openid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .openid = openid } });
+            try ctx.okValue(.{ .openid = openid });
         }
     };
 }

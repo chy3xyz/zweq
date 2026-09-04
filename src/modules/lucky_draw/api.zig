@@ -120,7 +120,7 @@ pub fn LuckyDrawApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "手动抽奖：{s} 抽中 {s}", .{ req.openid, result.prize_name });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "lucky_draw.draw", "lucky_draw", req.account_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .prize_name = result.prize_name, .points = result.points } });
+            try ctx.okValue(.{ .prize_name = result.prize_name, .points = result.points });
         }
     };
 }

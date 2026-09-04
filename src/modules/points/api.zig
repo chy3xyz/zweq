@@ -145,7 +145,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "points.product.create", "points", id, "创建积分商品", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn getProduct(ctx: *http.Context) !void {
@@ -164,7 +164,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toProductDto(row) });
+            try ctx.okValue(toProductDto(row));
         }
 
         fn updateProduct(ctx: *http.Context) !void {
@@ -194,7 +194,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "points.product.update", "points", id, "更新积分商品", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn deleteProduct(ctx: *http.Context) !void {
@@ -211,7 +211,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "points.product.delete", "points", id, "删除积分商品", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn redeem(ctx: *http.Context) !void {
@@ -234,7 +234,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "兑换成功", .data = .{ .order_id = order_id } });
+            try ctx.okValue(.{ .order_id = order_id });
         }
 
         fn adjust(ctx: *http.Context) !void {
@@ -257,7 +257,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "points.adjust", "points", req.account_id, "调整粉丝积分", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .points = points } });
+            try ctx.okValue(.{ .points = points });
         }
 
         fn listOrders(ctx: *http.Context) !void {
@@ -281,7 +281,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 for (rows) |r| r.free(ctx.allocator);
                 ctx.allocator.free(rows);
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = rows } });
+            try ctx.okValue(.{ .items = rows });
         }
     };
 }

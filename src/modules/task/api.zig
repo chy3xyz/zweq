@@ -83,7 +83,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = counts });
+            try ctx.okValue(counts);
         }
 
         fn list(ctx: *http.Context) !void {
@@ -120,7 +120,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer row.free(self.svc.store.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = toDto(row) });
+            try ctx.okValue(toDto(row));
         }
 
         fn retry(ctx: *http.Context) !void {
@@ -138,7 +138,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
             var d1: [96]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "重试任务 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "task.retry", "task", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, 0);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "任务已重新排队", .data = null });
+            try ctx.ok("null");
         }
 
         fn cancel(ctx: *http.Context) !void {
@@ -156,7 +156,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
             var d2: [96]u8 = undefined;
             const det2 = try std.fmt.bufPrint(&d2, "取消任务 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "task.cancel", "task", id, det2, zigmodu.http.RequestUtil.getRealIp(ctx), true, 0);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "任务已取消", .data = null });
+            try ctx.ok("null");
         }
 
         fn purge(ctx: *http.Context) !void {
@@ -169,7 +169,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
             };
             const det3 = "清理已完成任务";
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "task.purge", "task", 0, det3, zigmodu.http.RequestUtil.getRealIp(ctx), true, 0);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已完成任务已清理", .data = null });
+            try ctx.ok("null");
         }
 
         fn delete(ctx: *http.Context) !void {
@@ -187,7 +187,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
             var d4: [96]u8 = undefined;
             const det4 = try std.fmt.bufPrint(&d4, "删除任务 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "task.delete", "task", id, det4, zigmodu.http.RequestUtil.getRealIp(ctx), true, 0);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
     };
 }

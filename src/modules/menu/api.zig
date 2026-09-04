@@ -77,11 +77,11 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const row = row_opt orelse {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .menu_json = "" } });
+                try ctx.okValue(.{ .menu_json = "" });
                 return;
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .menu_json = row.menu_json } });
+            try ctx.okValue(.{ .menu_json = row.menu_json });
         }
 
         fn save(ctx: *http.Context) !void {
@@ -110,7 +110,7 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
             var d1: [96]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "账号 #{d} 保存菜单", .{account_id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "menu.save", "menu", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn publish(ctx: *http.Context) !void {
@@ -136,7 +136,7 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
             var d1: [96]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "账号 #{d} 发布菜单", .{account_id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "menu.publish", "menu", account_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已发布", .data = null });
+            try ctx.ok("null");
         }
 
         fn deleteRemote(ctx: *http.Context) !void {
@@ -159,7 +159,7 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "menu.delete", "menu", account_id, "删除微信菜单", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn fetchMenu(ctx: *http.Context) !void {
@@ -179,7 +179,7 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer ctx.allocator.free(data);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .menu_json = data } });
+            try ctx.okValue(.{ .menu_json = data });
         }
     };
 }

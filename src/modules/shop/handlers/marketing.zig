@@ -90,7 +90,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (rows.len > 0) self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, PlanDto, toPlanDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn planRecharge(ctx: *http.Context) !void {
@@ -113,7 +113,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "充值成功", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn planCreate(ctx: *http.Context) !void {
@@ -131,7 +131,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.plan.create", "shop_balance_plan", id, "创建储值套餐", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn planDelete(ctx: *http.Context) !void {
@@ -147,7 +147,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.plan.delete", "shop_balance_plan", id, "删除套餐", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn grouponList(ctx: *http.Context) !void {
@@ -163,7 +163,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (rows.len > 0) self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, GrouponDto, toGrouponDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn grouponCreate(ctx: *http.Context) !void {
@@ -180,7 +180,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.groupon.create", "shop_groupon", id, "创建拼团", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn grouponOpen(ctx: *http.Context) !void {
@@ -203,7 +203,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "开团成功", .data = .{ .team_id = team_id } });
+            try ctx.okValue(.{ .team_id = team_id });
         }
 
         pub fn grouponJoin(ctx: *http.Context) !void {
@@ -227,7 +227,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "参团成功", .data = .{ .order_id = order_id } });
+            try ctx.okValue(.{ .order_id = order_id });
         }
 
         pub fn inviteGifts(ctx: *http.Context) !void {
@@ -243,7 +243,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (rows.len > 0) self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, InviteGiftDto, toInviteGiftDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn inviteBind(ctx: *http.Context) !void {
@@ -261,7 +261,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已绑定", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn inviteMy(ctx: *http.Context) !void {
@@ -272,7 +272,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             const invited = self.svc.store.marketing.countInvites(tid, openid) catch 0;
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .invited = invited, .invite_code = openid } });
+            try ctx.okValue(.{ .invited = invited, .invite_code = openid });
         }
 
         pub fn inviteGiftCreate(ctx: *http.Context) !void {
@@ -290,7 +290,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.invite_gift.create", "shop_invite_gift", id, "创建邀请奖励", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn inviteGiftDelete(ctx: *http.Context) !void {
@@ -306,7 +306,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.invite_gift.delete", "shop_invite_gift", id, "删除奖励", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
     };
 }

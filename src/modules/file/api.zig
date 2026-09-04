@@ -120,7 +120,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 },
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "上传成功", .data = toDto(row) });
+            try ctx.okValue(toDto(row));
         }
 
         fn list(ctx: *http.Context) !void {
@@ -214,7 +214,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             var d5: [96]u8 = undefined;
             const det5 = try std.fmt.bufPrint(&d5, "删除文件 #{d}", .{id});
             self.audit.log(actor.id, ctx.getAttr("audit_actor") orelse "", "file.delete", "file", id, det5, zigmodu.http.RequestUtil.getRealIp(ctx), true, row.tenant_id);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         // ── Upload groups (image-manager categories) ──
@@ -244,7 +244,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn listGroups(ctx: *http.Context) !void {
@@ -274,7 +274,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             }
             for (rows) |r| r.free(self.svc.allocator);
             self.svc.allocator.free(rows);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos } });
+            try ctx.okValue(.{ .items = dtos });
         }
 
         fn updateGroup(ctx: *http.Context) !void {
@@ -299,7 +299,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn deleteGroup(ctx: *http.Context) !void {
@@ -321,7 +321,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
     };
 }

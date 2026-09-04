@@ -271,7 +271,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 return;
             };
 
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn updateProvider(ctx: *http.Context) !void {
@@ -340,7 +340,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 return;
             };
 
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn deleteProvider(ctx: *http.Context) !void {
@@ -355,7 +355,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn checkProvider(ctx: *http.Context) !void {
@@ -389,7 +389,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                     return;
                 },
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = .{ .status = result } });
+            try ctx.okValue(.{ .status = result });
         }
 
         // ── Sessions & Chat ──
@@ -420,7 +420,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn listMessages(ctx: *http.Context) !void {
@@ -448,7 +448,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
             };
             defer result.free(ctx.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, MessageDto, toMessageDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = .{ .list = dtos, .total = result.total } });
+            try ctx.okValue(.{ .list = dtos, .total = result.total });
         }
 
         fn chat(ctx: *http.Context) !void {
@@ -509,15 +509,11 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
 
             _ = self.svc.store.addMessage(sid, "assistant", outcome.answer, outcome.reasoning, now) catch {};
             _ = self.svc.store.touchSession(sid, now) catch {};
-            try ctx.jsonStruct(200, .{
-                .code = 0,
-                .msg = "",
-                .data = .{
+            try ctx.okValue(.{
                     .answer = outcome.answer,
                     .reasoning_content = outcome.reasoning,
                     .budget_exhausted = outcome.budget_exhausted,
-                },
-            });
+                });
         }
 
         fn deleteSession(ctx: *http.Context) !void {
@@ -532,7 +528,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         // ── Approvals / runs / metrics ──
@@ -569,7 +565,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "该审批已处理或不存在");
                 return;
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn approveApproval(ctx: *http.Context) !void {
@@ -623,14 +619,10 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 };
             }
 
-            try ctx.jsonStruct(200, .{
-                .code = 0,
-                .msg = "",
-                .data = .{
+            try ctx.okValue(.{
                     .status = @tagName(result.status),
                     .steps = outs,
-                },
-            });
+                });
         }
 
         fn metrics(ctx: *http.Context) !void {
@@ -647,7 +639,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const names = [_][]const u8{ "zweq.user.search", "zweq.task.stats", "zweq.audit.search", "zweq.tenant.list", "zweq.notify.send" };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = .{ .skills = names[0..] } });
+            try ctx.okValue(.{ .skills = names[0..] });
         }
     };
 }

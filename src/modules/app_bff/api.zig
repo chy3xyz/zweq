@@ -69,12 +69,12 @@ pub fn AppBffApi(comptime AccountService: type, comptime ModuleService: type, co
                 return;
             };
             defer row.free(self.account_svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = AccountInfoDto{
+            try ctx.okValue(AccountInfoDto{
                 .id = row.id,
                 .name = row.name,
                 .kind = row.kind,
                 .status = row.status,
-            } });
+            });
         }
 
         fn modules(ctx: *http.Context) !void {
@@ -104,7 +104,7 @@ pub fn AppBffApi(comptime AccountService: type, comptime ModuleService: type, co
                 dtos[n] = .{ .module = r.module, .status = r.status };
                 n += 1;
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos[0..n] } });
+            try ctx.okValue(.{ .items = dtos[0..n] });
         }
     };
 }

@@ -90,7 +90,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (rows.len > 0) self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, OutletDto, toOutletDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn outletCreate(ctx: *http.Context) !void {
@@ -112,7 +112,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.outlet.create", "shop_outlet", id, "创建门店", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn outletDelete(ctx: *http.Context) !void {
@@ -128,7 +128,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.outlet.delete", "shop_outlet", id, "删除门店", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn articleList(ctx: *http.Context) !void {
@@ -160,7 +160,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             defer a.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toArticleDto(a) });
+            try ctx.okValue(toArticleDto(a));
         }
 
         pub fn articleCreate(ctx: *http.Context) !void {
@@ -181,7 +181,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.article.create", "shop_article", id, "发布文章", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已发布", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn articleDelete(ctx: *http.Context) !void {
@@ -197,7 +197,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.article.delete", "shop_article", id, "删除文章", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn adminArticles(ctx: *http.Context) !void {
@@ -231,7 +231,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             defer ctx.allocator.free(reply);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .reply = reply } });
+            try ctx.okValue(.{ .reply = reply });
         }
 
         pub fn webhookCreate(ctx: *http.Context) !void {
@@ -252,7 +252,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.webhook.create", "shop_webhook", id, "创建 Webhook", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn webhookList(ctx: *http.Context) !void {
@@ -269,7 +269,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (rows.len > 0) self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, WebhookDto, toWebhookDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn webhookDelete(ctx: *http.Context) !void {
@@ -285,7 +285,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.webhook.delete", "shop_webhook", id, "删除 Webhook", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         /// C 端登录：openid 必须是粉丝 → 签发 C-token（roles=["fan"]）。
@@ -316,7 +316,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             defer self.svc.allocator.free(token);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .token = token } });
+            try ctx.okValue(.{ .token = token });
         }
 
         /// 从 Authorization 头解析 C-token 的 openid（无/非法 → null）。

@@ -164,7 +164,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "创建会员等级 {s}", .{req.name});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member_card.create_level", "member_card_level", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         /// 整体更新等级（account 作用域不变）。请求体同 `CreateLevelReq` 去 account_id。
@@ -199,7 +199,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "更新会员等级 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member_card.update", "member_card_level", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         /// 删除等级（不级联）。有会员引用该等级时拒绝（400 提示先迁走会员）。
@@ -229,7 +229,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "删除会员等级 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member_card.delete", "member_card_level", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         /// 启停等级：body `{"status": 1|0}`。已开卡会员保留原等级。
@@ -262,7 +262,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             var d: [128]u8 = undefined;
             const det = try std.fmt.bufPrint(&d, "{s}会员等级 #{d}", .{ action, id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member_card.status", "member_card_level", id, det, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = action, .data = null });
+            try ctx.ok("null");
         }
 
         fn listMembers(ctx: *http.Context) !void {
@@ -297,11 +297,11 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             var v = v_opt orelse {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "未办卡", .data = null });
+                try ctx.ok("null");
                 return;
             };
             defer v.free(ctx.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = v });
+            try ctx.okValue(v);
         }
 
         fn open(ctx: *http.Context) !void {
@@ -326,7 +326,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
                 },
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member_card.open", "member_account", 0, "手动开卡", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "开卡成功", .data = null });
+            try ctx.ok("null");
         }
 
         fn adjust(ctx: *http.Context) !void {
@@ -352,7 +352,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "积分调整 {d}", .{req.delta});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member_card.adjust", "member_account", 0, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已调整", .data = null });
+            try ctx.ok("null");
         }
     };
 }

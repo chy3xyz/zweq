@@ -178,7 +178,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "创建优惠券 {s}", .{req.title});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.create", "coupon", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         /// 单条详情（tenant 过滤）：券不存在或不属于本 tenant 均 404。DTO 与列表同构。
@@ -199,7 +199,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toCouponDto(row) });
+            try ctx.okValue(toCouponDto(row));
         }
 
         /// 整体更新券模板（account 作用域不变）。请求体同 `CreateCouponReq` 去 account_id。
@@ -234,7 +234,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "更新优惠券 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.update", "coupon", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         /// 上下架：body `{"status": 1|0}`。
@@ -267,7 +267,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             var d: [128]u8 = undefined;
             const det = try std.fmt.bufPrint(&d, "{s}优惠券 #{d}", .{ action, id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.status", "coupon", id, det, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = action, .data = null });
+            try ctx.ok("null");
         }
 
         fn deleteCoupon(ctx: *http.Context) !void {
@@ -283,7 +283,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.delete", "coupon", id, "删除优惠券", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         fn claim(ctx: *http.Context) !void {
@@ -314,7 +314,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             };
             defer ctx.allocator.free(code);
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.claim", "coupon", id, "手动领券", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "领取成功", .data = .{ .code = code } });
+            try ctx.okValue(.{ .code = code });
         }
 
         fn useCoupon(ctx: *http.Context) !void {
@@ -337,7 +337,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "coupon.use", "coupon", 0, "核销优惠券", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已核销", .data = null });
+            try ctx.ok("null");
         }
 
         fn listUsers(ctx: *http.Context) !void {

@@ -164,7 +164,7 @@ pub fn UserApi(comptime Service: type) type {
                 return;
             };
             defer row.free(self.svc.store.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = toDto(row) });
+            try ctx.okValue(toDto(row));
         }
 
         fn createUser(ctx: *http.Context) !void {
@@ -192,14 +192,10 @@ pub fn UserApi(comptime Service: type) type {
             const detail = try std.fmt.bufPrint(&detail_buf, "创建用户 {s} ({s})", .{ req.name, req.email });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "user.create", "user", session.row.id, detail, zigmodu.http.RequestUtil.getRealIp(ctx), true, tenant_id);
 
-            try ctx.jsonStruct(201, .{
-                .code = 0,
-                .msg = "",
-                .data = .{
+            try ctx.okValue(.{
                     .id = session.row.id,
                     .token = session.token,
-                },
-            });
+                });
         }
 
         fn updateUser(ctx: *http.Context) !void {
@@ -276,7 +272,7 @@ pub fn UserApi(comptime Service: type) type {
             var detail_buf: [160]u8 = undefined;
             const detail = try std.fmt.bufPrint(&detail_buf, "更新用户 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "user.update", "user", id, detail, zigmodu.http.RequestUtil.getRealIp(ctx), true, 0);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         /// 踢下线:递增用户凭证版本,该用户所有已签发 JWT 立即失效。
@@ -305,7 +301,7 @@ pub fn UserApi(comptime Service: type) type {
                     return;
                 },
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已踢下线", .data = null });
+            try ctx.ok("null");
         }
 
         fn deleteUser(ctx: *http.Context) !void {
@@ -329,7 +325,7 @@ pub fn UserApi(comptime Service: type) type {
             var detail_buf: [160]u8 = undefined;
             const detail = try std.fmt.bufPrint(&detail_buf, "删除用户 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "user.delete", "user", id, detail, zigmodu.http.RequestUtil.getRealIp(ctx), true, 0);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn sendCreateError(ctx: *http.Context, err: anyerror) !void {

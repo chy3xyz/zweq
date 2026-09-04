@@ -82,7 +82,7 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = .{ .unread = count } });
+            try ctx.okValue(.{ .unread = count });
         }
 
         fn markRead(ctx: *http.Context) !void {
@@ -99,7 +99,7 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn markAllRead(ctx: *http.Context) !void {
@@ -112,7 +112,7 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn delete(ctx: *http.Context) !void {
@@ -129,7 +129,7 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
     };
 }

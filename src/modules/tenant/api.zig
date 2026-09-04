@@ -103,7 +103,7 @@ pub fn TenantApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "创建租户 {s}", .{req.name});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "tenant.create", "tenant", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, id);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "租户已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn update(ctx: *http.Context) !void {
@@ -146,7 +146,7 @@ pub fn TenantApi(comptime Service: type, comptime UserService: type) type {
             var d2: [128]u8 = undefined;
             const det2 = try std.fmt.bufPrint(&d2, "更新租户 #{d} → {s}", .{ id, status });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "tenant.update", "tenant", id, det2, zigmodu.http.RequestUtil.getRealIp(ctx), true, id);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
     };
 }

@@ -156,7 +156,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "注册模块 {s} v{s}", .{ req.name, req.version });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.register", "module", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "模块已注册", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         /// 整体更新模块（title/version/status）。status 仅接受 active/disabled。
@@ -196,7 +196,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "更新模块 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.update", "module", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn listBindings(ctx: *http.Context) !void {
@@ -220,7 +220,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             for (rows, 0..) |r, i| {
                 dtos[i] = .{ .id = r.id, .account_id = r.account_id, .module = r.module, .status = r.status, .config = r.config };
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos } });
+            try ctx.okValue(.{ .items = dtos });
         }
 
         fn bind(ctx: *http.Context) !void {
@@ -249,7 +249,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "账号 #{d} 绑定模块 {s}", .{ account_id, req.module });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.bind", "module", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn unbind(ctx: *http.Context) !void {
@@ -271,7 +271,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.unbind", "module", account_id, "解绑模块", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn getConfig(ctx: *http.Context) !void {
@@ -292,7 +292,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer if (cfg) |c| ctx.allocator.free(c);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .config = cfg orelse "" } });
+            try ctx.okValue(.{ .config = cfg orelse "" });
         }
 
         fn setConfig(ctx: *http.Context) !void {
@@ -321,7 +321,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "账号 #{d} 模块 {s} 更新配置", .{ account_id, module });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.config", "module", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
     };
 }

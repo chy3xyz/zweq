@@ -221,7 +221,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "创建充值订单 {s} {s}分", .{ row.order_no, row.amount });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "pay.recharge", "payment", row.id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "订单已创建", .data = toOrderDto(row) });
+            try ctx.okValue(toOrderDto(row));
         }
 
         fn complete(ctx: *http.Context) !void {
@@ -245,7 +245,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "完成充值 {s}", .{order_no});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "pay.complete", "payment", 0, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已入账", .data = null });
+            try ctx.ok("null");
         }
 
         fn wallet(ctx: *http.Context) !void {
@@ -269,10 +269,10 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             };
             defer if (row_opt) |r| r.free(self.svc.allocator);
             const row = row_opt orelse {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = WalletDto{ .account_id = account_id, .fan_id = fan_id, .balance = 0 } });
+                try ctx.okValue(WalletDto{ .account_id = account_id, .fan_id = fan_id, .balance = 0 });
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = WalletDto{ .account_id = row.account_id, .fan_id = row.fan_id, .balance = std.fmt.parseInt(i64, row.balance, 10) catch 0 } });
+            try ctx.okValue(WalletDto{ .account_id = row.account_id, .fan_id = row.fan_id, .balance = std.fmt.parseInt(i64, row.balance, 10) catch 0 });
         }
 
         fn orders(ctx: *http.Context) !void {
@@ -320,7 +320,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "申请提现 {d}分", .{req.amount});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "pay.withdraw", "payment", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "提现申请已提交", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn withdraws(ctx: *http.Context) !void {
@@ -408,7 +408,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "payment.refund", "payment", 0, "V2 退款", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "退款已受理", .data = null });
+            try ctx.ok("null");
         }
 
         fn transferV2(ctx: *http.Context) !void {
@@ -441,7 +441,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "payment.transfer", "payment", 0, "企业付款到零钱", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已发起付款", .data = null });
+            try ctx.ok("null");
         }
 
         fn refundV3(ctx: *http.Context) !void {
@@ -474,7 +474,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "payment.refund.v3", "payment", 0, "v3 退款", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "退款已受理", .data = null });
+            try ctx.ok("null");
         }
 
         fn transferV3(ctx: *http.Context) !void {
@@ -509,7 +509,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "payment.transfer.v3", "payment", 0, "v3 商家转账", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已发起转账", .data = null });
+            try ctx.ok("null");
         }
     };
 }

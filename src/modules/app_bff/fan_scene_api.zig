@@ -105,8 +105,7 @@ pub fn FanSceneApi(
                 try ctx.sendErrorResponse(500, 500, "签到失败");
                 return;
             };
-            const msg = if (fresh) "签到成功" else "今日已签到";
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = msg, .data = .{ .points = points, .fresh = fresh } });
+            try ctx.okValue(.{ .points = points, .fresh = fresh });
         }
 
         fn checkinRecords(ctx: *http.Context) !void {
@@ -136,7 +135,7 @@ pub fn FanSceneApi(
                     .created_at = row.created_at,
                 });
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .list = out.items, .total = @as(i64, @intCast(out.items.len)) } });
+            try ctx.okValue(.{ .list = out.items, .total = @as(i64, @intCast(out.items.len)) });
         }
 
         fn listVotes(ctx: *http.Context) !void {
@@ -180,13 +179,13 @@ pub fn FanSceneApi(
                 return;
             };
             defer ctx.allocator.free(tally);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .id = row.id,
                 .title = row.title,
                 .options_json = row.options_json,
                 .end_at = row.end_at,
                 .tally = tally,
-            } });
+            });
         }
 
         fn voteBallot(ctx: *http.Context) !void {
@@ -215,7 +214,7 @@ pub fn FanSceneApi(
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "投票成功", .data = null });
+            try ctx.ok("null");
         }
 
         fn listSeckill(ctx: *http.Context) !void {
@@ -274,7 +273,7 @@ pub fn FanSceneApi(
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "抢购成功", .data = .{ .order_id = order_id } });
+            try ctx.okValue(.{ .order_id = order_id });
         }
 
         fn memberCardView(ctx: *http.Context) !void {
@@ -291,18 +290,18 @@ pub fn FanSceneApi(
                 return;
             };
             const view = view_opt orelse {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+                try ctx.ok("null");
                 return;
             };
             defer view.free(self.member_card_svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .openid = view.openid,
                 .level_name = view.level_name,
                 .level = view.level,
                 .discount = view.discount,
                 .points = view.points,
                 .total_points = view.total_points,
-            } });
+            });
         }
 
         fn memberCardOpen(ctx: *http.Context) !void {
@@ -321,7 +320,7 @@ pub fn FanSceneApi(
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "办卡成功", .data = null });
+            try ctx.ok("null");
         }
 
         fn distributionView(ctx: *http.Context) !void {
@@ -338,16 +337,16 @@ pub fn FanSceneApi(
                 return;
             };
             const row = row_opt orelse {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+                try ctx.ok("null");
                 return;
             };
             defer row.free(self.distribution_svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .openid = row.openid,
                 .parent_openid = row.parent_openid,
                 .commission_balance = row.commission_balance,
                 .total_commission = row.total_commission,
-            } });
+            });
         }
 
         fn distributionJoin(ctx: *http.Context) !void {
@@ -372,7 +371,7 @@ pub fn FanSceneApi(
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "加盟成功", .data = null });
+            try ctx.ok("null");
         }
 
         fn distributionWithdraw(ctx: *http.Context) !void {
@@ -397,7 +396,7 @@ pub fn FanSceneApi(
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "提现申请已提交", .data = null });
+            try ctx.ok("null");
         }
     };
 }

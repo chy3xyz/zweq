@@ -117,7 +117,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toFanDto(row) });
+            try ctx.okValue(toFanDto(row));
         }
 
         fn listTags(ctx: *http.Context) !void {
@@ -143,7 +143,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
                 for (rows) |r| r.free(ctx.allocator);
                 ctx.allocator.free(rows);
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = rows } });
+            try ctx.okValue(.{ .items = rows });
         }
 
         fn createTag(ctx: *http.Context) !void {
@@ -173,7 +173,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member.tag.create", "member", account_id, "创建粉丝标签", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .wx_tag_id = wx_tag_id } });
+            try ctx.okValue(.{ .wx_tag_id = wx_tag_id });
         }
 
         fn tagFan(ctx: *http.Context) !void {
@@ -198,7 +198,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "member.tag.fan", "member", req.account_id, "粉丝打标签", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已打标签", .data = null });
+            try ctx.ok("null");
         }
     };
 }

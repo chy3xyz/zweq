@@ -165,7 +165,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             var d1: [160]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "生成授权码 {s} ({d}天)", .{ row.license_key, req.days });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.license.issue", "cloud", row.id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "授权码已生成", .data = toLicenseDto(row) });
+            try ctx.okValue(toLicenseDto(row));
         }
 
         fn listLicenses(ctx: *http.Context) !void {
@@ -197,7 +197,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.license.revoke", "cloud", id, "撤销授权码", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已撤销", .data = null });
+            try ctx.ok("null");
         }
 
         fn verifyLicense(ctx: *http.Context) !void {
@@ -216,10 +216,10 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                     error.LicenseExpired => "expired",
                     else => "error",
                 };
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .valid = false, .reason = reason } });
+                try ctx.okValue(.{ .valid = false, .reason = reason });
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .valid = valid, .reason = "ok" } });
+            try ctx.okValue(.{ .valid = valid, .reason = "ok" });
         }
 
         fn listMarket(ctx: *http.Context) !void {
@@ -262,7 +262,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "发布市场包 {s} v{s}", .{ req.name, req.version });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.market.publish", "cloud", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已发布", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn installPackage(ctx: *http.Context) !void {
@@ -293,7 +293,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "安装市场包 {s} → 模块 #{d}", .{ name, module_id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.market.install", "cloud", module_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已安装", .data = .{ .module_id = module_id } });
+            try ctx.okValue(.{ .module_id = module_id });
         }
 
         fn remoteVerify(ctx: *http.Context) !void {
@@ -317,11 +317,11 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                     error.RemoteUnavailable => "remote_unavailable",
                     else => "error",
                 };
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .valid = false, .reason = reason } });
+                try ctx.okValue(.{ .valid = false, .reason = reason });
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.remote.verify", "cloud", 0, "远端校验授权码", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .valid = valid, .reason = "ok" } });
+            try ctx.okValue(.{ .valid = valid, .reason = "ok" });
         }
 
         fn remoteSyncMarket(ctx: *http.Context) !void {
@@ -345,7 +345,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             var d1: [96]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "同步云端市场 {d} 个包", .{count});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.remote.sync", "cloud", 0, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已同步", .data = .{ .count = count } });
+            try ctx.okValue(.{ .count = count });
         }
 
         fn listDynamicTables(ctx: *http.Context) !void {
@@ -372,7 +372,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                     .columns_json = t.columns_json,
                 }) catch return error.UnexpectedError;
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dto_list.items });
+            try ctx.okValue(dto_list.items);
         }
 
         fn queryDynamicTable(ctx: *http.Context) !void {
@@ -402,15 +402,11 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             while (i < rows.row_count) : (i += 1) {
                 rows_2d.append(ctx.allocator, rows.cells[i * rows.column_count .. (i + 1) * rows.column_count]) catch return error.UnexpectedError;
             }
-            try ctx.jsonStruct(200, .{
-                .code = 0,
-                .msg = "ok",
-                .data = .{
+            try ctx.okValue(.{
                     .columns = rows.columns,
                     .rows = rows_2d.items,
                     .total = rows.row_count,
-                },
-            });
+                });
         }
     };
 }

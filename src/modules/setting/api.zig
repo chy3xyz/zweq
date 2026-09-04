@@ -112,11 +112,11 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const row = row_opt orelse {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+                try ctx.ok("null");
                 return;
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toDto(row) });
+            try ctx.okValue(toDto(row));
         }
 
         fn set(ctx: *http.Context) !void {
@@ -145,7 +145,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "设置 {s}", .{key});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "setting.set", "setting", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn delete(ctx: *http.Context) !void {
@@ -163,7 +163,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "setting.delete", "setting", 0, "删除配置", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
     };
 }

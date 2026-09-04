@@ -195,7 +195,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
             var d: [128]u8 = undefined;
             const det = try std.fmt.bufPrint(&d, "{s}秒杀活动 #{d}", .{ action, id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "seckill.status", "seckill_activity", id, det, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = action, .data = null });
+            try ctx.ok("null");
         }
 
         fn create(ctx: *http.Context) !void {
@@ -217,7 +217,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "创建秒杀 {s}", .{req.title});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "seckill.create", "seckill_activity", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         /// 单条详情（tenant 过滤）：活动不存在或不属于本 tenant 均 404。DTO 与列表同构。
@@ -238,7 +238,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toDto(row) });
+            try ctx.okValue(toDto(row));
         }
 
         /// 整体更新活动（account 作用域不变）。请求体同 `CreateActivityReq` 去 account_id。
@@ -273,7 +273,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "更新秒杀活动 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "seckill.update", "seckill_activity", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         /// 删除活动及其抢购记录（先删订单再删活动）。
@@ -297,7 +297,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
                 },
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "seckill.delete", "seckill_activity", id, "删除秒杀活动", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         fn orders(ctx: *http.Context) !void {
@@ -351,7 +351,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "seckill.rush", "seckill_order", id, "手动抢购", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "抢购成功", .data = null });
+            try ctx.ok("null");
         }
     };
 }

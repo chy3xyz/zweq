@@ -89,7 +89,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已加入购物车", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn cartList(ctx: *http.Context) !void {
@@ -108,7 +108,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (rows.len > 0) self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, CartDto, toCartDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn cartUpdate(ctx: *http.Context) !void {
@@ -122,7 +122,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn cartDelete(ctx: *http.Context) !void {
@@ -135,7 +135,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn addressCreate(ctx: *http.Context) !void {
@@ -156,7 +156,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn addressList(ctx: *http.Context) !void {
@@ -175,7 +175,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (rows.len > 0) self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, AddressDto, toAddressDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn addressDelete(ctx: *http.Context) !void {
@@ -188,7 +188,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn addressUpdate(ctx: *http.Context) !void {
@@ -224,7 +224,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn addressSetDefault(ctx: *http.Context) !void {
@@ -249,7 +249,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已设为默认", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn orderCreate(ctx: *http.Context) !void {
@@ -283,7 +283,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             // 待支付订单由 pay-params / pay-complete（mock）或微信 notify（v3）入账；余额支付在 createOrder 内处理。
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "下单成功", .data = .{ .id = order_id } });
+            try ctx.okValue(.{ .id = order_id });
         }
 
         pub fn orderSummaries(ctx: *http.Context) !void {
@@ -311,7 +311,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 };
             }
             if (ids.items.len == 0) {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = &.{} });
+                try ctx.okValue(&.{});
                 return;
             }
             const summaries = self.svc.orderSummaries(ids.items) catch {
@@ -332,7 +332,7 @@ pub fn Mixin(comptime ApiT: type) type {
                     .summary = s.summary,
                 };
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn orderList(ctx: *http.Context) !void {
@@ -373,7 +373,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = overview });
+            try ctx.okValue(overview);
         }
 
         pub fn orderDetail(ctx: *http.Context) !void {
@@ -399,11 +399,11 @@ pub fn Mixin(comptime ApiT: type) type {
             const item_dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, ops, OrderProductDto, toOrderProductDto);
             const commented_ids = self.svc.listCommentedOrderProductIds(id) catch &.{};
             defer if (commented_ids.len > 0) self.svc.allocator.free(commented_ids);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .order = toOrderDto(o),
                 .items = item_dtos,
                 .commented_order_product_ids = commented_ids,
-            } });
+            });
         }
 
         pub fn orderCancel(ctx: *http.Context) !void {
@@ -416,7 +416,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已取消", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn orderConfirm(ctx: *http.Context) !void {
@@ -429,7 +429,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已确认收货", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn adminOrders(ctx: *http.Context) !void {
@@ -474,7 +474,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.order.ship", "shop_order", id, "订单发货", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已发货", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn refundApply(ctx: *http.Context) !void {
@@ -498,7 +498,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "退款申请已提交", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn refundByOrder(ctx: *http.Context) !void {
@@ -534,7 +534,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             const row = row_opt orelse {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+                try ctx.ok("null");
                 return;
             };
             defer row.free(self.svc.allocator);
@@ -542,7 +542,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(403, 403, "无权查看");
                 return;
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toRefundDto(row) });
+            try ctx.okValue(toRefundDto(row));
         }
 
         pub fn productComments(ctx: *http.Context) !void {
@@ -561,7 +561,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (rows.len > 0) self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, CommentDto, toCommentDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn commentCreate(ctx: *http.Context) !void {
@@ -592,7 +592,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "评价成功", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         pub fn adminRefunds(ctx: *http.Context) !void {
@@ -628,7 +628,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.refund.audit", "shop_refund", id, if (req.approve) "同意退款" else "拒绝退款", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已处理", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn favoriteAdd(ctx: *http.Context) !void {
@@ -643,7 +643,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已收藏", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn favoriteList(ctx: *http.Context) !void {
@@ -662,7 +662,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 if (rows.len > 0) self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, FavoriteDto, toFavoriteDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = dtos });
+            try ctx.okValue(dtos);
         }
 
         pub fn favoriteDelete(ctx: *http.Context) !void {
@@ -675,7 +675,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已取消收藏", .data = null });
+            try ctx.ok("null");
         }
 
         pub fn adminStats(ctx: *http.Context) !void {
@@ -687,7 +687,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = stats });
+            try ctx.okValue(stats);
         }
 
         pub fn orderPickup(ctx: *http.Context) !void {
@@ -714,7 +714,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.order.pickup", "shop_order", id, "自提核销", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "核销成功", .data = null });
+            try ctx.ok("null");
         }
 
         /// 订单支付参数：站点配了微信支付 v3 → JSAPI prepay；未配 → mock。
@@ -770,7 +770,7 @@ pub fn Mixin(comptime ApiT: type) type {
             }
             const pay_amount = std.fmt.parseInt(i64, o.pay_amount, 10) catch 0;
             if (!has_mch) {
-                try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .mode = "mock", .amount = pay_amount, .order_no = o.order_no } });
+                try ctx.okValue(.{ .mode = "mock", .amount = pay_amount, .order_no = o.order_no });
                 return;
             }
             defer cfg.deinit(ctx.allocator);
@@ -784,7 +784,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             defer jsapi.deinit(ctx.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{
+            try ctx.okValue(.{
                 .mode = "wxpay_v3",
                 .payment = .{
                     .timeStamp = jsapi.time_stamp,
@@ -793,7 +793,7 @@ pub fn Mixin(comptime ApiT: type) type {
                     .signType = jsapi.sign_type,
                     .paySign = jsapi.pay_sign,
                 },
-            } });
+            });
         }
 
         /// mock 支付完成（v3 模式下由微信 notify 触发，本接口拒绝）。
@@ -831,7 +831,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "支付成功", .data = null });
+            try ctx.ok("null");
         }
     };
 }

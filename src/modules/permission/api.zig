@@ -189,7 +189,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "创建角色 {s} ({s})", .{ req.name, req.code });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "role.create", "role", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "角色已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn updateRole(ctx: *http.Context) !void {
@@ -235,7 +235,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             var d2: [128]u8 = undefined;
             const det2 = try std.fmt.bufPrint(&d2, "更新角色 #{d} → {s}", .{ id, code });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "role.update", "role", id, det2, zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn deleteRole(ctx: *http.Context) !void {
@@ -252,7 +252,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "role.delete", "role", id, "删除角色", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn listPermissions(ctx: *http.Context) !void {
@@ -297,7 +297,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "授权 {s}:{s} @ account {d}", .{ req.module, req.action, req.account_id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "permission.grant", "permission", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已授权", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn revokePermission(ctx: *http.Context) !void {
@@ -314,7 +314,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "permission.revoke", "permission", id, "撤销授权", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn listUserRoles(ctx: *http.Context) !void {
@@ -334,7 +334,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             for (rows, 0..) |r, i| {
                 dtos[i] = .{ .user_id = r.user_id, .role_id = r.role_id };
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos } });
+            try ctx.okValue(.{ .items = dtos });
         }
 
         fn assignUserRole(ctx: *http.Context) !void {
@@ -358,7 +358,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "用户 #{d} 绑定角色 #{d}", .{ user_id, req.role_id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "user_role.assign", "user", user_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn listRolePermissions(ctx: *http.Context) !void {
@@ -378,7 +378,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 self.svc.allocator.free(rows);
             }
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, rows, PermissionDto, toPermissionDto);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos } });
+            try ctx.okValue(.{ .items = dtos });
         }
 
         fn bindRolePermission(ctx: *http.Context) !void {
@@ -402,7 +402,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "角色 #{d} 绑定权限 #{d}", .{ role_id, req.permission_id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "role_permission.bind", "role", role_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn unbindRolePermission(ctx: *http.Context) !void {
@@ -424,7 +424,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "角色 #{d} 解绑权限 #{d}", .{ role_id, permission_id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "role_permission.unbind", "role", role_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
     };
 }

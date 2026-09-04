@@ -198,7 +198,7 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "distribution.join", "distributor", 0, "手动开通分销", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已开通", .data = null });
+            try ctx.ok("null");
         }
 
         fn distribute(ctx: *http.Context) !void {
@@ -217,7 +217,7 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "distribution.distribute", "commission_record", 0, "订单分佣", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .count = count } });
+            try ctx.okValue(.{ .count = count });
         }
 
         fn withdraw(ctx: *http.Context) !void {
@@ -241,7 +241,7 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "distribution.withdraw", "commission_record", 0, "佣金提现", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "提现申请已提交", .data = null });
+            try ctx.ok("null");
         }
     };
 }

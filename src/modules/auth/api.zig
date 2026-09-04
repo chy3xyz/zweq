@@ -203,14 +203,10 @@ pub fn AuthApi(comptime Service: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "注册账号 {s}", .{req.email});
             self.audit.log(session.row.id, session.row.name, "auth.register", "user", session.row.id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tenant_id);
-            try ctx.jsonStruct(201, .{
-                .code = 0,
-                .msg = "注册成功",
-                .data = .{
+            try ctx.okValue(.{
                     .token = session.token,
                     .user = toDto(session.row),
-                },
-            });
+                });
         }
 
         fn login(ctx: *http.Context) !void {
@@ -242,21 +238,17 @@ pub fn AuthApi(comptime Service: type) type {
             var d4: [128]u8 = undefined;
             const det4 = try std.fmt.bufPrint(&d4, "登录成功: {s}", .{req.email});
             self.audit.log(session.row.id, session.row.name, "auth.login", "user", session.row.id, det4, zigmodu.http.RequestUtil.getRealIp(ctx), true, session.row.tenant_id);
-            try ctx.jsonStruct(200, .{
-                .code = 0,
-                .msg = "登录成功",
-                .data = .{
+            try ctx.okValue(.{
                     .token = session.token,
                     .user = toDto(session.row),
-                },
-            });
+                });
         }
 
         /// Stateless JWT: logout is a client-side token discard. Responds ok
         /// so the SPA can always complete the flow.
         fn logout(ctx: *http.Context) !void {
             _ = ctx.user_data;
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn me(ctx: *http.Context) !void {
@@ -296,7 +288,7 @@ pub fn AuthApi(comptime Service: type) type {
                 .updated_at = row.updated_at,
                 .permissions = perms,
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "", .data = me_dto });
+            try ctx.okValue(me_dto);
         }
 
         fn forgotPassword(ctx: *http.Context) !void {
@@ -322,7 +314,7 @@ pub fn AuthApi(comptime Service: type) type {
                 _ = self.task_svc.enqueue("mail.send", payload, 0, self.default_tenant_id) catch {};
             }
             // Always respond ok to avoid user enumeration.
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "若该邮箱已注册，重置链接已发送", .data = null });
+            try ctx.ok("null");
         }
 
         fn resetPassword(ctx: *http.Context) !void {
@@ -348,7 +340,7 @@ pub fn AuthApi(comptime Service: type) type {
                     return;
                 },
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "密码已重置，请重新登录", .data = null });
+            try ctx.ok("null");
         }
 
         /// Send an email-verification link to the authenticated user.
@@ -359,7 +351,7 @@ pub fn AuthApi(comptime Service: type) type {
                 return;
             };
             self.sendVerificationMail(ctx, uid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "验证邮件已发送", .data = null });
+            try ctx.ok("null");
         }
 
         fn verifyEmail(ctx: *http.Context) !void {
@@ -380,7 +372,7 @@ pub fn AuthApi(comptime Service: type) type {
                     return;
                 },
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "邮箱验证成功", .data = null });
+            try ctx.ok("null");
             _ = self.notify_svc.notify(req.user_id, "邮箱验证成功", "你的邮箱已通过验证。", "success") catch {};
         }
 
@@ -445,7 +437,7 @@ pub fn AuthApi(comptime Service: type) type {
                 return;
             };
             defer fresh.free(self.svc.store.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toDto(fresh) });
+            try ctx.okValue(toDto(fresh));
         }
 
         /// Self-service password change (requires the current password).
@@ -472,7 +464,7 @@ pub fn AuthApi(comptime Service: type) type {
                     return;
                 },
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "密码已更新", .data = null });
+            try ctx.ok("null");
             _ = self.notify_svc.notify(uid, "密码已修改", "你的登录密码已更新。", "info") catch {};
         }
 

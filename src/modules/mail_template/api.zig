@@ -91,7 +91,7 @@ pub fn MailTemplateApi(comptime TemplateServiceT: type, comptime UserService: ty
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
             };
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "模板已保存", .data = null });
+            try ctx.ok("null");
         }
     };
 }

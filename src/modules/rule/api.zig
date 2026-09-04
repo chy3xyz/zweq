@@ -176,7 +176,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "创建自动回复规则 {s} @ account {d}", .{ req.name, req.account_id });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.create", "rule", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "规则已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         fn getRule(ctx: *http.Context) !void {
@@ -196,7 +196,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer row.free(self.svc.allocator);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = toRuleDto(row) });
+            try ctx.okValue(toRuleDto(row));
         }
 
         fn updateRule(ctx: *http.Context) !void {
@@ -239,7 +239,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
             var d2: [128]u8 = undefined;
             const det2 = try std.fmt.bufPrint(&d2, "更新规则 #{d} → {s}", .{ id, status });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.update", "rule", id, det2, zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn deleteRule(ctx: *http.Context) !void {
@@ -256,7 +256,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.delete", "rule", id, "删除规则", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn listKeywords(ctx: *http.Context) !void {
@@ -284,7 +284,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                     .match_type = r.match_type,
                 };
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos } });
+            try ctx.okValue(.{ .items = dtos });
         }
 
         fn addKeyword(ctx: *http.Context) !void {
@@ -326,7 +326,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "规则 #{d} 加关键词 {s}", .{ rule_id, req.keyword });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.keyword", "rule", rule_id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "关键词已添加", .data = .{ .id = kid } });
+            try ctx.okValue(.{ .id = kid });
         }
 
         fn removeKeyword(ctx: *http.Context) !void {
@@ -343,7 +343,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.keyword.delete", "rule", kid, "删除关键词", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
 
         fn listReplies(ctx: *http.Context) !void {
@@ -375,7 +375,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                     .news_url = r.news_url,
                 };
             }
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .items = dtos } });
+            try ctx.okValue(.{ .items = dtos });
         }
 
         fn addReply(ctx: *http.Context) !void {
@@ -428,7 +428,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.reply", "rule", rule_id, "添加回复", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "回复已添加", .data = .{ .id = rid } });
+            try ctx.okValue(.{ .id = rid });
         }
 
         fn removeReply(ctx: *http.Context) !void {
@@ -445,7 +445,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.reply.delete", "rule", rid, "删除回复", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = null });
+            try ctx.ok("null");
         }
     };
 }

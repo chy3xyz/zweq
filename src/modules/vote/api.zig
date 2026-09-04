@@ -145,7 +145,7 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "创建投票 {s}", .{req.title});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "vote.create", "vote", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(201, .{ .code = 0, .msg = "已创建", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         /// 整体更新投票主题（account 作用域不变）。请求体同 `CreateVoteReq` 去 account_id。
@@ -184,7 +184,7 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
             var d1: [128]u8 = undefined;
             const det1 = try std.fmt.bufPrint(&d1, "更新投票 #{d}", .{id});
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "vote.update", "vote", id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已更新", .data = .{ .id = id } });
+            try ctx.okValue(.{ .id = id });
         }
 
         /// 删除投票及其全部投票记录。
@@ -208,7 +208,7 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
                 },
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "vote.delete", "vote", id, "删除投票", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已删除", .data = null });
+            try ctx.ok("null");
         }
 
         fn results(ctx: *http.Context) !void {
@@ -227,7 +227,7 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer ctx.allocator.free(tally);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "ok", .data = .{ .tally = tally } });
+            try ctx.okValue(.{ .tally = tally });
         }
 
         fn cast(ctx: *http.Context) !void {
@@ -256,7 +256,7 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "vote.cast", "vote", id, "手动投票", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.jsonStruct(200, .{ .code = 0, .msg = "已投票", .data = null });
+            try ctx.ok("null");
         }
     };
 }
