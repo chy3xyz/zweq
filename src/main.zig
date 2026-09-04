@@ -30,6 +30,7 @@ const catalog_permissions = @import("middleware/catalog_permissions.zig");
 const permission_seed = @import("modules/permission/seed.zig");
 const mail = @import("services/mail.zig");
 const cache_svc = @import("services/cache.zig");
+const services = @import("services/wire.zig");
 const jobs = @import("jobs.zig");
 const scheduled = @import("scheduled.zig");
 const user = @import("modules/user/root.zig");
@@ -211,128 +212,38 @@ pub fn main(init: std.process.Init) !void {
     var fan_store = member.persistence.FanStore.init(allocator, store_env.client);
     var member_svc = member.service.MemberService.init(allocator, io, &fan_store);
     var tag_store = member.persistence.TagStore.init(allocator, store_env.client);
-    member_svc.tag_store = &tag_store;
-    member_svc.account_svc = &account_svc;
     var message_store = message.persistence.MessageStore.init(allocator, store_env.client);
     var wechat_svc = message.service.WechatService.init(allocator, io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
     var app_module_store = appmod.persistence.ModuleStore.init(allocator, store_env.client);
     var module_svc = appmod.service.ModuleService.init(allocator, io, &app_module_store);
     try module_svc.seedBuiltins(default_tenant_id);
     std.log.info("[module] built-in modules seeded", .{});
-    // Wire the module registry into the callback engine so bound modules'
-    // receivers can be dispatched.
-    wechat_svc.module_svc = &module_svc;
-    // Wire the cache into the callback engine for nonce replay detection.
-    wechat_svc.cache = &cache;
     var payment_store = payment.persistence.PaymentStore.init(allocator, store_env.client);
     var payment_svc = payment.service.PaymentService.init(allocator, io, &payment_store);
     var cloud_store = cloud.persistence.CloudStore.init(allocator, store_env.client);
     var cloud_svc = cloud.service.CloudService.init(allocator, io, &cloud_store, &module_svc, cfg.cloud_remote_url);
-    // 注入原始 SQL 执行器（市场包 manifest 迁移 SQL 用）。
-    cloud_svc.setDriver(store_env.asDriver());
     // 动态表元数据存储（manifest tables 注册 + 通用查询网关）。
     var dyn_table_store = cloud.persistence.DynamicTableStore.init(allocator, store_env.client);
-    cloud_svc.setDynamicTableStore(&dyn_table_store);
-    // 站点授权码注入 + 启动即校验（远端模式 fail-closed + 宽限期）。
-    if (setting_svc.get(default_tenant_id, "cloud_license_key") catch null) |row| {
-        defer row.free(allocator);
-        try cloud_svc.setSiteLicenseKey(row.value);
-    }
-    if (setting_svc.get(default_tenant_id, "cloud_license_grace_days") catch null) |grow| {
-        defer grow.free(allocator);
-        cloud_svc.setGraceDays(std.fmt.parseInt(i64, grow.value, 10) catch 7);
-    }
-    cloud_svc.checkSiteLicense();
-    std.log.info("[cloud] license check: licensed={} (remote={s})", .{ cloud_svc.isLicensed(), cfg.cloud_remote_url });
     // Shared access_token cache（主动微信能力的地基：菜单 + 素材同步共用）.
     var token_cache = try zwechat.cache.Memory.create(allocator);
     defer allocator.destroy(token_cache);
     defer token_cache.deinit();
-    wechat_svc.token_cache = token_cache;
-    member_svc.token_cache = token_cache;
     var material_store = material.persistence.MaterialStore.init(allocator, store_env.client);
     var material_svc = material.service.MaterialService.init(allocator, io, &material_store, &account_svc, token_cache);
     var checkin_store = checkin.persistence.CheckinStore.init(allocator, store_env.client);
     var checkin_svc = checkin.service.CheckinService.init(allocator, io, &checkin_store);
-    var checkin_ctx = checkin.service.ReceiverCtx{
-        .module_svc = &module_svc,
-        .checkin_svc = &checkin_svc,
-        .io = io,
-    };
-    try wechat_svc.registerReceiver(.{
-        .module_name = "checkin",
-        .ctx = &checkin_ctx,
-        .handle = checkin.service.receiverHandle,
-    });
     var lucky_draw_store = lucky_draw.persistence.DrawStore.init(allocator, store_env.client);
     var lucky_draw_svc = lucky_draw.service.DrawService.init(allocator, io, &lucky_draw_store);
-    var lucky_draw_ctx = lucky_draw.service.ReceiverCtx{
-        .module_svc = &module_svc,
-        .draw_svc = &lucky_draw_svc,
-        .io = io,
-    };
-    try wechat_svc.registerReceiver(.{
-        .module_name = "lucky_draw",
-        .ctx = &lucky_draw_ctx,
-        .handle = lucky_draw.service.receiverHandle,
-    });
     var coupon_store = coupon.persistence.CouponStore.init(allocator, store_env.client);
     var coupon_svc = coupon.service.CouponService.init(allocator, io, &coupon_store);
-    var coupon_ctx = coupon.service.ReceiverCtx{
-        .module_svc = &module_svc,
-        .coupon_svc = &coupon_svc,
-        .io = io,
-    };
-    try wechat_svc.registerReceiver(.{
-        .module_name = "coupon",
-        .ctx = &coupon_ctx,
-        .handle = coupon.service.receiverHandle,
-    });
     var vote_store = vote.persistence.VoteStore.init(allocator, store_env.client);
     var vote_svc = vote.service.VoteService.init(allocator, io, &vote_store);
-    var vote_ctx = vote.service.ReceiverCtx{
-        .module_svc = &module_svc,
-        .vote_svc = &vote_svc,
-        .io = io,
-    };
-    try wechat_svc.registerReceiver(.{
-        .module_name = "vote",
-        .ctx = &vote_ctx,
-        .handle = vote.service.receiverHandle,
-    });
     var seckill_store = seckill.persistence.SeckillStore.init(allocator, store_env.client);
     var seckill_svc = seckill.service.SeckillService.init(allocator, io, &seckill_store);
-    var seckill_ctx = seckill.service.ReceiverCtx{
-        .io = io,
-        .seckill_svc = &seckill_svc,
-    };
-    try wechat_svc.registerReceiver(.{
-        .module_name = "seckill",
-        .ctx = &seckill_ctx,
-        .handle = seckill.service.receiverHandle,
-    });
     var member_card_store = member_card.persistence.MemberCardStore.init(allocator, store_env.client);
     var member_card_svc = member_card.service.MemberCardService.init(allocator, io, &member_card_store);
-    var member_card_ctx = member_card.service.ReceiverCtx{
-        .io = io,
-        .member_svc = &member_card_svc,
-    };
-    try wechat_svc.registerReceiver(.{
-        .module_name = "member_card",
-        .ctx = &member_card_ctx,
-        .handle = member_card.service.receiverHandle,
-    });
     var distribution_store = distribution.persistence.DistributionStore.init(allocator, store_env.client);
     var distribution_svc = distribution.service.DistributionService.init(allocator, io, &distribution_store);
-    var distribution_ctx = distribution.service.ReceiverCtx{
-        .io = io,
-        .dist_svc = &distribution_svc,
-    };
-    try wechat_svc.registerReceiver(.{
-        .module_name = "distribution",
-        .ctx = &distribution_ctx,
-        .handle = distribution.service.receiverHandle,
-    });
     var menu_store = menu.persistence.MenuStore.init(allocator, store_env.client);
     var menu_svc = menu.service.MenuService.init(allocator, io, &menu_store, &account_svc, token_cache);
     var points_store = points.persistence.PointsStore.init(allocator, store_env.client);
@@ -357,8 +268,49 @@ pub fn main(init: std.process.Init) !void {
         .notify_svc = &notify_svc,
     });
     defer ai_svc.deinit();
-    // Wire the AI assistant into the WeChat callback engine (AI auto-reply).
-    wechat_svc.ai_svc = &ai_svc;
+
+    // ── Post-init wiring: pointer fields, setters, license injection and the
+    // WeChat module receiver registrations are done in services.WireServices.
+    // The ReceiverCtx storage lives here because the callback engine retains
+    // those addresses for the process lifetime; the helper fills them in.
+    var checkin_ctx: checkin.service.ReceiverCtx = undefined;
+    var lucky_draw_ctx: lucky_draw.service.ReceiverCtx = undefined;
+    var coupon_ctx: coupon.service.ReceiverCtx = undefined;
+    var vote_ctx: vote.service.ReceiverCtx = undefined;
+    var seckill_ctx: seckill.service.ReceiverCtx = undefined;
+    var member_card_ctx: member_card.service.ReceiverCtx = undefined;
+    var distribution_ctx: distribution.service.ReceiverCtx = undefined;
+    try services.WireServices(io, .{
+        .allocator = allocator,
+        .default_tenant_id = default_tenant_id,
+        .account_svc = &account_svc,
+        .member_svc = &member_svc,
+        .tag_store = &tag_store,
+        .setting_svc = &setting_svc,
+        .module_svc = &module_svc,
+        .cache = &cache,
+        .token_cache = token_cache,
+        .cloud_svc = &cloud_svc,
+        .driver = store_env.asDriver(),
+        .dyn_table_store = &dyn_table_store,
+        .wechat_svc = &wechat_svc,
+        .ai_svc = &ai_svc,
+        .checkin_svc = &checkin_svc,
+        .checkin_ctx = &checkin_ctx,
+        .lucky_draw_svc = &lucky_draw_svc,
+        .lucky_draw_ctx = &lucky_draw_ctx,
+        .coupon_svc = &coupon_svc,
+        .coupon_ctx = &coupon_ctx,
+        .vote_svc = &vote_svc,
+        .vote_ctx = &vote_ctx,
+        .seckill_svc = &seckill_svc,
+        .seckill_ctx = &seckill_ctx,
+        .member_card_svc = &member_card_svc,
+        .member_card_ctx = &member_card_ctx,
+        .distribution_svc = &distribution_svc,
+        .distribution_ctx = &distribution_ctx,
+    });
+    std.log.info("[cloud] license check: licensed={} (remote={s})", .{ cloud_svc.isLicensed(), cfg.cloud_remote_url });
 
     // ── ZigModu module lifecycle (Application API: scan + validate + start/stop) ──
     var app = try zigmodu.Application.init(io, allocator, "zweq", .{
