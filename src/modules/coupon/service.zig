@@ -83,30 +83,13 @@ pub const CouponService = struct {
         _ = self.store.update(id, title, amount, min_amount, total, @max(1, per_user), start_at, end_at, status, self.now()) catch return error.Unexpected;
     }
 
-    /// 领券：库存 + 每人限领 + 有效期校验，通过后生成券码落库。返回券码（caller free）。
+    /// 领券：事务化 count-issued + count-per-user + insert，杜绝并发越过 total 上限。
+    /// `code` 由 service 在事务外生成（urandom，与 DB 无关），事务失败时 errdefer 释放。
     pub fn claimCoupon(self: *CouponService, allocator: std.mem.Allocator, tenant_id: i64, account_id: i64, openid: []const u8, coupon_id: i64) CouponError![]u8 {
-        const c_opt = self.store.getCoupon(coupon_id) catch return error.Unexpected;
-        const c = c_opt orelse return error.NotFound;
-        defer c.free(self.allocator);
-
         const now_secs = self.now();
-        // 下架券不可领取：管理端下架后，C 端列表与领取入口都必须挡住。
-        if (c.status != 1) return error.Expired;
-        if (c.start_at > 0 and now_secs < c.start_at) return error.NotStarted;
-        if (c.end_at > 0 and now_secs > c.end_at) return error.Expired;
-
-        // 库存检查（total=0 不限量）。
-        if (c.total > 0) {
-            const issued = self.store.countIssued(coupon_id) catch return error.Unexpected;
-            if (issued >= c.total) return error.OutOfStock;
-        }
-        // 每人限领。
-        const held = self.store.countUserCoupons(tenant_id, coupon_id, openid) catch return error.Unexpected;
-        if (held >= c.per_user) return error.LimitReached;
-
         const code = self.genCode(allocator) catch return error.Unexpected;
         errdefer allocator.free(code);
-        _ = self.store.createUserCoupon(tenant_id, account_id, openid, coupon_id, code, now_secs) catch return error.Unexpected;
+        self.store.claimAtomic(tenant_id, account_id, openid, coupon_id, code, now_secs) catch |err| return err;
         return code;
     }
 
