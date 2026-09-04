@@ -72,7 +72,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn authUser(ctx: *http.Context, self: *Self) !?struct { id: i64, admin: bool } {
-            const uid = mw.authUserId(ctx) orelse {
+            const uid = ctx.userIdInt(i64) orelse {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return null;
             };

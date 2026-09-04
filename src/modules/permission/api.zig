@@ -134,7 +134,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.user_svc.store.allocator);
@@ -164,7 +164,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         fn createRole(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(CreateRoleReq) catch {
@@ -195,7 +195,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         fn updateRole(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的角色 ID");
@@ -241,7 +241,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         fn deleteRole(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的角色 ID");
@@ -279,7 +279,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         fn grantPermission(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(GrantPermissionReq) catch {
@@ -303,7 +303,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         fn revokePermission(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的权限 ID");
@@ -340,7 +340,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         fn assignUserRole(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const user_id = ctx.paramInt(i64, "id") catch {
@@ -384,7 +384,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         fn bindRolePermission(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const role_id = ctx.paramInt(i64, "id") catch {
@@ -408,7 +408,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
         fn unbindRolePermission(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const role_id = ctx.paramInt(i64, "id") catch {

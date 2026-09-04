@@ -69,7 +69,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.user_svc.store.allocator);
@@ -126,7 +126,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
         fn retry(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;
@@ -144,7 +144,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
         fn cancel(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;
@@ -162,7 +162,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
         fn purge(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             _ = self.svc.purge() catch |err| {
                 try ctx.sendErrorResponse(500, 500, @errorName(err));
                 return;
@@ -175,7 +175,7 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
         fn delete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;

@@ -131,7 +131,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
 
         /// Sets the `audit_actor` context attribute from the authenticated user.
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.user_svc.store.allocator);
@@ -169,7 +169,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         fn createNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(CreateNewsReq) catch {
@@ -221,7 +221,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         fn updateNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的素材 ID");
                 return;
@@ -261,7 +261,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         fn deleteNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的素材 ID");
                 return;
@@ -295,7 +295,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         fn createFile(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(CreateFileReq) catch {
@@ -324,7 +324,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         fn deleteFile(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的素材 ID");
                 return;
@@ -340,7 +340,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         fn syncNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
             const account_id = parseAccount(ctx) orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");
@@ -362,7 +362,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         fn syncFiles(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
             const account_id = parseAccount(ctx) orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");
@@ -408,7 +408,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
         fn uploadNews(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(UploadNewsReq) catch {

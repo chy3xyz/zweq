@@ -456,7 +456,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn adminShip(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的订单 ID");
                 return;
@@ -614,7 +614,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn adminRefundAudit(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的退款 ID");
                 return;
@@ -693,7 +693,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn orderPickup(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的订单 ID");
                 return;

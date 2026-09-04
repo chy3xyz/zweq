@@ -96,7 +96,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn outletCreate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = ApiT.tenantScope(ctx, self);
             const req = ctx.bindJson(OutletReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -118,7 +118,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn outletDelete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的门店 ID");
                 return;
@@ -166,7 +166,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn articleCreate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = ApiT.tenantScope(ctx, self);
             const req = ctx.bindJson(ArticleReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -187,7 +187,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn articleDelete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的文章 ID");
                 return;
@@ -237,7 +237,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn webhookCreate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = ApiT.tenantScope(ctx, self);
             const req = ctx.bindJson(WebhookReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -275,7 +275,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn webhookDelete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的 Webhook ID");
                 return;

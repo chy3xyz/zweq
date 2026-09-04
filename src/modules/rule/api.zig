@@ -119,7 +119,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.user_svc.store.allocator);
@@ -157,7 +157,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         fn createRule(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(CreateRuleReq) catch {
@@ -202,7 +202,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         fn updateRule(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
@@ -245,7 +245,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         fn deleteRule(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
@@ -290,7 +290,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         fn addKeyword(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const rule_id = ctx.paramInt(i64, "id") catch {
@@ -332,7 +332,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         fn removeKeyword(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const kid = ctx.paramInt(i64, "kid") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的关键词 ID");
@@ -381,7 +381,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         fn addReply(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const rule_id = ctx.paramInt(i64, "id") catch {
@@ -434,7 +434,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
         fn removeReply(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const rid = ctx.paramInt(i64, "rid") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的回复 ID");

@@ -115,7 +115,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.user_svc.store.allocator);
@@ -123,7 +123,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
+            const uid = ctx.userIdInt(i64) orelse {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return null;
             };
@@ -169,7 +169,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
         fn setStatus(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的活动 ID");
@@ -201,7 +201,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
         fn create(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(CreateActivityReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -245,7 +245,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
         fn update(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的活动 ID");
@@ -280,7 +280,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
         fn delete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的活动 ID");
@@ -327,7 +327,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
         fn rush(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的活动 ID");

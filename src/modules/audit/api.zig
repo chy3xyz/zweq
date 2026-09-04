@@ -62,7 +62,7 @@ pub fn AuditApi(comptime AuditServiceT: type, comptime UserService: type) type {
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.user_svc.store.allocator);
@@ -100,7 +100,7 @@ pub fn AuditApi(comptime AuditServiceT: type, comptime UserService: type) type {
         fn listLogs(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             _ = admin_id;
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 200 });

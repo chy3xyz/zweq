@@ -57,7 +57,7 @@ pub fn CheckinApi(comptime Service: type, comptime UserService: type) type {
 
         /// Sets the `audit_actor` context attribute from the authenticated user.
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.user_svc.store.allocator);

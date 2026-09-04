@@ -77,7 +77,7 @@ pub fn SystemApi(comptime CacheT: type, comptime TaskSvcT: type) type {
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.users_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.users_svc.store.allocator);

@@ -261,7 +261,7 @@ pub fn AuthApi(comptime Service: type) type {
 
         fn me(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const uid = mw.authUserId(ctx) orelse {
+            const uid = ctx.userIdInt(i64) orelse {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
@@ -354,7 +354,7 @@ pub fn AuthApi(comptime Service: type) type {
         /// Send an email-verification link to the authenticated user.
         fn sendVerification(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const uid = mw.authUserId(ctx) orelse {
+            const uid = ctx.userIdInt(i64) orelse {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
@@ -388,7 +388,7 @@ pub fn AuthApi(comptime Service: type) type {
         /// same validation path as the admin user API.
         fn updateProfile(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const uid = mw.authUserId(ctx) orelse {
+            const uid = ctx.userIdInt(i64) orelse {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
@@ -451,7 +451,7 @@ pub fn AuthApi(comptime Service: type) type {
         /// Self-service password change (requires the current password).
         fn changePassword(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const uid = mw.authUserId(ctx) orelse {
+            const uid = ctx.userIdInt(i64) orelse {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };

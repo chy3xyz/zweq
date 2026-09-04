@@ -132,7 +132,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
 
         /// Sets the `audit_actor` context attribute from the authenticated user.
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.user_svc.store.allocator);
@@ -146,7 +146,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
         fn generateLicense(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(GenerateLicenseReq) catch {
@@ -186,7 +186,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
         fn revokeLicense(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的授权码 ID");
@@ -240,7 +240,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
         fn publishPackage(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(PublishPackageReq) catch {
@@ -268,7 +268,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
         fn installPackage(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const name = ctx.param("name") orelse {
@@ -299,7 +299,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
         fn remoteVerify(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const req = ctx.bindJson(RemoteVerifyReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -327,7 +327,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
         fn remoteSyncMarket(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             if (!self.svc.isRemote()) {

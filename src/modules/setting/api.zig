@@ -63,7 +63,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
 
         /// Authenticated user id (any role).
         fn requireAuth(ctx: *http.Context) !?i64 {
-            const uid = mw.authUserId(ctx) orelse {
+            const uid = ctx.userIdInt(i64) orelse {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return null;
             };
@@ -71,7 +71,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.user_svc.store.allocator);
@@ -122,7 +122,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
         fn set(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const key = ctx.param("key") orelse {
@@ -151,7 +151,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
         fn delete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const key = ctx.param("key") orelse {

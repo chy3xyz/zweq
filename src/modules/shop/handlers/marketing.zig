@@ -119,7 +119,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn planCreate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = ApiT.tenantScope(ctx, self);
             const req = ctx.bindJson(PlanReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -137,7 +137,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn planDelete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的套餐 ID");
                 return;
@@ -169,7 +169,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn grouponCreate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = ApiT.tenantScope(ctx, self);
             const req = ctx.bindJson(GrouponReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -278,7 +278,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn inviteGiftCreate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = ApiT.tenantScope(ctx, self);
             const req = ctx.bindJson(InviteGiftReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -296,7 +296,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn inviteGiftDelete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的奖励 ID");
                 return;

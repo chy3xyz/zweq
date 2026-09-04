@@ -111,7 +111,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.svc.allocator);
@@ -137,7 +137,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
         fn register(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const req = ctx.bindJson(RegisterModuleReq) catch {
@@ -163,7 +163,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
         fn update(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const id = ctx.paramInt(i64, "id") catch {
@@ -226,7 +226,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
         fn bind(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const account_id = ctx.paramInt(i64, "id") catch {
@@ -255,7 +255,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
         fn unbind(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const account_id = ctx.paramInt(i64, "id") catch {
@@ -298,7 +298,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
         fn setConfig(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
             const account_id = ctx.paramInt(i64, "id") catch {

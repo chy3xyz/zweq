@@ -136,7 +136,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn createCategory(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = ApiT.tenantScope(ctx, self);
             const req = ctx.bindJson(CreateCategoryReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -154,7 +154,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn deleteCategory(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的分类 ID");
                 return;
@@ -170,7 +170,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn createProduct(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = ApiT.tenantScope(ctx, self);
             const req = ctx.bindJson(ProductReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -209,7 +209,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn updateProduct(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = ApiT.tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的商品 ID");
@@ -252,7 +252,7 @@ pub fn Mixin(comptime ApiT: type) type {
         pub fn deleteProduct(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try ApiT.setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的商品 ID");
                 return;

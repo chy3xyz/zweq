@@ -196,8 +196,7 @@ test "session revocation: token_version bump invalidates old JWTs" {
 
     const Whoami = struct {
         fn h(ctx: *zigmodu.http.Context) !void {
-            const mw_mod = @import("../middleware/auth.zig");
-            const uid_ = mw_mod.authUserId(ctx) orelse {
+            const uid_ = ctx.userIdInt(i64) orelse {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };

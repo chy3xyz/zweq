@@ -43,7 +43,7 @@ pub fn AppBffApi(comptime AccountService: type, comptime ModuleService: type, co
         }
 
         fn requireAuth(ctx: *http.Context) ?i64 {
-            return mw.authUserId(ctx);
+            return ctx.userIdInt(i64);
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {

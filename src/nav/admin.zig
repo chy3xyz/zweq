@@ -95,7 +95,7 @@ pub fn handleAdminNav(
     default_tenant_id: i64,
     users: *user_svc.UserService,
 ) !void {
-    const uid = mw.authUserId(ctx) orelse {
+    const uid = ctx.userIdInt(i64) orelse {
         try ctx.sendErrorResponse(401, 401, "未登录");
         return;
     };

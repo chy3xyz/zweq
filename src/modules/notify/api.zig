@@ -50,7 +50,7 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
         }
 
         fn authUserId(ctx: *http.Context) ?i64 {
-            return mw.authUserId(ctx);
+            return ctx.userIdInt(i64);
         }
 
         fn list(ctx: *http.Context) !void {

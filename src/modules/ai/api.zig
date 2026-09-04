@@ -190,7 +190,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
         }
 
         fn authUid(ctx: *http.Context) ?i64 {
-            return mw.authUserId(ctx);
+            return ctx.userIdInt(i64);
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {

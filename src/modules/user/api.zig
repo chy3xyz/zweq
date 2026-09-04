@@ -89,7 +89,7 @@ pub fn UserApi(comptime Service: type) type {
         /// Sets the `audit_actor` context attribute from the authenticated user.
         /// Call after the route-level permission gate has verified admin access.
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
-            const uid = mw.authUserId(ctx) orelse return;
+            const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.svc.getUserById(uid) catch return;
             const row = row_opt orelse return;
             defer row.free(self.svc.store.allocator);
@@ -170,7 +170,7 @@ pub fn UserApi(comptime Service: type) type {
         fn createUser(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const req = ctx.bindJson(CreateUserReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -205,7 +205,7 @@ pub fn UserApi(comptime Service: type) type {
         fn updateUser(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的用户 ID");
@@ -283,7 +283,7 @@ pub fn UserApi(comptime Service: type) type {
         fn revokeSessions(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的用户 ID");
@@ -311,7 +311,7 @@ pub fn UserApi(comptime Service: type) type {
         fn deleteUser(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const admin_id = mw.authUserId(ctx) orelse return;
+            const admin_id = ctx.userIdInt(i64) orelse return;
 
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的用户 ID");

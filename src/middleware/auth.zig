@@ -15,12 +15,6 @@ const user_persist = @import("../modules/user/persistence.zig");
 pub const user_id_attr = "user_id";
 pub const tenant_id_attr = "tenant_id";
 
-/// The authenticated user id, or null when the JWT middleware did not run.
-pub fn authUserId(ctx: *http.Context) ?i64 {
-    const id_str = ctx.getAttr(user_id_attr) orelse return null;
-    return std.fmt.parseInt(i64, id_str, 10) catch null;
-}
-
 /// The authenticated user's tenant id (from the JWT `aud` claim), or null
 /// when the token predates tenant support.
 pub fn authTenantId(ctx: *http.Context) ?i64 {
@@ -41,7 +35,7 @@ pub fn tokenVersionGuard(sec: *zigmodu.security.AppSecurity, user_store: *user_p
         .func = struct {
             fn mw(ctx: *http.Context, next: http.HandlerFn, _: ?*anyopaque) anyerror!void {
                 // Catalog-aware: public routes have no user_id; skip the version check.
-                const uid = authUserId(ctx) orelse {
+                const uid = ctx.userIdInt(i64) orelse {
                     try next(ctx);
                     return;
                 };
@@ -84,7 +78,7 @@ pub fn adminGuard(user_store: *user_persist.UserStore) http.Middleware {
     return .{
         .func = struct {
             fn mw(ctx: *http.Context, next: http.HandlerFn, _: ?*anyopaque) anyerror!void {
-                const uid = authUserId(ctx) orelse {
+                const uid = ctx.userIdInt(i64) orelse {
                     // 公开路由没有 user_id,跳过管理员校验。
                     try next(ctx);
                     return;
