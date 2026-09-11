@@ -73,11 +73,23 @@ pub const VoteStore = struct {
         return row.id;
     }
 
-    pub fn getVote(self: *VoteStore, id: i64) !?VoteRow {
+    /// 按 id 取单条（tenant 过滤）。tenant 来源：service.vote/tally 等业务路径
+    /// 上游传入；无 tenant 的只读调用链先经 `getTenantId` 探测再走本方法。
+    pub fn getVote(self: *VoteStore, tenant_id: i64, id: i64) !?VoteRow {
+        const preds = self.client.vote.predicates;
+        var entity = (try crud.first(self.client.vote, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id })})) orelse return null;
+        defer zent.codegen.deinitEntity(infos, VoteInfo, &entity, self.allocator);
+        return try self.dup(entity);
+    }
+
+    /// 按 id 探测归属 tenant_id（不返回行内容）。供调用链未携带 tenant 的
+    /// 只读路径（BFF 详情/计票、测试）先探测、再走 tenant 过滤查询；
+    /// 理想方案是上游 handler 传 tenant 后删除本方法。
+    pub fn getTenantId(self: *VoteStore, id: i64) !?i64 {
         const preds = self.client.vote.predicates;
         var entity = (try crud.first(self.client.vote, .{preds.idEQ(.{ .int = id })})) orelse return null;
         defer zent.codegen.deinitEntity(infos, VoteInfo, &entity, self.allocator);
-        return try self.dup(entity);
+        return entity.tenant_id;
     }
 
     /// 按 id 取单条（tenant 过滤），供 service 校验存在性与管理端更新/删除。
@@ -159,6 +171,9 @@ pub const VoteStore = struct {
         return count > 0;
     }
 
+    /// 插入投票记录。当前表上无 (vote_id, openid) 唯一索引，重复插入不会
+    /// 触发冲突；一旦后续在 model.zig 补 `.indexes` 唯一索引，zent 会把冲突
+    /// 冒泡为 `error.UniqueViolation`，service 层据此映射 error.AlreadyVoted。
     pub fn createRecord(self: *VoteStore, tenant_id: i64, account_id: i64, openid: []const u8, vote_id: i64, option_index: i64, now: i64) !i64 {
         var row = try crud.create(self.client.vote_record, .{
             .tenant_id = tenant_id,
@@ -180,22 +195,24 @@ pub const VoteStore = struct {
     }
 
     /// 计票：某投票各选项的票数（返回 []i64，长度 = 选项数）。
-    pub fn tally(self: *VoteStore, allocator: std.mem.Allocator, vote_id: i64, option_count: usize) ![]i64 {
+    /// SQL 聚合（GROUP BY option_index）而非全行扫回 Zig 计数；
+    /// option_index 越界/为负的脏数据跳过，与旧行为一致。
+    pub fn tally(self: *VoteStore, allocator: std.mem.Allocator, tenant_id: i64, vote_id: i64, option_count: usize) ![]i64 {
         var out = try allocator.alloc(i64, option_count);
         errdefer allocator.free(out);
         @memset(out, 0);
         var q = self.client.vote_record.Query();
         defer q.deinit();
         const preds = self.client.vote_record.predicates;
+        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.vote_idEQ(.{ .int = vote_id })});
-        var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, VoteRecordInfo, e, self.allocator);
-            rows.deinit();
-        }
-        for (rows.items) |e| {
-            const idx: usize = @intCast(e.option_index);
-            if (idx < option_count) out[idx] += 1;
+        var metrics = try q.AggregateBy("COUNT(*)", "option_index");
+        defer @TypeOf(q).freeGroupMetrics(&metrics);
+        for (metrics.items) |m| {
+            if (m.key != .int or m.key.int < 0) continue;
+            if (m.value != .int) continue;
+            const idx: usize = @intCast(m.key.int);
+            if (idx < option_count) out[idx] = m.value.int;
         }
         return out;
     }

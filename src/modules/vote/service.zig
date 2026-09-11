@@ -43,8 +43,12 @@ pub const VoteService = struct {
         return self.store.listVotes(page, page_size, tenant_id, account_id) catch error.Unexpected;
     }
 
+    /// 按 id 取单条。tenant 来源：调用链（BFF voteDetail、测试）未传 tenant，
+    /// 先经 `getTenantId` 探测归属 tenant 再走 tenant 过滤查询（行为与旧版一致）。
     pub fn getVote(self: *VoteService, id: i64) VoteError!?VoteRow {
-        return self.store.getVote(id) catch error.Unexpected;
+        const tid = self.store.getTenantId(id) catch return error.Unexpected;
+        const t = tid orelse return null;
+        return self.store.getVote(t, id) catch error.Unexpected;
     }
 
     /// 按 id 取单条（tenant 过滤）——管理端更新/删除先经此校验存在性
@@ -78,8 +82,12 @@ pub const VoteService = struct {
     }
 
     /// 投票：防重 + 选项合法性 + 截止校验。
+    /// tenant 来源：本函数参数（上游 api/BFF/receiver 均传入各自 tenant）。
+    /// 防重为「先查后插」：vote_record 表当前无 (vote_id, openid) 唯一索引，
+    /// 并发窗口内仍可能双投；一旦补唯一索引，create 冲突（UniqueViolation）
+    /// 在此映射为 AlreadyVoted，先查后插保留作减少冲突的快速路径。
     pub fn vote(self: *VoteService, tenant_id: i64, account_id: i64, openid: []const u8, vote_id: i64, option_index: i64) VoteError!void {
-        const v_opt = self.store.getVote(vote_id) catch return error.Unexpected;
+        const v_opt = self.store.getVote(tenant_id, vote_id) catch return error.Unexpected;
         const v = v_opt orelse return error.NotFound;
         defer v.free(self.allocator);
 
@@ -89,17 +97,24 @@ pub const VoteService = struct {
         if (v.end_at > 0 and self.now() > v.end_at) return error.Ended;
 
         if (self.store.findRecord(tenant_id, vote_id, openid) catch return error.Unexpected) return error.AlreadyVoted;
-        _ = self.store.createRecord(tenant_id, account_id, openid, vote_id, option_index, self.now()) catch return error.Unexpected;
+        _ = self.store.createRecord(tenant_id, account_id, openid, vote_id, option_index, self.now()) catch |err| switch (err) {
+            error.UniqueViolation => return error.AlreadyVoted,
+            else => return error.Unexpected,
+        };
     }
 
     /// 计票：各选项票数（caller free）。
+    /// tenant 来源：调用链（api results、BFF voteDetail、测试）未传 tenant，
+    /// 先经 `getTenantId` 探测归属 tenant，再走 tenant 过滤查询（行为与旧版一致）。
     pub fn tally(self: *VoteService, allocator: std.mem.Allocator, vote_id: i64) VoteError![]i64 {
-        const v_opt = self.store.getVote(vote_id) catch return error.Unexpected;
+        const tid = self.store.getTenantId(vote_id) catch return error.Unexpected;
+        const t = tid orelse return error.NotFound;
+        const v_opt = self.store.getVote(t, vote_id) catch return error.Unexpected;
         const v = v_opt orelse return error.NotFound;
         defer v.free(self.allocator);
         const options = self.parseOptions(self.allocator, v.options_json);
         defer freeOptions(self.allocator, options);
-        return self.store.tally(allocator, vote_id, options.len) catch error.Unexpected;
+        return self.store.tally(allocator, t, vote_id, options.len) catch error.Unexpected;
     }
 
     /// 解析选项 JSON 数组（caller freeOptions）。
