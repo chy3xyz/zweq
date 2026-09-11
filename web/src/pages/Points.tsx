@@ -72,8 +72,14 @@ function Points() {
   const [adjustDelta, setAdjustDelta] = createSignal(0);
   const [redeemTarget, setRedeemTarget] = createSignal<PointsProduct | null>(null);
   const [redeemOpenid, setRedeemOpenid] = createSignal('');
-  const [submitting, setSubmitting] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
+
+  // 三个弹窗各自独立的提交状态，避免 A 弹窗报错后打开 B 弹窗时串显上次的错误。
+  const [formSubmitting, setFormSubmitting] = createSignal(false);
+  const [formError, setFormError] = createSignal<string | null>(null);
+  const [redeemSubmitting, setRedeemSubmitting] = createSignal(false);
+  const [redeemError, setRedeemError] = createSignal<string | null>(null);
+  const [adjustSubmitting, setAdjustSubmitting] = createSignal(false);
+  const [adjustError, setAdjustError] = createSignal<string | null>(null);
 
   const paged = usePaged<PointsProduct>(
     (page, pageSize) =>
@@ -101,13 +107,13 @@ function Points() {
   );
 
   const openCreate = () => {
-    setError(null);
+    setFormError(null);
     setForm({ ...EMPTY_FORM });
     setFormOpen(true);
   };
 
   const openEdit = (row: PointsProduct) => {
-    setError(null);
+    setFormError(null);
     setForm({
       id: row.id,
       name: row.name,
@@ -121,9 +127,9 @@ function Points() {
   };
 
   const onSubmit = async () => {
-    if (submitting()) return;
-    setSubmitting(true);
-    setError(null);
+    if (formSubmitting()) return;
+    setFormSubmitting(true);
+    setFormError(null);
     try {
       const current = form();
       const body = {
@@ -143,17 +149,17 @@ function Points() {
       feedback.toast(current.id == null ? '商品已创建' : '商品已更新');
       void paged.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '保存失败，请稍后重试');
+      setFormError(err instanceof Error ? err.message : '保存失败，请稍后重试');
     } finally {
-      setSubmitting(false);
+      setFormSubmitting(false);
     }
   };
 
   const onRedeem = async () => {
     const target = redeemTarget();
-    if (submitting() || !target) return;
-    setSubmitting(true);
-    setError(null);
+    if (redeemSubmitting() || !target) return;
+    setRedeemSubmitting(true);
+    setRedeemError(null);
     try {
       await redeemPoints(accountId(), { openid: redeemOpenid().trim(), product_id: target.id });
       setRedeemTarget(null);
@@ -161,16 +167,16 @@ function Points() {
       feedback.toast('兑换成功');
       void Promise.all([paged.refresh(), orders.reload()]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '兑换失败，请稍后重试');
+      setRedeemError(err instanceof Error ? err.message : '兑换失败，请稍后重试');
     } finally {
-      setSubmitting(false);
+      setRedeemSubmitting(false);
     }
   };
 
   const onAdjust = async () => {
-    if (submitting()) return;
-    setSubmitting(true);
-    setError(null);
+    if (adjustSubmitting()) return;
+    setAdjustSubmitting(true);
+    setAdjustError(null);
     try {
       await adjustPoints(accountId(), { openid: adjustOpenid().trim(), delta: adjustDelta() });
       setAdjustOpen(false);
@@ -179,9 +185,9 @@ function Points() {
       feedback.toast('积分已调整');
       void orders.reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '调整失败，请稍后重试');
+      setAdjustError(err instanceof Error ? err.message : '调整失败，请稍后重试');
     } finally {
-      setSubmitting(false);
+      setAdjustSubmitting(false);
     }
   };
 
@@ -343,7 +349,7 @@ function Points() {
                   class="btn btn-ghost btn-xs text-primary"
                   disabled={row.stock <= 0}
                   onClick={() => {
-                    setError(null);
+                    setRedeemError(null);
                     setRedeemOpenid('');
                     setRedeemTarget(row);
                   }}
@@ -371,7 +377,7 @@ function Points() {
               class="btn btn-outline btn-sm"
               disabled={!ready()}
               onClick={() => {
-                setError(null);
+                setAdjustError(null);
                 setAdjustOpen(true);
               }}
             >
@@ -404,8 +410,8 @@ function Points() {
         title={form().id == null ? '新增积分商品' : '编辑积分商品'}
         onSubmit={onSubmit}
         onClose={() => setFormOpen(false)}
-        submitting={submitting()}
-        error={error()}
+        submitting={formSubmitting()}
+        error={formError()}
       >
         <FormField label="商品名称" required>
           <input
@@ -500,21 +506,20 @@ function Points() {
         description={redeemTarget() ? `使用 ${redeemTarget()!.points} 积分兑换「${redeemTarget()!.name}」` : undefined}
         onSubmit={onRedeem}
         onClose={() => setRedeemTarget(null)}
-        submitting={submitting()}
-        error={error()}
+        submitting={redeemSubmitting()}
+        error={redeemError()}
         submitLabel="确认兑换"
         size="sm"
       >
-        <label class="form-control">
-          <span class="label-text mb-1">粉丝 openid</span>
+        <FormField label="粉丝 openid" required>
           <input
-            class="input input-bordered input-sm"
+            class="input input-bordered input-sm w-full"
             placeholder="输入粉丝 openid"
             value={redeemOpenid()}
             onInput={(e) => setRedeemOpenid(e.currentTarget.value)}
             required
           />
-        </label>
+        </FormField>
       </FormModal>
 
       <FormModal
@@ -523,30 +528,28 @@ function Points() {
         description="正数为增加，负数为扣减"
         onSubmit={onAdjust}
         onClose={() => setAdjustOpen(false)}
-        submitting={submitting()}
-        error={error()}
+        submitting={adjustSubmitting()}
+        error={adjustError()}
         submitLabel="调整"
         size="sm"
       >
-        <label class="form-control">
-          <span class="label-text mb-1">粉丝 openid</span>
+        <FormField label="粉丝 openid" required>
           <input
-            class="input input-bordered input-sm"
+            class="input input-bordered input-sm w-full"
             value={adjustOpenid()}
             onInput={(e) => setAdjustOpenid(e.currentTarget.value)}
             required
           />
-        </label>
-        <label class="form-control">
-          <span class="label-text mb-1">积分增减</span>
+        </FormField>
+        <FormField label="积分增减" required>
           <input
-            class="input input-bordered input-sm"
+            class="input input-bordered input-sm w-full"
             type="number"
             value={adjustDelta()}
             onInput={(e) => setAdjustDelta(Number(e.currentTarget.value) || 0)}
             required
           />
-        </label>
+        </FormField>
       </FormModal>
     </div>
   );
