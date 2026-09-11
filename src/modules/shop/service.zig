@@ -205,13 +205,13 @@ pub const ShopService = struct {
         return self.store.trade.listCarts(tenant_id, openid) catch error.Unexpected;
     }
 
-    pub fn updateCart(self: *ShopService, id: i64, quantity: i64) ShopError!void {
+    pub fn updateCart(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64, quantity: i64) ShopError!void {
         if (quantity <= 0) return error.InvalidInput;
-        _ = self.store.trade.updateCartQuantity(id, quantity) catch return error.Unexpected;
+        if (!(self.store.trade.updateCartQuantity(tenant_id, openid, id, quantity) catch return error.Unexpected)) return error.NotFound;
     }
 
-    pub fn deleteCart(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.trade.deleteCart(id) catch return error.Unexpected;
+    pub fn deleteCart(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64) ShopError!void {
+        if (!(self.store.trade.deleteCart(tenant_id, openid, id) catch return error.Unexpected)) return error.NotFound;
     }
 
     // ── 地址 ─────────────────────────────────────────────
@@ -225,8 +225,8 @@ pub const ShopService = struct {
         return self.store.trade.listAddresses(tenant_id, openid) catch error.Unexpected;
     }
 
-    pub fn deleteAddress(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.trade.deleteAddress(id) catch return error.Unexpected;
+    pub fn deleteAddress(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64) ShopError!void {
+        if (!(self.store.trade.deleteAddress(tenant_id, openid, id) catch return error.Unexpected)) return error.NotFound;
     }
 
     pub fn setAddressDefault(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64) ShopError!void {
@@ -280,8 +280,8 @@ pub const ShopService = struct {
             }
         }
         if (items.len == 0) return error.InvalidInput;
-        // 地址快照
-        const addr_opt = self.store.trade.getAddress(address_id) catch return error.Unexpected;
+        // 地址快照（带 tenant 归属：防跨租户把他人收货地址 PII 写进订单）。
+        const addr_opt = self.store.trade.getAddress(tenant_id, address_id) catch return error.Unexpected;
         const addr = addr_opt orelse return error.InvalidInput;
         defer addr.free(self.allocator);
         const address_json = std.json.Stringify.valueAlloc(self.allocator, .{
@@ -314,8 +314,9 @@ pub const ShopService = struct {
             // 事务内读写必须走 tx.client：连接池下事务独占借用的连接，
             // 再从池里借会 PoolExhausted；即便借得到，也读不到本事务未提交的写。
             if (it.sku_id == 0) {
-                // 无 SKU 商品：回退商品主数据（价格/库存）下单。
-                const product_opt = self.store.catalog.getProductOn(tx.client, it.product_id) catch return error.Unexpected;
+                // 无 SKU 商品：回退商品主数据（价格/库存）下单。tenant 归属校验：
+                // 拿不到别租户商品，防跨租户拿价下单。
+                const product_opt = self.store.catalog.getProductOn(tx.client, tenant_id, it.product_id) catch return error.Unexpected;
                 const product = product_opt orelse return error.NotFound;
                 defer product.free(self.allocator);
                 const pp = tx.client.shop_product.predicates;
@@ -337,7 +338,7 @@ pub const ShopService = struct {
                 _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch {};
             } else {
                 const sp = tx.client.shop_product_sku.predicates;
-                const sku_opt = self.store.catalog.getSkuOn(tx.client, it.sku_id) catch return error.Unexpected;
+                const sku_opt = self.store.catalog.getSkuOn(tx.client, tenant_id, it.sku_id) catch return error.Unexpected;
                 const sku = sku_opt orelse return error.NotFound;
                 defer sku.free(self.allocator);
                 const guard = std.fmt.allocPrint(self.allocator, "stock >= {d}", .{it.quantity}) catch return error.Unexpected;
@@ -430,10 +431,10 @@ pub const ShopService = struct {
         };
 
         for (items) |it| {
-            const sku_opt = self.store.catalog.getSkuOn(tx.client, it.sku_id) catch return error.Unexpected;
+            const sku_opt = self.store.catalog.getSkuOn(tx.client, tenant_id, it.sku_id) catch return error.Unexpected;
             const sku = sku_opt orelse return error.NotFound;
             defer sku.free(self.allocator);
-            const p_opt = self.store.catalog.getProductOn(tx.client, it.product_id) catch return error.Unexpected;
+            const p_opt = self.store.catalog.getProductOn(tx.client, tenant_id, it.product_id) catch return error.Unexpected;
             const p = p_opt orelse return error.NotFound;
             defer p.free(self.allocator);
             const sku_price = std.fmt.parseInt(i64, sku.price, 10) catch return error.Unexpected;
@@ -478,8 +479,11 @@ pub const ShopService = struct {
                     const psvc: *pay_mod.PaymentService = @ptrCast(@alignCast(ps));
                     const ok = psvc.payWithBalance(tenant_id, account_id, fan.id, pay_amount) catch false;
                     if (!ok) {
-                        _ = self.store.trade.updateOrderStatus(order_id, 4, self.now()) catch {};
-                        self.store.trade.restoreOrderStock(order_id) catch {}; // 事务已提交，显式回滚
+                        // 条件取消：仅本次请求把 0→4 命中时才回滚库存，
+                        // 与用户手动取消并发时不会双倍返还。
+                        if (self.store.trade.cancelOrderOn(tenant_id, openid, order_id, self.now()) catch false) {
+                            self.store.trade.restoreOrderStock(order_id) catch {}; // 事务已提交，显式回滚
+                        }
                         return error.InsufficientBalance;
                     }
                     self.markPaid(tenant_id, account_id, order_id) catch {};
@@ -505,11 +509,19 @@ pub const ShopService = struct {
         return self.store.trade.getOrderProduct(id) catch error.Unexpected;
     }
 
-    /// 支付成功回调（payment 模块调用）：status 0→1。
+    /// 支付成功回调（payment 模块调用）：状态 0→1 原子条件更新，只命中一次。
     /// 事件驱动：有 bus → publish OrderPaidEvent（消费者处理分销/积分/通知）；
     /// 无 bus → 同步回退（单测/最小部署兼容）。
+    /// 幂等：重复/并发回调 affected=0 时读回当前状态——已是 1 → 直接返回
+    /// （不重复分佣/积分）；其他状态 → 异常回调，返回错误。
     pub fn markPaid(self: *ShopService, tenant_id: i64, account_id: i64, order_id: i64) ShopError!void {
-        _ = self.store.trade.updateOrderStatus(order_id, 1, self.now()) catch return error.Unexpected;
+        if (!(self.store.trade.markPaidOn(tenant_id, order_id, self.now()) catch return error.Unexpected)) {
+            const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
+            const o = o_opt orelse return error.NotFound;
+            defer o.free(self.allocator);
+            if (o.status == 1) return; // 已支付：幂等返回，奖励只发一次
+            return error.OrderStateConflict; // 已取消/已完成等：非法回调
+        }
         if (self.order_paid_bus) |bus| {
             bus.publish(.{ .tenant_id = tenant_id, .account_id = account_id, .order_id = order_id });
             return;
@@ -536,14 +548,23 @@ pub const ShopService = struct {
         }
     }
 
-    /// 取消订单（仅待支付可取消）；取消后回滚库存与销量。
-    pub fn cancelOrder(self: *ShopService, order_id: i64) ShopError!void {
+    /// 取消订单（仅待支付可取消，可取消状态集 = {0}，与原语义一致）。
+    /// 原子条件更新 WHERE(id + openid + tenant_id + status=0)：并发/重复取消
+    /// 只有一个调用方 affected=1，库存回滚恰好执行一次（防双回滚）。
+    /// affected=0 时读回当前状态区分：已是取消态(4) → 幂等成功；
+    /// 不存在/归属不符 → NotFound（IDOR 按不存在处理）；其他状态 → 冲突。
+    pub fn cancelOrder(self: *ShopService, tenant_id: i64, openid: []const u8, order_id: i64) ShopError!void {
+        if (self.store.trade.cancelOrderOn(tenant_id, openid, order_id, self.now()) catch return error.Unexpected) {
+            self.store.trade.restoreOrderStock(order_id) catch {};
+            return;
+        }
         const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
         const o = o_opt orelse return error.NotFound;
         defer o.free(self.allocator);
-        if (o.status != 0) return error.OrderStateConflict;
-        _ = self.store.trade.updateOrderStatus(order_id, 4, self.now()) catch return error.Unexpected;
-        self.store.trade.restoreOrderStock(order_id) catch {};
+        if (o.status == 4) return; // 已是取消态：幂等成功（不再回滚库存）
+        if (!std.mem.eql(u8, o.openid, openid)) return error.NotFound; // 他人订单：不泄露存在性
+        if (o.status == 0) return error.NotFound; // openid 匹配但未命中：租户不符，按不存在处理
+        return error.OrderStateConflict;
     }
 
     /// 确认收货（已发货 → 已完成）。
@@ -640,12 +661,38 @@ pub const ShopService = struct {
     }
 
     /// 退款审核：同意 → 订单置为已取消（4）+ 回滚库存与销量。
+    /// refund 状态翻转（pending→终态，条件更新）与 订单状态/库存回滚 包在
+    /// 同一事务（beginTxFromDriver + *On 变体走 tx.client），三写要么全提交
+    /// 要么全回滚；重复审核 affected=0 → 幂等返回，绝不重复回滚库存。
     pub fn auditRefund(self: *ShopService, order_id: i64, refund_id: i64, approve: bool) ShopError!void {
-        _ = self.store.trade.auditRefund(refund_id, if (approve) 1 else 2, self.now()) catch return error.Unexpected;
-        if (approve) {
-            _ = self.store.trade.updateOrderStatus(order_id, 4, self.now()) catch {};
-            self.store.trade.restoreOrderStock(order_id) catch {};
+        const target: i64 = if (approve) 1 else 2;
+        const now_secs = self.now();
+        // shop 模块私有 graph 的事务：TxClient(persist.infos)，故 *On 变体
+        // 均为 `client: anytype`（root Client / TxClient 均可传入）。
+        var tx = zent.codegen.client.beginTxFromDriver(persist.infos, self.store.client.driver, self.allocator) catch return error.Unexpected;
+        var tx_closed = false;
+        defer if (!tx_closed) {
+            tx.rollback() catch {};
+            tx.deinit();
+        };
+        // 条件更新：仅 pending(0)→终态 命中一次。
+        const flipped = self.store.trade.auditRefundOn(tx.client, refund_id, target, now_secs) catch return error.Unexpected;
+        if (!flipped) {
+            // 区分：退款单不存在 → NotFound；已终态 → 幂等返回（不重复回滚）。
+            const r_opt = self.store.trade.getRefundByIdOn(tx.client, refund_id) catch return error.Unexpected;
+            const r = r_opt orelse return error.NotFound;
+            defer r.free(self.allocator);
+            if (r.status != 0) return; // 已被审核过（重复提交/双击）：幂等返回
+            return error.Unexpected; // 兜底：既不命中又非终态（正常不可达）
         }
+        if (approve) {
+            // 订单状态 + 库存回滚与 refund 翻转同事务提交。
+            _ = self.store.trade.updateOrderStatusOn(tx.client, order_id, 4, now_secs) catch return error.Unexpected;
+            self.store.trade.restoreOrderStockOn(tx.client, order_id) catch {};
+        }
+        tx.commit() catch return error.Unexpected;
+        tx.deinit();
+        tx_closed = true;
     }
 
     // ── 评价 ──────────────────────────────────────────────
@@ -793,9 +840,12 @@ pub const ShopService = struct {
         }
         var count: usize = 0;
         for (expired) |o| {
-            _ = self.store.trade.updateOrderStatus(o.id, 4, self.now()) catch continue;
-            self.store.trade.restoreOrderStock(o.id) catch {};
-            count += 1;
+            // 条件取消：与用户手动取消/另一轮扫单并发时只有一个命中，
+            // 库存回滚恰好一次（防双倍返还）。
+            if (self.store.trade.cancelOrderOn(tenant_id, o.openid, o.id, self.now()) catch continue) {
+                self.store.trade.restoreOrderStock(o.id) catch {};
+                count += 1;
+            }
         }
         return count;
     }
@@ -1002,7 +1052,7 @@ pub const ShopService = struct {
 
     /// 团价下单（内部）：校验商品 → 扣 SKU 库存 → 团价订单 + 明细。
     fn grouponOrder(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, activity: ShopGrouponRow, sku_id: i64, team_id: i64) ShopError!i64 {
-        const addr_opt = self.store.trade.getAddress(address_id) catch return error.Unexpected;
+        const addr_opt = self.store.trade.getAddress(tenant_id, address_id) catch return error.Unexpected;
         const addr = addr_opt orelse return error.InvalidInput;
         defer addr.free(self.allocator);
         const address_json = std.json.Stringify.valueAlloc(self.allocator, .{
@@ -1042,7 +1092,7 @@ pub const ShopService = struct {
 
     /// 开团：leader 以团价下单 + 建团（current=1）。
     pub fn openGroupon(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, activity_id: i64, sku_id: i64) ShopError!i64 {
-        const a_opt = self.store.marketing.getGroupon(activity_id) catch return error.Unexpected;
+        const a_opt = self.store.marketing.getGroupon(tenant_id, activity_id) catch return error.Unexpected;
         const a = a_opt orelse return error.NotFound;
         defer a.free(self.allocator);
         if (a.status != 1) return error.InvalidInput;
@@ -1055,17 +1105,17 @@ pub const ShopService = struct {
 
     /// 参团：团价下单 + current+1；成团 → 团内订单标记支付（mock）。
     pub fn joinGroupon(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, team_id: i64, sku_id: i64) ShopError!i64 {
-        const t_opt = self.store.marketing.getTeam(team_id) catch return error.Unexpected;
+        const t_opt = self.store.marketing.getTeam(tenant_id, team_id) catch return error.Unexpected;
         const t = t_opt orelse return error.NotFound;
         defer t.free(self.allocator);
         if (t.status != 0) return error.InvalidInput; // 已结束
-        const a_opt = self.store.marketing.getGroupon(t.activity_id) catch return error.Unexpected;
+        const a_opt = self.store.marketing.getGroupon(tenant_id, t.activity_id) catch return error.Unexpected;
         const a = a_opt orelse return error.NotFound;
         defer a.free(self.allocator);
         const order_id = self.grouponOrder(tenant_id, account_id, openid, address_id, a, sku_id, team_id) catch |err| {
             return err;
         };
-        if (self.store.marketing.joinTeam(self.allocator, team_id, a.group_size) catch false) {
+        if (self.store.marketing.joinTeam(self.allocator, tenant_id, team_id, a.group_size) catch false) {
             // 成团：团内全部订单 mock 支付 → 触发分销/积分。
             const orders = self.store.marketing.listOrdersByTeam(team_id) catch &.{};
             defer {
@@ -1095,13 +1145,19 @@ pub const ShopService = struct {
     }
 
     /// 自提核销：校验自提码 + 已支付（1）→ 状态置已完成（3）。
-    pub fn pickupOrder(self: *ShopService, order_id: i64, code: []const u8) ShopError!void {
+    /// 核销翻转走 租户 + 状态 + 自提 + 码 的原子条件更新，并发重复核销只命中一次。
+    /// 注意：核销由门店管理员发起（非买家本人），故不加 openid 归属条件；
+    /// 取货码为 6 位数字（空间仅 1e6），理论上可被遍历尝试。
+    /// TODO(security): 对核销接口加 per-openid / per-IP 限流与连续失败锁定
+    ///   （复用 middleware/rate_limit），当前仅靠管理端权限（shop:write）兜底。
+    pub fn pickupOrder(self: *ShopService, tenant_id: i64, order_id: i64, code: []const u8) ShopError!void {
         const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
         const o = o_opt orelse return error.NotFound;
         defer o.free(self.allocator);
         if (o.status != 1) return error.OrderStateConflict;
         if (!std.mem.eql(u8, o.pickup_type, "self")) return error.OrderStateConflict;
         if (o.pickup_code.len == 0 or !std.mem.eql(u8, o.pickup_code, code)) return error.InvalidInput;
-        _ = self.store.trade.updateOrderStatus(order_id, 3, self.now()) catch return error.Unexpected;
+        // 原子核销：tenant + 已支付 + 自提 + 码一致才翻转；未命中即并发已核销。
+        if (!(self.store.trade.pickupOrderOn(tenant_id, order_id, code, self.now()) catch return error.Unexpected)) return error.OrderStateConflict;
     }
 };

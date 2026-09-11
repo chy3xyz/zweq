@@ -187,24 +187,23 @@ pub const MarketingStore = struct {
     }
 
     /// 绑定邀请关系（幂等：同 invitee 只记一次）。
+    /// 依赖 shop_invite_record 的 UNIQUE(tenant_id, invitee_openid) 索引 +
+    /// INSERT OR IGNORE 原子去重：count-then-insert 在并发下会产生重复邀请
+    /// 记录（且重复计数让达标发奖超额），唯一键冲突映射是跨方言的最小修法。
+    /// 返回 true=新绑定（调用方发奖），false=已绑定（冲突被忽略）。
     pub fn bindInvite(self: *MarketingStore, tenant_id: i64, account_id: i64, inviter_openid: []const u8, invitee_openid: []const u8, now: i64) !bool {
-        var q = self.client.shop_invite_record.Query();
-        defer q.deinit();
-        const preds = self.client.shop_invite_record.predicates;
-        _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
-        _ = try q.Where(.{preds.invitee_openidEQ(.{ .string = invitee_openid })});
-        _ = q.Limit(1);
-        if ((try q.Count()) > 0) return false; // 已绑定
-        var row = try crud.create(self.client.shop_invite_record, .{
-            .tenant_id = tenant_id,
-            .account_id = account_id,
-            .inviter_openid = inviter_openid,
-            .invitee_openid = invitee_openid,
-            .created_at = now,
-            .updated_at = now,
-        });
+        var cb = try self.client.shop_invite_record.Create();
+        defer cb.deinit();
+        _ = try cb.setFieldValue("tenant_id", tenant_id);
+        _ = try cb.setFieldValue("account_id", account_id);
+        _ = try cb.setFieldValue("inviter_openid", inviter_openid);
+        _ = try cb.setFieldValue("invitee_openid", invitee_openid);
+        _ = try cb.setFieldValue("created_at", now);
+        _ = try cb.setFieldValue("updated_at", now);
+        var row = try cb.SaveIgnore();
         defer zent.codegen.deinitEntity(infos, ShopInviteRecordInfo, &row, self.allocator);
-        return true;
+        // 唯一键冲突被忽略时 id 为 0（SQLite/PG 无 RETURNING 行，MySQL last_insert_id=0）。
+        return row.id != 0;
     }
 
     /// 邀请人已邀请人数。
@@ -238,9 +237,10 @@ pub const MarketingStore = struct {
         return row.id;
     }
 
-    pub fn getGroupon(self: *MarketingStore, id: i64) !?ShopGrouponRow {
+    /// 按 id + tenant_id 读活动，防跨租户参团/开团（IDOR）。
+    pub fn getGroupon(self: *MarketingStore, tenant_id: i64, id: i64) !?ShopGrouponRow {
         const preds = self.client.shop_groupon.predicates;
-        var entity = (try crud.first(self.client.shop_groupon, .{preds.idEQ(.{ .int = id })})) orelse return null;
+        var entity = (try crud.first(self.client.shop_groupon, .{ preds.idEQ(.{ .int = id }), preds.tenant_idEQ(.{ .int = tenant_id }) })) orelse return null;
         defer zent.codegen.deinitEntity(infos, ShopGrouponInfo, &entity, self.allocator);
         return .{
             .id = entity.id,
@@ -302,9 +302,10 @@ pub const MarketingStore = struct {
         return row.id;
     }
 
-    pub fn getTeam(self: *MarketingStore, id: i64) !?ShopGrouponTeamRow {
+    /// 按 id + tenant_id 读团，防跨租户参团（IDOR）。
+    pub fn getTeam(self: *MarketingStore, tenant_id: i64, id: i64) !?ShopGrouponTeamRow {
         const preds = self.client.shop_groupon_team.predicates;
-        var entity = (try crud.first(self.client.shop_groupon_team, .{preds.idEQ(.{ .int = id })})) orelse return null;
+        var entity = (try crud.first(self.client.shop_groupon_team, .{ preds.idEQ(.{ .int = id }), preds.tenant_idEQ(.{ .int = tenant_id }) })) orelse return null;
         defer zent.codegen.deinitEntity(infos, ShopGrouponTeamInfo, &entity, self.allocator);
         return .{
             .id = entity.id,
@@ -318,12 +319,12 @@ pub const MarketingStore = struct {
     }
 
     /// 参团计数 +1，返回是否成团（current >= group_size）。
-    pub fn joinTeam(self: *MarketingStore, allocator: std.mem.Allocator, team_id: i64, group_size: i64) !bool {
+    pub fn joinTeam(self: *MarketingStore, allocator: std.mem.Allocator, tenant_id: i64, team_id: i64, group_size: i64) !bool {
         const preds = self.client.shop_groupon_team.predicates;
         _ = crud.increment(self.client.shop_groupon_team, "current", 1, &.{
             preds.idEQ(.{ .int = team_id }),
         }) catch return false;
-        const team_opt = self.getTeam(team_id) catch return false;
+        const team_opt = self.getTeam(tenant_id, team_id) catch return false;
         const team = team_opt orelse return false;
         defer team.free(allocator);
         if (team.current >= group_size) {

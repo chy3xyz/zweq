@@ -113,13 +113,27 @@ pub fn Mixin(comptime ApiT: type) type {
 
         pub fn cartUpdate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const tid = ApiT.tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的购物车 ID");
                 return;
             };
             const qty = ctx.queryInt(i64, "quantity", 1);
-            self.svc.updateCart(id, qty) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+            // C 端 JWT 优先，query openid 兜底（与 orderOverview 同策略）。
+            const buyer_owned = ApiT.cOpenid(ctx, self);
+            defer if (buyer_owned) |b| self.svc.allocator.free(b);
+            const openid_query = ctx.query.get("openid") orelse "";
+            const openid = buyer_owned orelse openid_query;
+            if (openid.len == 0) {
+                try ctx.sendErrorResponse(400, 400, "缺少 openid");
+                return;
+            }
+            self.svc.updateCart(tid, openid, id, qty) catch |err| {
+                const msg = switch (err) {
+                    error.NotFound => "购物车记录不存在",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             try ctx.ok("null");
@@ -127,12 +141,25 @@ pub fn Mixin(comptime ApiT: type) type {
 
         pub fn cartDelete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const tid = ApiT.tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的购物车 ID");
                 return;
             };
-            self.svc.deleteCart(id) catch {
-                try ctx.sendErrorResponse(500, 500, "服务器错误");
+            const buyer_owned = ApiT.cOpenid(ctx, self);
+            defer if (buyer_owned) |b| self.svc.allocator.free(b);
+            const openid_query = ctx.query.get("openid") orelse "";
+            const openid = buyer_owned orelse openid_query;
+            if (openid.len == 0) {
+                try ctx.sendErrorResponse(400, 400, "缺少 openid");
+                return;
+            }
+            self.svc.deleteCart(tid, openid, id) catch |err| {
+                const msg = switch (err) {
+                    error.NotFound => "购物车记录不存在",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             try ctx.ok("null");
@@ -180,12 +207,25 @@ pub fn Mixin(comptime ApiT: type) type {
 
         pub fn addressDelete(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const tid = ApiT.tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的地址 ID");
                 return;
             };
-            self.svc.deleteAddress(id) catch {
-                try ctx.sendErrorResponse(500, 500, "服务器错误");
+            const buyer_owned = ApiT.cOpenid(ctx, self);
+            defer if (buyer_owned) |b| self.svc.allocator.free(b);
+            const openid_query = ctx.query.get("openid") orelse "";
+            const openid = buyer_owned orelse openid_query;
+            if (openid.len == 0) {
+                try ctx.sendErrorResponse(400, 400, "缺少 openid");
+                return;
+            }
+            self.svc.deleteAddress(tid, openid, id) catch |err| {
+                const msg = switch (err) {
+                    error.NotFound => "地址不存在",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             try ctx.ok("null");
@@ -408,12 +448,27 @@ pub fn Mixin(comptime ApiT: type) type {
 
         pub fn orderCancel(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const tid = ApiT.tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的订单 ID");
                 return;
             };
-            self.svc.cancelOrder(id) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+            // C 端 JWT 优先，query openid 兜底；缺 openid 无法做归属校验。
+            const buyer_owned = ApiT.cOpenid(ctx, self);
+            defer if (buyer_owned) |b| self.svc.allocator.free(b);
+            const openid_query = ctx.query.get("openid") orelse "";
+            const openid = buyer_owned orelse openid_query;
+            if (openid.len == 0) {
+                try ctx.sendErrorResponse(400, 400, "缺少 openid");
+                return;
+            }
+            self.svc.cancelOrder(tid, openid, id) catch |err| {
+                const msg = switch (err) {
+                    error.NotFound => "订单不存在",
+                    error.OrderStateConflict => "订单状态不可取消",
+                    else => @errorName(err),
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             try ctx.ok("null");
@@ -703,7 +758,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             };
             defer ctx.allocator.free(req.code);
-            self.svc.pickupOrder(id, req.code) catch |err| {
+            self.svc.pickupOrder(ApiT.tenantScope(ctx, self), id, req.code) catch |err| {
                 const msg = switch (err) {
                     error.OrderStateConflict => "订单状态不可核销",
                     error.InvalidInput => "核销码不正确",

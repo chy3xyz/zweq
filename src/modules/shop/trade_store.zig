@@ -112,20 +112,22 @@ pub const TradeStore = struct {
         return out;
     }
 
-    pub fn updateCartQuantity(self: *TradeStore, id: i64, quantity: i64) !bool {
+    /// 数量更新带归属条件（tenant_id + openid），affected==0 即越权/不存在。
+    pub fn updateCartQuantity(self: *TradeStore, tenant_id: i64, openid: []const u8, id: i64, quantity: i64) !bool {
         const preds = self.client.shop_cart.predicates;
         var upd = self.client.shop_cart.Update();
         defer upd.deinit();
         _ = try upd.set("quantity", .{ .int = quantity });
-        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = id }), preds.tenant_idEQ(.{ .int = tenant_id }), preds.openidEQ(.{ .string = openid }) });
         return (try upd.Save()) > 0;
     }
 
-    pub fn deleteCart(self: *TradeStore, id: i64) !bool {
+    /// 删除带归属条件（tenant_id + openid），affected==0 即越权/不存在。
+    pub fn deleteCart(self: *TradeStore, tenant_id: i64, openid: []const u8, id: i64) !bool {
         const preds = self.client.shop_cart.predicates;
         var d = self.client.shop_cart.Delete();
         defer d.deinit();
-        _ = try d.Where(.{preds.idEQ(.{ .int = id })});
+        _ = try d.Where(.{ preds.idEQ(.{ .int = id }), preds.tenant_idEQ(.{ .int = tenant_id }), preds.openidEQ(.{ .string = openid }) });
         return (try d.Exec()) > 0;
     }
 
@@ -192,9 +194,11 @@ pub const TradeStore = struct {
         return out;
     }
 
-    pub fn getAddress(self: *TradeStore, id: i64) !?ShopAddressRow {
+    /// 按 id 读地址，带 tenant_id 归属条件：防跨租户把他人收货地址
+    /// （PII）快照写进本租户订单。
+    pub fn getAddress(self: *TradeStore, tenant_id: i64, id: i64) !?ShopAddressRow {
         const preds = self.client.shop_address.predicates;
-        var entity = (try crud.first(self.client.shop_address, .{preds.idEQ(.{ .int = id })})) orelse return null;
+        var entity = (try crud.first(self.client.shop_address, .{ preds.idEQ(.{ .int = id }), preds.tenant_idEQ(.{ .int = tenant_id }) })) orelse return null;
         defer zent.codegen.deinitEntity(infos, ShopAddressInfo, &entity, self.allocator);
         const openid_dup = try self.allocator.dupe(u8, entity.openid);
         const name = try self.allocator.dupe(u8, entity.name);
@@ -204,16 +208,17 @@ pub const TradeStore = struct {
         return .{ .id = entity.id, .account_id = entity.account_id, .openid = openid_dup, .name = name, .mobile = mobile, .region = region, .detail = detail, .is_default = entity.is_default, .created_at = entity.created_at orelse 0 };
     }
 
-    pub fn deleteAddress(self: *TradeStore, id: i64) !bool {
+    /// 删除带归属条件（tenant_id + openid），affected==0 即越权/不存在。
+    pub fn deleteAddress(self: *TradeStore, tenant_id: i64, openid: []const u8, id: i64) !bool {
         const preds = self.client.shop_address.predicates;
         var d = self.client.shop_address.Delete();
         defer d.deinit();
-        _ = try d.Where(.{preds.idEQ(.{ .int = id })});
+        _ = try d.Where(.{ preds.idEQ(.{ .int = id }), preds.tenant_idEQ(.{ .int = tenant_id }), preds.openidEQ(.{ .string = openid }) });
         return (try d.Exec()) > 0;
     }
 
     pub fn setDefaultAddress(self: *TradeStore, tenant_id: i64, openid: []const u8, id: i64, now: i64) !void {
-        const row_opt = try self.getAddress(id);
+        const row_opt = try self.getAddress(tenant_id, id);
         const row = row_opt orelse return error.AddressNotFound;
         defer row.free(self.allocator);
         if (!std.mem.eql(u8, row.openid, openid)) return error.InvalidInput;
@@ -229,7 +234,7 @@ pub const TradeStore = struct {
     }
 
     pub fn updateAddress(self: *TradeStore, tenant_id: i64, openid: []const u8, id: i64, a: anytype, now: i64) !void {
-        const row_opt = try self.getAddress(id);
+        const row_opt = try self.getAddress(tenant_id, id);
         const row = row_opt orelse return error.AddressNotFound;
         defer row.free(self.allocator);
         if (!std.mem.eql(u8, row.openid, openid)) return error.InvalidInput;
@@ -403,10 +408,11 @@ pub const TradeStore = struct {
         return .{ .items = out, .total = paged.total };
     }
 
-    pub fn listOrderProducts(self: *TradeStore, order_id: i64) ![]ShopOrderProductRow {
-        var q = self.client.shop_order_product.Query();
+    /// 事务感知读取：传入 tx.client 时读取发生在同一事务内。
+    pub fn listOrderProductsOn(self: *TradeStore, client: anytype, order_id: i64) ![]ShopOrderProductRow {
+        var q = client.shop_order_product.Query();
         defer q.deinit();
-        const preds = self.client.shop_order_product.predicates;
+        const preds = client.shop_order_product.predicates;
         _ = try q.Where(.{preds.order_idEQ(.{ .int = order_id })});
         var rows = try q.All();
         defer {
@@ -435,6 +441,10 @@ pub const TradeStore = struct {
         return out;
     }
 
+    pub fn listOrderProducts(self: *TradeStore, order_id: i64) ![]ShopOrderProductRow {
+        return self.listOrderProductsOn(self.client, order_id);
+    }
+
     pub fn getOrderProduct(self: *TradeStore, id: i64) !?ShopOrderProductRow {
         const preds = self.client.shop_order_product.predicates;
         var entity = (try crud.first(self.client.shop_order_product, .{preds.idEQ(.{ .int = id })})) orelse return null;
@@ -453,14 +463,56 @@ pub const TradeStore = struct {
         };
     }
 
-    pub fn updateOrderStatus(self: *TradeStore, id: i64, status: i64, now: i64) !bool {
-        const preds = self.client.shop_order.predicates;
-        var upd = self.client.shop_order.Update();
+    /// 事务感知状态更新：随下单/退款事务提交或回滚（事务内读写必须走 tx.client）。
+    pub fn updateOrderStatusOn(_: *TradeStore, client: anytype, id: i64, status: i64, now: i64) !bool {
+        const preds = client.shop_order.predicates;
+        var upd = client.shop_order.Update();
         defer upd.deinit();
         _ = try upd.set("status", .{ .int = status });
         _ = try upd.setFieldValue("updated_at", now);
         if (status == 1) _ = try upd.setFieldValue("paid_at", now);
         _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
+        return (try upd.Save()) > 0;
+    }
+
+    pub fn updateOrderStatus(self: *TradeStore, id: i64, status: i64, now: i64) !bool {
+        return self.updateOrderStatusOn(self.client, id, status, now);
+    }
+
+    /// 原子支付翻转：仅 待支付(0)→已支付(1) 且本租户 才命中一次。
+    /// 重复/并发支付回调 affected=0 → 调用方读回状态做幂等区分，绝不重复发奖。
+    pub fn markPaidOn(self: *TradeStore, tenant_id: i64, order_id: i64, now: i64) !bool {
+        const preds = self.client.shop_order.predicates;
+        var upd = self.client.shop_order.Update();
+        defer upd.deinit();
+        _ = try upd.set("status", .{ .int = 1 });
+        _ = try upd.setFieldValue("updated_at", now);
+        _ = try upd.setFieldValue("paid_at", now);
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = order_id }), preds.tenant_idEQ(.{ .int = tenant_id }), preds.statusEQ(.{ .int = 0 }) });
+        return (try upd.Save()) > 0;
+    }
+
+    /// 原子取消：仅 待支付(0) 且 归属（tenant_id + openid）匹配 才置已取消（4）。
+    /// 并发/重复取消只有一个调用方 affected=1 → 库存回滚恰好执行一次。
+    pub fn cancelOrderOn(self: *TradeStore, tenant_id: i64, openid: []const u8, order_id: i64, now: i64) !bool {
+        const preds = self.client.shop_order.predicates;
+        var upd = self.client.shop_order.Update();
+        defer upd.deinit();
+        _ = try upd.set("status", .{ .int = 4 });
+        _ = try upd.setFieldValue("updated_at", now);
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = order_id }), preds.tenant_idEQ(.{ .int = tenant_id }), preds.openidEQ(.{ .string = openid }), preds.statusEQ(.{ .int = 0 }) });
+        return (try upd.Save()) > 0;
+    }
+
+    /// 原子自提核销：本租户 + 已支付（1）+ 自提 + 核销码一致 才置已完成（3）。
+    /// 条件更新兜底并发重复核销；6 位数字码的暴力破解风险见 service.pickupOrder TODO。
+    pub fn pickupOrderOn(self: *TradeStore, tenant_id: i64, order_id: i64, code: []const u8, now: i64) !bool {
+        const preds = self.client.shop_order.predicates;
+        var upd = self.client.shop_order.Update();
+        defer upd.deinit();
+        _ = try upd.set("status", .{ .int = 3 });
+        _ = try upd.setFieldValue("updated_at", now);
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = order_id }), preds.tenant_idEQ(.{ .int = tenant_id }), preds.statusEQ(.{ .int = 1 }), preds.pickup_typeEQ(.{ .string = "self" }), preds.pickup_codeEQ(.{ .string = code }) });
         return (try upd.Save()) > 0;
     }
 
@@ -519,17 +571,23 @@ pub const TradeStore = struct {
         return out;
     }
 
-    /// 按订单明细回滚库存与销量。
-    pub fn restoreOrderStock(self: *TradeStore, order_id: i64) !void {
-        const ops = try self.listOrderProducts(order_id);
+    /// 事务感知库存回滚：按订单明细返还 SKU 库存、扣减销量（必须走 tx.client，
+    /// 与退款审核/订单状态同事务提交，失败整体回滚）。
+    pub fn restoreOrderStockOn(self: *TradeStore, client: anytype, order_id: i64) !void {
+        const ops = try self.listOrderProductsOn(client, order_id);
         defer {
             for (ops) |op| op.free(self.allocator);
             if (ops.len > 0) self.allocator.free(ops);
         }
         for (ops) |op| {
-            self.restoreSkuStock(op.sku_id, op.quantity) catch {};
-            self.subtractProductSales(op.product_id, op.quantity) catch {};
+            self.restoreSkuStockOn(client, op.sku_id, op.quantity) catch {};
+            self.subtractProductSalesOn(client, op.product_id, op.quantity) catch {};
         }
+    }
+
+    /// 按订单明细回滚库存与销量。
+    pub fn restoreOrderStock(self: *TradeStore, order_id: i64) !void {
+        return self.restoreOrderStockOn(self.client, order_id);
     }
 
     // ── 收藏 ──────────────────────────────────────────────
@@ -745,14 +803,37 @@ pub const TradeStore = struct {
         return .{ .items = out, .total = paged.total };
     }
 
-    pub fn auditRefund(self: *TradeStore, id: i64, status: i64, now: i64) !bool {
-        const preds = self.client.shop_refund.predicates;
-        var upd = self.client.shop_refund.Update();
+    /// 事务感知退款审核：仅 待审核(0)→终态(1/2) 命中一次；
+    /// affected=0 即重复审核/并发审核 → 调用方幂等处理，绝不重复回滚库存。
+    pub fn auditRefundOn(_: *TradeStore, client: anytype, id: i64, status: i64, now: i64) !bool {
+        const preds = client.shop_refund.predicates;
+        var upd = client.shop_refund.Update();
         defer upd.deinit();
         _ = try upd.set("status", .{ .int = status });
         _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = id }), preds.statusEQ(.{ .int = 0 }) });
         return (try upd.Save()) > 0;
+    }
+
+    pub fn auditRefund(self: *TradeStore, id: i64, status: i64, now: i64) !bool {
+        return self.auditRefundOn(self.client, id, status, now);
+    }
+
+    /// 事务感知读取：按 id 读退款单（审核幂等判定用）。
+    pub fn getRefundByIdOn(self: *TradeStore, client: anytype, id: i64) !?ShopRefundRow {
+        const preds = client.shop_refund.predicates;
+        var entity = (try crud.first(client.shop_refund, .{preds.idEQ(.{ .int = id })})) orelse return null;
+        defer zent.codegen.deinitEntity(infos, ShopRefundInfo, &entity, self.allocator);
+        return .{
+            .id = entity.id,
+            .account_id = entity.account_id,
+            .order_id = entity.order_id,
+            .openid = try self.allocator.dupe(u8, entity.openid),
+            .reason = try self.allocator.dupe(u8, entity.reason),
+            .amount = try self.allocator.dupe(u8, entity.amount),
+            .status = entity.status,
+            .created_at = entity.created_at orelse 0,
+        };
     }
 
     // ── 评价 ──────────────────────────────────────────────
@@ -832,13 +913,21 @@ pub const TradeStore = struct {
     // ── 商品域库存原语的交易侧内联副本 ────────────────────
     // 取消/失败链路需直接增补 SKU 库存、扣减销量；实现与 CatalogStore 同款
     // crud.increment 单行语句。表归属商品域，但为避免子域之间互相持引用而内联。
+    pub fn restoreSkuStockOn(_: *TradeStore, client: anytype, sku_id: i64, n: i64) !void {
+        const sp = client.shop_product_sku.predicates;
+        _ = crud.increment(client.shop_product_sku, "stock", n, &.{sp.idEQ(.{ .int = sku_id })}) catch {};
+    }
+
     pub fn restoreSkuStock(self: *TradeStore, sku_id: i64, n: i64) !void {
-        const sp = self.client.shop_product_sku.predicates;
-        _ = crud.increment(self.client.shop_product_sku, "stock", n, &.{sp.idEQ(.{ .int = sku_id })}) catch {};
+        return self.restoreSkuStockOn(self.client, sku_id, n);
+    }
+
+    pub fn subtractProductSalesOn(_: *TradeStore, client: anytype, product_id: i64, n: i64) !void {
+        const p = client.shop_product.predicates;
+        _ = crud.increment(client.shop_product, "sales", -n, &.{p.idEQ(.{ .int = product_id })}) catch {};
     }
 
     pub fn subtractProductSales(self: *TradeStore, product_id: i64, n: i64) !void {
-        const p = self.client.shop_product.predicates;
-        _ = crud.increment(self.client.shop_product, "sales", -n, &.{p.idEQ(.{ .int = product_id })}) catch {};
+        return self.subtractProductSalesOn(self.client, product_id, n);
     }
 };

@@ -5,6 +5,7 @@
 
 const zent = @import("zent");
 const field = zent.core.field;
+const index = zent.core.index;
 const Schema = zent.core.schema.Schema;
 
 /// 商品分类（支持二级：parent_id=0 为一级）。
@@ -230,12 +231,17 @@ pub const ShopInviteGift = Schema("ShopInviteGift", .{
 });
 
 /// 邀请关系（invitee 唯一）。
+/// UNIQUE (tenant_id, invitee_openid) — 供 bindInvite 的 INSERT OR IGNORE
+/// 原子去重：并发绑定同一 invitee 时只落一条，重复回调不会超额发奖。
 pub const ShopInviteRecord = Schema("ShopInviteRecord", .{
     .fields = &.{
         field.Int("tenant_id").Default(1),
         field.Int("account_id"),
         field.String("inviter_openid"),
         field.String("invitee_openid"),
+    },
+    .indexes = &.{
+        index.Fields(&.{ "tenant_id", "invitee_openid" }).Unique(),
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });
