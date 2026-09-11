@@ -116,8 +116,15 @@ pub const DistributionService = struct {
 
             const amount_i: i64 = @intFromFloat(@as(f64, @floatFromInt(order_amount)) * self.rates[level]);
             if (amount_i > 0) {
-                if (self.store.addCommission(self.allocator, parent.id, amount_i) catch false) {
-                    _ = self.store.createCommission(tenant_id, account_id, parent.openid, buyer_openid, @intCast(level + 1), amount_i, self.now()) catch {};
+                const credited = self.store.addCommission(self.allocator, parent.id, amount_i) catch |err| credited: {
+                    std.log.err("distribution: 佣金入账失败 openid={s} amount={d} err={s}", .{ parent.openid, amount_i, @errorName(err) });
+                    break :credited false;
+                };
+                if (credited) {
+                    _ = self.store.createCommission(tenant_id, account_id, parent.openid, buyer_openid, @intCast(level + 1), amount_i, self.now()) catch |err| {
+                        // 佣金已入账但台账缺失，无事务可回滚，留痕供对账。
+                        std.log.err("distribution: 分佣台账写入失败 openid={s} source_openid={s} amount={d} err={s}", .{ parent.openid, buyer_openid, amount_i, @errorName(err) });
+                    };
                     count += 1;
                 }
             }
@@ -140,7 +147,10 @@ pub const DistributionService = struct {
         const balance_cents = std.fmt.parseInt(i64, d.commission_balance, 10) catch return error.Unexpected;
         if (balance_cents < amount) return error.InsufficientBalance;
         if (!(self.store.deductCommission(self.allocator, d.id, amount) catch return error.Unexpected)) return error.InsufficientBalance;
-        _ = self.store.createCommission(tenant_id, account_id, openid, "", 0, -amount, self.now()) catch {};
+        _ = self.store.createCommission(tenant_id, account_id, openid, "", 0, -amount, self.now()) catch |err| {
+            // 提现扣款已生效但台账缺失，无事务可回滚，留痕供对账。
+            std.log.err("distribution: 提现台账写入失败 openid={s} amount={d} err={s}", .{ openid, amount, @errorName(err) });
+        };
     }
 
     /// 某 openid 的上级分销员（openid 可能是分销员或普通购买者）。

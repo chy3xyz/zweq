@@ -250,17 +250,24 @@ pub const MemberCardStore = struct {
         return row.id;
     }
 
-    /// 原子积分增减：points += delta, total_points += max(delta,0)。
+    /// 原子积分增减（单条 UPDATE）：points += delta，total_points += max(delta,0)。
+    /// delta<0 时带 `points >= ?` 下限守卫（points + delta >= 0 ⇔ points >= -delta），
+    /// 并发消耗不会扣穿 0；两个字段同条语句更新，不存在部分成功。
     pub fn adjustPoints(self: *MemberCardStore, account_id: i64, delta: i64) !bool {
         const preds = self.client.member_account.predicates;
-        const affected = crud.increment(self.client.member_account, "points", delta, &.{
-            preds.idEQ(.{ .int = account_id }),
-        }) catch return false;
-        if (delta > 0) {
-            _ = crud.increment(self.client.member_account, "total_points", delta, &.{
+        var upd = self.client.member_account.Update();
+        defer upd.deinit();
+        _ = try upd.setExprArgs("points", "points + ?", &.{.{ .int = delta }});
+        _ = try upd.setExprArgs("total_points", "total_points + ?", &.{.{ .int = @max(delta, 0) }});
+        if (delta < 0) {
+            _ = try upd.Where(.{
                 preds.idEQ(.{ .int = account_id }),
-            }) catch {};
+                zent.sql.RawArgs("points >= ?", &.{.{ .int = -delta }}),
+            });
+        } else {
+            _ = try upd.Where(.{preds.idEQ(.{ .int = account_id })});
         }
+        const affected = try upd.Save();
         return affected > 0;
     }
 

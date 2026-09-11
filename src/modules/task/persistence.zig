@@ -170,7 +170,10 @@ pub const TaskStore = struct {
         _ = try upd.setFieldValue("updated_at", now);
         _ = try upd.Where(.{preds.idEQ(.{ .int = entity.id })});
         _ = try upd.Where(.{preds.statusEQ(.{ .string = "pending" })});
-        _ = try upd.Save();
+        const affected = try upd.Save();
+        // 并发抢单时另一 worker 已把该行改出 pending，UPDATE 命中 0 行。
+        // 返回 null（语义同「没有可领任务」），避免多 worker 重复执行同一任务。
+        if (affected == 0) return null;
 
         // Re-read so the returned row reflects the claimed state.
         return try self.getTaskById(entity.id);
