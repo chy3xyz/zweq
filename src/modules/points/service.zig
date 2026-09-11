@@ -44,8 +44,8 @@ pub const PointsService = struct {
         return self.store.createProduct(tenant_id, account_id, name, points, stock, status, image, detail, self.now()) catch error.Unexpected;
     }
 
-    pub fn getProduct(self: *PointsService, id: i64) PointsError!?PointsProductRow {
-        return self.store.getProduct(id) catch error.Unexpected;
+    pub fn getProduct(self: *PointsService, tenant_id: i64, id: i64) PointsError!?PointsProductRow {
+        return self.store.getProduct(tenant_id, id) catch error.Unexpected;
     }
 
     /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
@@ -75,10 +75,14 @@ pub const PointsService = struct {
         };
     }
 
-    /// 粉丝兑换积分商品：校验库存 + 积分 → 扣积分 → 减库存 → 建订单。
+    /// 粉丝兑换积分商品：读校验 → 原子减库存 → 扣积分 → 建兑换记录。
+    /// 三步写落在不同表（points_product / member.fan / points_order），
+    /// 无法共用一个本地事务，改用补偿模式：任一步失败即返回，并把已落库的
+    /// 写按相反方向回补；补偿本身再失败只能 log 留痕，无法回滚。
     /// 返回订单 id。
     pub fn redeem(self: *PointsService, tenant_id: i64, account_id: i64, openid: []const u8, product_id: i64) PointsError!i64 {
-        const prod_opt = self.store.getProduct(product_id) catch return error.Unexpected;
+        // ── 读校验（均带租户过滤，不产生写，无需补偿）──
+        const prod_opt = self.store.getProduct(tenant_id, product_id) catch return error.Unexpected;
         const prod = prod_opt orelse return error.ProductNotFound;
         defer prod.free(self.allocator);
         // 下架商品不可兑换：C 端列表与兑换入口都必须挡住。
@@ -90,13 +94,33 @@ pub const PointsService = struct {
         defer fan.free(self.allocator);
         if (fan.points < prod.points) return error.InsufficientPoints;
 
-        _ = self.fan_store.adjustPoints(tenant_id, account_id, openid, -prod.points, self.now()) catch return error.Unexpected;
-        _ = self.store.decrementStock(product_id, 1, self.now()) catch |err| switch (err) {
-            error.ProductNotFound => return error.ProductNotFound,
-            error.OutOfStock => return error.OutOfStock,
-            else => return error.Unexpected,
+        // ── 写 1：原子减库存（guard 挡超卖）──
+        const consumed = self.store.decrementStock(tenant_id, product_id, 1) catch return error.Unexpected;
+        // 读校验与扣库存之间存在剩余窗口：并发兑换可在此期间抢光库存，
+        // guard 命中即 affected=0，这里兜底报库存不足。
+        if (!consumed) return error.OutOfStock;
+
+        // ── 写 2：扣积分（原子 points+delta，余额下限守卫在 DB 语句内）──
+        _ = self.fan_store.adjustPoints(tenant_id, account_id, openid, -prod.points, self.now()) catch |err| {
+            // 扣积分失败 → 回补库存后返回；补偿失败只能留痕。
+            self.store.restoreStock(tenant_id, product_id, 1) catch |rerr|
+                std.log.err("points redeem 补偿失败：扣积分失败后库存未回补 product_id={d} err={s}", .{ product_id, @errorName(rerr) });
+            return switch (err) {
+                error.FanNotFound => error.FanNotFound,
+                error.InsufficientPoints => error.InsufficientPoints,
+                else => error.Unexpected,
+            };
         };
-        return self.store.createOrder(tenant_id, account_id, openid, product_id, prod.name, prod.points, self.now()) catch error.Unexpected;
+
+        // ── 写 3：建兑换记录 ──
+        return self.store.createOrder(tenant_id, account_id, openid, product_id, prod.name, prod.points, self.now()) catch {
+            // 建单失败 → 按扣减的相反顺序回补积分、库存后返回。
+            _ = self.fan_store.adjustPoints(tenant_id, account_id, openid, prod.points, self.now()) catch |rerr|
+                std.log.err("points redeem 补偿失败：建单失败后积分未回补 openid={s} err={s}", .{ openid, @errorName(rerr) });
+            self.store.restoreStock(tenant_id, product_id, 1) catch |rerr|
+                std.log.err("points redeem 补偿失败：建单失败后库存未回补 product_id={d} err={s}", .{ product_id, @errorName(rerr) });
+            return error.Unexpected;
+        };
     }
 
     /// 查询兑换记录（openid 可空 = 全部）。

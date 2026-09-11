@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const zent = @import("zent");
+const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
@@ -128,11 +129,11 @@ pub const PointsStore = struct {
         return row.id;
     }
 
-    pub fn getProduct(self: *PointsStore, id: i64) !?PointsProductRow {
+    pub fn getProduct(self: *PointsStore, tenant_id: i64, id: i64) !?PointsProductRow {
         const preds = self.client.points_product.predicates;
         var q = self.client.points_product.Query();
         defer q.deinit();
-        _ = try q.Where(.{preds.idEQ(.{ .int = id })});
+        _ = try q.Where(.{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) });
         var entity = (try q.First()) orelse return null;
         defer zent.codegen.deinitEntity(infos, PointsProductInfo, &entity, self.allocator);
         return try self.dupProduct(entity);
@@ -178,21 +179,28 @@ pub const PointsStore = struct {
         _ = try upd.Save();
     }
 
-    /// 减库存（兑换用）。返回剩余库存。
-    pub fn decrementStock(self: *PointsStore, id: i64, amount: i64, now: i64) !i64 {
-        const row_opt = try self.getProduct(id);
-        const row = row_opt orelse return error.ProductNotFound;
-        defer row.free(self.allocator);
-        const new_stock = row.stock - amount;
-        if (new_stock < 0) return error.OutOfStock;
+    /// 原子减库存（兑换用）：`UPDATE … SET stock=stock-n WHERE tenant AND id AND stock>=n`。
+    /// 库存下限校验随 guard 条件进同一条语句，并发兑换不会超卖
+    /// （旧实现把 stock 读到 Zig 算出新值再写回绝对值，两个并发请求互相覆盖）。
+    /// 返回 true=扣减成功；false=库存不足或商品不存在（affected=0）。
+    /// 注意：与 shop.consumeSkuStock 一致，只动 stock 列，不维护 updated_at。
+    pub fn decrementStock(self: *PointsStore, tenant_id: i64, id: i64, amount: i64) !bool {
         const preds = self.client.points_product.predicates;
-        var upd = self.client.points_product.Update();
-        defer upd.deinit();
-        _ = try upd.setFieldValue("stock", new_stock);
-        _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try upd.Save();
-        return new_stock;
+        const affected = try crud.increment(self.client.points_product, "stock", -amount, &.{
+            preds.tenant_idEQ(.{ .int = tenant_id }),
+            preds.idEQ(.{ .int = id }),
+            zent.sql.RawArgs("stock >= ?", &.{.{ .int = amount }}),
+        });
+        return affected > 0;
+    }
+
+    /// 回补库存（兑换失败的补偿路径）：stock += n，与 `decrementStock` 互逆。
+    pub fn restoreStock(self: *PointsStore, tenant_id: i64, id: i64, amount: i64) !void {
+        const preds = self.client.points_product.predicates;
+        _ = try crud.increment(self.client.points_product, "stock", amount, &.{
+            preds.tenant_idEQ(.{ .int = tenant_id }),
+            preds.idEQ(.{ .int = id }),
+        });
     }
 
     pub fn deleteProduct(self: *PointsStore, id: i64) !void {

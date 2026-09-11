@@ -151,11 +151,12 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
         fn getProduct(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
+            const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的商品 ID");
                 return;
             };
-            const row_opt = self.svc.getProduct(id) catch {
+            const row_opt = self.svc.getProduct(tid, id) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
