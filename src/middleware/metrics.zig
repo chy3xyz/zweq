@@ -4,10 +4,13 @@
 const std = @import("std");
 const zigmodu = @import("zigmodu");
 const http = zigmodu.http;
+const task_service = @import("../modules/task/service.zig");
 
 pub const Metrics = struct {
     collector: http.HttpMetricsCollector,
     started_at: i64,
+    /// Dispatcher 计数器来源(可选,main 里绑定);不持有所有权。
+    dispatcher: ?*task_service.Dispatcher = null,
 
     pub fn init(io: std.Io) Metrics {
         return .{
@@ -51,6 +54,14 @@ pub const Metrics = struct {
         try buf.print(allocator, "# HELP zweq_uptime_seconds Process uptime.\n", .{});
         try buf.print(allocator, "# TYPE zweq_uptime_seconds gauge\n", .{});
         try buf.print(allocator, "zweq_uptime_seconds {d}\n", .{now - self.started_at});
+        if (self.dispatcher) |d| {
+            try buf.print(allocator, "# HELP zweq_tasks_processed_total Background tasks completed successfully.\n", .{});
+            try buf.print(allocator, "# TYPE zweq_tasks_processed_total gauge\n", .{});
+            try buf.print(allocator, "zweq_tasks_processed_total {d}\n", .{d.processed.load(.monotonic)});
+            try buf.print(allocator, "# HELP zweq_tasks_failed_total Background tasks failed (retryable failures and permanent failures).\n", .{});
+            try buf.print(allocator, "# TYPE zweq_tasks_failed_total gauge\n", .{});
+            try buf.print(allocator, "zweq_tasks_failed_total {d}\n", .{d.failed.load(.monotonic)});
+        }
         return buf.toOwnedSlice(allocator);
     }
 };

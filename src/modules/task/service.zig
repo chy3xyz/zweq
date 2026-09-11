@@ -68,8 +68,11 @@ pub const TaskService = struct {
 // ── Dispatcher ─────────────────────────────────────────────────────
 
 /// Task handler: `ctx` is the registered handler context (e.g. the Mailer),
-/// `payload` is the JSON/plain string stored on the task row.
-pub const TaskHandler = *const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, io: std.Io, payload: []const u8) void;
+/// `payload` is the JSON/plain string stored on the task row. Returning an
+/// error marks the task failed/retryable via `markFailedOrRetry` instead of
+/// silently treating it as done. `anyerror` because the registry is open to
+/// future handlers whose failure modes this queue cannot enumerate.
+pub const TaskHandler = *const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, io: std.Io, payload: []const u8) anyerror!void;
 
 pub const Handler = struct {
     name: []const u8,
@@ -140,17 +143,36 @@ pub const Dispatcher = struct {
     }
 
     /// One scheduling pass: requeue stale claims, then run every due task
-    /// (sequentially; SQLite favours a single writer).
+    /// (sequentially; SQLite favours a single writer). Each pass and each
+    /// job run is timed and logged so a hung job is visible instead of
+    /// silently stalling the single worker loop.
     pub fn tick(self: *Dispatcher) void {
+        const tick_start = @import("zigmodu").time.monotonicNow();
         const now = @import("zigmodu").time.wallClockSeconds(self.io);
-        _ = self.store.requeueStale(now, self.stale_after_seconds) catch {};
-        if (self.scheduled) |s| s.tick(now);
+        _ = self.store.requeueStale(now, self.stale_after_seconds) catch |err| {
+            std.log.err("[task] requeueStale 失败: {s}", .{@errorName(err)});
+        };
+        if (self.scheduled) |s| {
+            // scheduled.zig 只读:其内部 job 耗时不可见,只能对整个 s.tick
+            // 计时——某 cleanup job 挂起时会体现为这里的耗时飙升。
+            const sched_start = @import("zigmodu").time.monotonicNow();
+            s.tick(now);
+            const sched_ms = @divTrunc(@import("zigmodu").time.monotonicNow() - sched_start, std.time.ns_per_ms);
+            std.log.info("[task] scheduled tick 完成,耗时 {d}ms", .{sched_ms});
+        }
+        var ran: usize = 0;
         while (true) {
-            const task_opt = self.store.claimNext(now) catch break;
+            const task_opt = self.store.claimNext(now) catch |err| {
+                std.log.err("[task] claimNext 失败,本 tick 提前结束: {s}", .{@errorName(err)});
+                break;
+            };
             const task = task_opt orelse break;
             defer task.free(self.allocator);
             self.runTask(task);
+            ran += 1;
         }
+        const tick_ms = @divTrunc(@import("zigmodu").time.monotonicNow() - tick_start, std.time.ns_per_ms);
+        std.log.info("[task] tick 完成: {d} 个任务,总耗时 {d}ms", .{ ran, tick_ms });
     }
 
     fn runTask(self: *Dispatcher, task: TaskRow) void {
@@ -168,14 +190,24 @@ pub const Dispatcher = struct {
             return;
         };
 
-        handler.run(handler.ctx, self.allocator, self.io, task.payload);
-        // Handlers are synchronous and report failures through the shared
-        // mail/notify sinks; a completed run is treated as done.
+        const run_start = @import("zigmodu").time.monotonicNow();
+        handler.run(handler.ctx, self.allocator, self.io, task.payload) catch |err| {
+            // handler 失败(如 mail.send 的 SMTP 投递失败、payload 非法)走
+            // 既有 markFailedOrRetry 重试链路:未达 max_attempts 重新排队,
+            // 超限标记 failed,任务不再被静默记成功而丢信。
+            const elapsed_ms = @divTrunc(@import("zigmodu").time.monotonicNow() - run_start, std.time.ns_per_ms);
+            std.log.err("[task] {s}#{d} 执行失败: {s} (耗时 {d}ms)", .{ task.name, task.id, @errorName(err), elapsed_ms });
+            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, @errorName(err), wallNow(self), self.retry_interval_seconds) catch {};
+            _ = self.failed.fetchAdd(1, .monotonic);
+            return;
+        };
+        const elapsed_ms = @divTrunc(@import("zigmodu").time.monotonicNow() - run_start, std.time.ns_per_ms);
         self.store.markDone(task.id, wallNow(self)) catch {
             self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, "store error", wallNow(self), self.retry_interval_seconds) catch {};
             _ = self.failed.fetchAdd(1, .monotonic);
             return;
         };
+        std.log.debug("[task] {s}#{d} 执行完成,耗时 {d}ms", .{ task.name, task.id, elapsed_ms });
         _ = self.processed.fetchAdd(1, .monotonic);
     }
 

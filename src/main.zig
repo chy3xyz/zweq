@@ -108,20 +108,28 @@ const CleanupCtx = struct {
 fn jobTokensCleanup(ctx: ?*anyopaque) void {
     const c: *CleanupCtx = @ptrCast(@alignCast(ctx orelse return));
     const now = zigmodu.time.wallClockSeconds(c.io);
-    _ = c.user_store.purgeExpiredPasswordTokens(now, c.password_token_max_age) catch {};
-    _ = c.user_store.purgeExpiredEmailVerifications(now, c.verification_token_max_age) catch {};
+    _ = c.user_store.purgeExpiredPasswordTokens(now, c.password_token_max_age) catch |err| {
+        std.log.err("[cleanup] tokens.cleanup 清理过期密码重置令牌失败: {s}", .{@errorName(err)});
+    };
+    _ = c.user_store.purgeExpiredEmailVerifications(now, c.verification_token_max_age) catch |err| {
+        std.log.err("[cleanup] tokens.cleanup 清理过期邮箱验证令牌失败: {s}", .{@errorName(err)});
+    };
 }
 
 fn jobNotifyPrune(ctx: ?*anyopaque) void {
     const c: *CleanupCtx = @ptrCast(@alignCast(ctx orelse return));
     const now = zigmodu.time.wallClockSeconds(c.io);
-    _ = c.notify_store.purgeOlderThan(now, c.notification_max_age) catch {};
+    _ = c.notify_store.purgeOlderThan(now, c.notification_max_age) catch |err| {
+        std.log.err("[cleanup] notify.prune 清理过期通知失败: {s}", .{@errorName(err)});
+    };
 }
 
 fn jobAuditPrune(ctx: ?*anyopaque) void {
     const c: *CleanupCtx = @ptrCast(@alignCast(ctx orelse return));
     const now = zigmodu.time.wallClockSeconds(c.io);
-    _ = c.audit_store.purgeOlderThan(now, c.audit_retention_seconds) catch {};
+    _ = c.audit_store.purgeOlderThan(now, c.audit_retention_seconds) catch |err| {
+        std.log.err("[cleanup] audit.prune 清理过期审计日志失败: {s}", .{@errorName(err)});
+    };
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -578,6 +586,9 @@ pub fn main(init: std.process.Init) !void {
     var access_log = access_log_mod.AccessLog.init(allocator, 4096);
     defer access_log.deinit();
     var metrics = metrics_mod.Metrics.init(io);
+    // Dispatcher 先于本函数栈创建,其 defer deinit 晚于 server 停止,
+    // HTTP 处理期内始终存活;仅借出计数器读指针,无所有权转移。
+    metrics.dispatcher = &dispatcher;
     try server.addMiddleware(real_ip_mod.realIp());
     try server.addMiddleware(request_log_mod.requestLog());
     try server.addMiddleware(metrics.middleware());

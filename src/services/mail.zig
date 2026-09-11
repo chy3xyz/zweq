@@ -30,6 +30,11 @@ pub const Mailer = struct {
     /// True when the system CA bundle loaded successfully; otherwise the
     /// handshake falls back to `no_verification` (dev / unreachable CA).
     ca_verified: bool = false,
+    /// SMTP 投递失败标志:传输错误时由 `send` 置位,由 `mail.send` 任务
+    /// handler 在发送前后读取并清零(见 `takeSendFailed`),把投递失败
+    /// 上报为任务失败以触发重试。只在 Dispatcher 单 worker 线程上
+    /// 使用,无并发写。
+    send_failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -73,17 +78,27 @@ pub const Mailer = struct {
         self.ca_bundle.deinit(self.allocator);
     }
 
-    /// Deliver a message: log (console sink) and/or SMTP. Never fails the
-    /// caller on transport errors — mail is best-effort and the caller
-    /// already stored the token. Errors are logged and swallowed.
+    /// Deliver a message: log (console sink) and/or SMTP. Signature stays
+    /// `void` so console-only callers (tests) can ignore the result, but a
+    /// transport failure is no longer invisible: it is logged AND recorded
+    /// on `send_failed`, which the `mail.send` task handler polls (see
+    /// `takeSendFailed`) to report the task as failed and trigger the
+    /// dispatcher's retry path instead of silently dropping the mail.
     pub fn send(self: *Mailer, msg: MailMessage) void {
         if (self.console) {
             std.log.info("[mail] to={s} subject=\"{s}\"\n{s}", .{ msg.to, msg.subject, msg.text });
         }
         if (self.host.len == 0) return;
         self.sendSmtp(msg) catch |err| {
+            self.send_failed.store(true, .monotonic);
             std.log.err("[mail] SMTP delivery to {s} failed: {s}", .{ msg.to, @errorName(err) });
         };
+    }
+
+    /// 读取并清零投递失败标志。`mail.send` 任务 handler 在调用 `send`
+    /// 之前(清残留)和之后(取结果)各调用一次;单 worker 串行执行,无竞态。
+    pub fn takeSendFailed(self: *Mailer) bool {
+        return self.send_failed.swap(false, .monotonic);
     }
 
     fn sendSmtp(self: *Mailer, msg: MailMessage) !void {
