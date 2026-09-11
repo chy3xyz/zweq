@@ -82,6 +82,18 @@ pub const DistributionService = struct {
     }
 
     /// 加盟：成为分销员；parent_openid 非空时校验其必须是有效分销员（且不能是自己）。
+    ///
+    /// 并发安全：getByOpenid→createDistributor 之间存在窗口，两并发请求可
+    /// 同时查不到记录而双写两条分销员（上级校验亦各自通过）。Distributor 表
+    /// 无唯一索引（model.zig 未声明 .indexes），此时 zent 的
+    /// SaveIgnore/SaveOrUpdateOn 不适用（同 checkin：INSERT IGNORE 只忽略
+    /// 约束冲突，没有唯一键就没有冲突可忽略）。故保留「先查后插」作快速
+    /// 路径，并把 createDistributor 的唯一键冲突映射为 AlreadyDistributor
+    /// （用户感知不变：「你已经是分销员啦」）。
+    /// 索引建议（本次不动 model.zig）：Distributor 补
+    /// `.indexes = &.{index.Fields(&.{ "tenant_id", "account_id", "openid" }).Unique()}`，
+    /// 补索引后并发双写必有一方触发 UniqueViolation → AlreadyDistributor，
+    /// 窗口才真正关闭。
     pub fn becomeDistributor(self: *DistributionService, tenant_id: i64, account_id: i64, openid: []const u8, parent_openid: []const u8) DistributionError!void {
         if (std.mem.trim(u8, openid, " \t").len == 0) return error.InvalidInput;
         if (self.store.getByOpenid(tenant_id, account_id, openid) catch return error.Unexpected) |existing| {
@@ -95,7 +107,10 @@ pub const DistributionService = struct {
             const p = p_opt orelse return error.InvalidParent;
             p.free(self.allocator);
         }
-        _ = self.store.createDistributor(tenant_id, account_id, openid, parent, self.now()) catch return error.Unexpected;
+        _ = self.store.createDistributor(tenant_id, account_id, openid, parent, self.now()) catch |err| switch (err) {
+            error.UniqueViolation => return error.AlreadyDistributor,
+            else => return error.Unexpected,
+        };
     }
 
     /// 三级分佣：购买者消费 order_amount（分），沿上级链最多 3 级按比例入账。

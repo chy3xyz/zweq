@@ -112,6 +112,18 @@ pub const DrawService = struct {
 
     /// 抽一次：检查每日次数限制 → 加权随机 → 记录中奖。caller free 返回的
     /// DrawResult（prize_name 为 dupe）。
+    ///
+    /// 并发说明：countToday 判定与 create 落库之间存在窗口——已抽
+    /// daily_limit-1 次时，两并发请求可同时通过检查并各插一条，实际超限
+    /// 1 次，本服务无事务/锁可收紧该窗口。DrawRecord 表无唯一索引
+    /// （model.zig 未声明 .indexes），SaveIgnore/SaveOrUpdateOn 不适用（同
+    /// checkin：没有唯一键就没有冲突可忽略/指定）。故保留 count-then-create，
+    /// 并把 create 的唯一键冲突映射为 DailyLimit（用户感知不变：「今日抽奖
+    /// 次数已用完」）。
+    /// 索引建议（本次不动 model.zig）：若业务确定 daily_limit=1，可给
+    /// DrawRecord 补 (tenant_id, account_id, openid, 天序号) 唯一索引——
+    /// 「天序号」需先落成列（或表达式索引）；daily_limit>1 无法用语义行级
+    /// 唯一表达，真正收紧需计数行/事务化，超出本次最小改动范围。
     pub fn draw(self: *DrawService, allocator: std.mem.Allocator, tenant_id: i64, account_id: i64, openid: []const u8, cfg: *const DrawConfig) DrawError!DrawResult {
         const day = @divTrunc(self.now(), 86400);
         if (cfg.daily_limit > 0) {
@@ -121,7 +133,10 @@ pub const DrawService = struct {
         const roll = self.randomU64();
         const idx = pickPrize(cfg.prizes, roll);
         const prize = cfg.prizes[idx];
-        _ = self.store.create(tenant_id, account_id, openid, prize.name, prize.points, self.now()) catch return error.Unexpected;
+        _ = self.store.create(tenant_id, account_id, openid, prize.name, prize.points, self.now()) catch |err| switch (err) {
+            error.UniqueViolation => return error.DailyLimit, // 并发撞唯一键 → 限次语义
+            else => return error.Unexpected,
+        };
         return .{ .prize_name = allocator.dupe(u8, prize.name) catch return error.Unexpected, .points = prize.points };
     }
 

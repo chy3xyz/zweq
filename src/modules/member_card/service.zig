@@ -93,6 +93,18 @@ pub const MemberCardService = struct {
     }
 
     /// 开卡：openid 一卡唯一；自动匹配最低等级（threshold 最小的等级）。
+    ///
+    /// 并发安全：getAccountByOpenid→createAccount 之间存在窗口，两并发请求
+    /// 可同时查不到账户而双开卡。MemberAccount 的 model.zig 注释虽写
+    /// 「openid 唯一：一粉丝一卡」，但未声明 .indexes，表上实际无唯一索引；
+    /// 此时 zent 的 SaveIgnore/SaveOrUpdateOn 不适用（同 checkin：INSERT
+    /// IGNORE 只忽略约束冲突，没有唯一键就没有冲突可忽略）。故保留「先查
+    /// 后插」作快速路径，并把两处 createAccount 的唯一键冲突统一映射为
+    /// AlreadyOpened（用户感知不变：「你已经办过会员卡啦」）。
+    /// 索引建议（本次不动 model.zig）：MemberAccount 补
+    /// `.indexes = &.{index.Fields(&.{ "tenant_id", "account_id", "openid" }).Unique()}`，
+    /// 补索引后并发双开卡必有一方触发 UniqueViolation → AlreadyOpened，窗口
+    /// 才真正关闭。
     pub fn openCard(self: *MemberCardService, tenant_id: i64, account_id: i64, openid: []const u8) MemberCardError!void {
         if (std.mem.trim(u8, openid, " \t").len == 0) return error.InvalidInput;
         if (self.store.getAccountByOpenid(tenant_id, account_id, openid) catch return error.Unexpected) |existing| {
@@ -103,11 +115,17 @@ pub const MemberCardService = struct {
         const base = self.baseLevel(tenant_id, account_id) catch return error.Unexpected;
         const base_id = base orelse {
             // 无等级配置 → 先建默认「普通会员」。
-            _ = self.store.createAccount(tenant_id, account_id, openid, 0, self.now()) catch return error.Unexpected;
+            _ = self.store.createAccount(tenant_id, account_id, openid, 0, self.now()) catch |err| switch (err) {
+                error.UniqueViolation => return error.AlreadyOpened,
+                else => return error.Unexpected,
+            };
             return;
         };
         defer base_id.free(self.allocator);
-        _ = self.store.createAccount(tenant_id, account_id, openid, base_id.id, self.now()) catch return error.Unexpected;
+        _ = self.store.createAccount(tenant_id, account_id, openid, base_id.id, self.now()) catch |err| switch (err) {
+            error.UniqueViolation => return error.AlreadyOpened,
+            else => return error.Unexpected,
+        };
     }
 
     fn baseLevel(self: *MemberCardService, tenant_id: i64, account_id: i64) !?MemberCardLevelRow {

@@ -32,12 +32,29 @@ pub const CheckinService = struct {
 
     /// Record a check-in for `day` (天序号). Returns true when newly checked
     /// in, false when the openid already checked in that day (idempotent).
+    ///
+    /// 并发安全：findByDay→create 之间存在窗口，两并发请求可同时查不到记录
+    /// 而双双落库（双签到双积分）。checkin_record 表当前无
+    /// (tenant_id, account_id, openid, checkin_day) 唯一索引（model.zig 未
+    /// 声明 .indexes），此时 zent 的 SaveIgnore/SaveOrUpdateOn 均不适用：
+    /// INSERT IGNORE / ON CONFLICT DO NOTHING 只忽略「约束冲突」，没有唯一键
+    /// 就没有冲突可忽略，双写仍会落两条；SaveOrUpdateOn 在 PG 上还会因无
+    /// 匹配唯一约束直接报错。故保留「先查后插」作减少冲突的快速路径，并把
+    /// create 的唯一键冲突映射为「今日已签」（返回 false），与单线程重复
+    /// 签到语义一致。
+    /// 索引建议（本次不动 model.zig）：在 CheckinRecord 上补
+    /// `.indexes = &.{index.Fields(&.{ "tenant_id", "account_id", "openid", "checkin_day" }).Unique()}`，
+    /// 补索引后并发双写必有一方触发 UniqueViolation → 落到已签分支，窗口才
+    /// 真正关闭。
     pub fn checkin(self: *CheckinService, tenant_id: i64, account_id: i64, openid: []const u8, day: i64, points: i64) CheckinError!bool {
         if (self.store.findByDay(tenant_id, account_id, openid, day) catch return error.Unexpected) |row| {
             defer row.free(self.allocator);
             return false;
         }
-        _ = self.store.create(tenant_id, account_id, openid, day, points, self.now()) catch return error.Unexpected;
+        _ = self.store.create(tenant_id, account_id, openid, day, points, self.now()) catch |err| switch (err) {
+            error.UniqueViolation => return false, // 并发下他方先落库 → 等同今日已签
+            else => return error.Unexpected,
+        };
         return true;
     }
 
