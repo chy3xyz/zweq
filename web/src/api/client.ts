@@ -1,6 +1,6 @@
 import axios, { type InternalAxiosRequestConfig } from 'axios';
 
-import { unwrapEnvelope, type ApiEnvelope } from '#ui/api/envelope';
+import { ApiError, unwrapEnvelope, type ApiEnvelope } from '#ui/api/envelope';
 import { APP_CONFIG } from '#ui/config';
 
 let authToken: string | null = null;
@@ -53,6 +53,13 @@ http.interceptors.response.use(
     if (status === 401 && !isAuthRequest) {
       setAuthToken(null);
       unauthorizedHandler?.();
+    }
+    // 业务错误（400/404/422/500…）的响应体仍是 envelope 形状：解出服务端
+    // 中文 msg 以 ApiError 形式抛出。否则展示层只会拿到 axios 的英文兜底
+    // 文案（"Request failed with status code 400"），业务消息全部不可见。
+    const data = error.response?.data as { code?: unknown; msg?: unknown } | undefined;
+    if (data && typeof data.code === 'number' && typeof data.msg === 'string' && data.msg) {
+      return Promise.reject(new ApiError(data.code, data.msg));
     }
     return Promise.reject(error);
   },

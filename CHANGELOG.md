@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **钱的正确性（并发竞态/事务）**：支付回调 `markOrderPaid` 改条件更新（`WHERE status='pending'`），重复回调幂等不再重复入账；`completeRecharge` 两写包进同一事务；积分兑换 `decrementStock` 改原子 increment+`RawArgs` 守卫防超卖，`redeem` 三写改补偿流（失败按相反顺序回补）；店铺 `markPaid`/`cancelOrder`/`auditRefund` 幂等+事务化（条件更新 affected 语义：已终态幂等、归属不符 NotFound），消除重复分佣/双回滚库存/重复审核；秒杀 `rush` 落单失败回补库存；`setDefaultAddress` 两写改单语句 CASE 翻转消除双默认。
+- **越领/超发**：任务 `claimNext` 检查 affected（多 worker 不再重复执行）；`member_card.adjustPoints` 两次 increment 合并单条+`points >= ?` 下限守卫；拼团 `joinGroupon` 下单前满员拦截。
+- **越权（IDOR）**：购物车/地址写操作 WHERE 加 openid 归属；`pickupOrder` 加 tenant；C 端 6 处 store 查询补 tenant 过滤（秒杀活动/积分商品/投票/地址快照/拼团/下单商品归属）。
+- **静默失败**：邮件任务 SMTP 失败走既有重试链路（不再记成功丢信）；分销台账/清理 job/cleanup 全部补 `log.err`；27 个 api.zig 约 100 处 `@errorName` 内部错误名不再泄漏给用户。
+- **前端**：业务错误（400/404/500）的中文 msg 现在真正展示给用户（client.ts 非 2xx envelope 解包，此前只显示 axios 英文兜底）；Points 页三 modal 共享提交状态串错（拆为独立 signal）；envelope 泛型 helper 上移到 `client.ts`（约 30 个模块 -463 行样板）。
+
 ### Added
+- **安全**：fan 经济接口（领券/抽奖/兑换/秒杀/提现/开卡/签到/投票）per-openid 限流（10/5/3 次每分档）+ fail-open/closed 统一策略；`shop_invite_record` 加 `UNIQUE(tenant_id, invitee_openid)`，`bindInvite` 改 `SaveIgnore` 幂等；checkin/member_account/distributor/vote_record 补唯一索引（并发撞键映射为已签/已开卡/已加盟/已投票）；`draw_record` 加 `draw_day` 列（不落唯一索引——daily_limit 可配 >1）。
+- **可观测性**：`/metrics` 新增 `zweq_tasks_processed_total`/`zweq_tasks_failed_total`；Dispatcher tick/scheduled/单任务耗时日志。
+- **OpenAPI**：fan 公共 API + payment 共 34 路由补参数注解（45 个参数进 openapi.json），模块顶部 doc comment 承载中文契约（summary/body 结构受 zigmodu `RouteMeta` 字段限制，待库扩展）。
+- CI 前端 job（`npm run typecheck` + `vitest`）。
+
+### Changed
+- 依赖升级（零 breaking）：见下文 zent v0.34.0 条目。
 - RBAC 闭环：`RolePermission` 关联表 + `collectPermissionCodes`（user.admin / 角色 code / module:action）；`GET /auth/me` 返回 `permissions`；角色权限 API `GET|POST|DELETE /roles/{id}/permissions`；前端菜单按 `canAccessAdmin` 隐藏。
 - 小程序商城 C 端登录：`wx.login` → `miniprogram/login`（公开）→ `shop/auth/login` fan JWT；`shopSession` store 替换 `DEMO_OPENID`。
 - CI 增加 `zig build lint-size` 门禁。
