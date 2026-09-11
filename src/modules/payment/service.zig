@@ -5,6 +5,7 @@
 const std = @import("std");
 const zigmodu = @import("zigmodu");
 const zwechat = @import("zwechat");
+const zent = @import("zent");
 const persist = @import("persistence.zig");
 
 pub const WalletRow = persist.WalletRow;
@@ -146,18 +147,25 @@ pub const PaymentService = struct {
         return row;
     }
 
-    /// Complete a recharge: flip pending → paid and credit the wallet.
-    /// Idempotent: a second notify for the same order does nothing.
+    /// Complete a recharge: flip pending → paid and credit the wallet, both
+    /// in one transaction — a failure between the two writes rolls back so the
+    /// user never loses money. Idempotent: a second notify for the same order
+    /// (affected == 0, not pending) does nothing.
     pub fn completeRecharge(self: *PaymentService, tenant_id: i64, order_no: []const u8) PaymentError!bool {
-        const paid = self.store.markOrderPaid(tenant_id, order_no, self.now()) catch return error.Unexpected;
+        var tx = zent.codegen.client.beginTxFromDriver(persist.infos, self.store.client.driver, self.allocator) catch return error.Unexpected;
+        defer tx.deinit();
+
+        const paid = self.store.markOrderPaidOn(tx.client, tenant_id, order_no, self.now()) catch return error.Unexpected;
+        // affected == 0：订单不存在或已是 paid/closed，视为重复回调，幂等成功。
         if (!paid) return false;
-        const row_opt = self.store.getOrderByNo(tenant_id, order_no) catch return error.Unexpected;
+        const row_opt = self.store.getOrderByNoOn(tx.client, tenant_id, order_no) catch return error.Unexpected;
         const row = row_opt orelse return error.OrderNotFound;
         defer row.free(self.allocator);
         const amount_cents = std.fmt.parseInt(i64, row.amount, 10) catch return error.Unexpected;
         if (amount_cents > 0) {
-            _ = self.store.creditWallet(tenant_id, row.account_id, row.fan_id, amount_cents, self.now()) catch return error.Unexpected;
+            _ = self.store.creditWalletOn(tx.client, tenant_id, row.account_id, row.fan_id, amount_cents, self.now()) catch return error.Unexpected;
         }
+        tx.commit() catch return error.Unexpected;
         return true;
     }
 

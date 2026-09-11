@@ -132,9 +132,14 @@ pub const PaymentStore = struct {
     // ── Wallet ────────────────────────────────────────────────────
 
     pub fn getWallet(self: *PaymentStore, tenant_id: i64, account_id: i64, fan_id: i64) !?WalletRow {
-        var q = self.client.wallet.Query();
+        return self.getWalletOn(self.client, tenant_id, account_id, fan_id);
+    }
+
+    /// 事务感知读取，见 `getWallet`。传入 tx.client 时读取的是事务视图。
+    pub fn getWalletOn(self: *PaymentStore, client: anytype, tenant_id: i64, account_id: i64, fan_id: i64) !?WalletRow {
+        var q = client.wallet.Query();
         defer q.deinit();
-        const preds = self.client.wallet.predicates;
+        const preds = client.wallet.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.Where(.{preds.fan_idEQ(.{ .int = fan_id })});
@@ -156,13 +161,18 @@ pub const PaymentStore = struct {
 
     /// Create a wallet (balance 0) if absent, return its id.
     pub fn ensureWallet(self: *PaymentStore, tenant_id: i64, account_id: i64, fan_id: i64, now: i64) !i64 {
-        const existing = try self.getWallet(tenant_id, account_id, fan_id);
+        return self.ensureWalletOn(self.client, tenant_id, account_id, fan_id, now);
+    }
+
+    /// 事务感知版本，见 `ensureWallet`。
+    pub fn ensureWalletOn(self: *PaymentStore, client: anytype, tenant_id: i64, account_id: i64, fan_id: i64, now: i64) !i64 {
+        const existing = try self.getWalletOn(client, tenant_id, account_id, fan_id);
         if (existing) |w| {
             const id = w.id;
             w.free(self.allocator);
             return id;
         }
-        var b = try self.client.wallet.Create();
+        var b = try client.wallet.Create();
         defer b.deinit();
         _ = try b.setFieldValue("tenant_id", tenant_id);
         _ = try b.setFieldValue("account_id", account_id);
@@ -195,17 +205,22 @@ pub const PaymentStore = struct {
 
     /// Add `delta` cents to a fan's wallet. Returns the new balance.
     pub fn creditWallet(self: *PaymentStore, tenant_id: i64, account_id: i64, fan_id: i64, delta: i64, now: i64) !i64 {
-        const wid = try self.ensureWallet(tenant_id, account_id, fan_id, now);
+        return self.creditWalletOn(self.client, tenant_id, account_id, fan_id, delta, now);
+    }
+
+    /// 事务感知版本，见 `creditWallet`。传入 tx.client 时充值与入账在同一事务内。
+    pub fn creditWalletOn(self: *PaymentStore, client: anytype, tenant_id: i64, account_id: i64, fan_id: i64, delta: i64, now: i64) !i64 {
+        const wid = try self.ensureWalletOn(client, tenant_id, account_id, fan_id, now);
         const delta_str = try std.fmt.allocPrint(self.allocator, "{d}", .{delta});
         defer self.allocator.free(delta_str);
-        const preds = self.client.wallet.predicates;
-        var upd = self.client.wallet.Update();
+        const preds = client.wallet.predicates;
+        var upd = client.wallet.Update();
         defer upd.deinit();
         _ = try upd.setExprArgs("balance", "balance + ?", &.{.{ .string = delta_str }});
         _ = try upd.setFieldValue("updated_at", now);
         _ = try upd.Where(.{preds.idEQ(.{ .int = wid })});
         _ = try upd.Save();
-        const current = (try self.getWallet(tenant_id, account_id, fan_id)) orelse return error.Unexpected;
+        const current = (try self.getWalletOn(client, tenant_id, account_id, fan_id)) orelse return error.Unexpected;
         defer current.free(self.allocator);
         return try std.fmt.parseInt(i64, current.balance, 10);
     }
@@ -247,9 +262,14 @@ pub const PaymentStore = struct {
     }
 
     pub fn getOrderByNo(self: *PaymentStore, tenant_id: i64, order_no: []const u8) !?RechargeOrderRow {
-        var q = self.client.recharge_order.Query();
+        return self.getOrderByNoOn(self.client, tenant_id, order_no);
+    }
+
+    /// 事务感知读取，见 `getOrderByNo`。
+    pub fn getOrderByNoOn(self: *PaymentStore, client: anytype, tenant_id: i64, order_no: []const u8) !?RechargeOrderRow {
+        var q = client.recharge_order.Query();
         defer q.deinit();
-        const preds = self.client.recharge_order.predicates;
+        const preds = client.recharge_order.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.order_noEQ(.{ .string = order_no })});
         _ = q.Limit(1);
@@ -262,19 +282,26 @@ pub const PaymentStore = struct {
     /// Atomically flip a pending order to paid. Returns false when the order
     /// was not pending (idempotency guard for duplicate payment notifies).
     pub fn markOrderPaid(self: *PaymentStore, tenant_id: i64, order_no: []const u8, now: i64) !bool {
-        const row_opt = try self.getOrderByNo(tenant_id, order_no);
-        const row = row_opt orelse return false;
-        defer row.free(self.allocator);
-        if (!std.mem.eql(u8, row.status, "pending")) return false;
-        const preds = self.client.recharge_order.predicates;
-        var upd = self.client.recharge_order.Update();
+        return self.markOrderPaidOn(self.client, tenant_id, order_no, now);
+    }
+
+    /// 事务感知版本，见 `markOrderPaid`。状态守卫放进 WHERE（条件更新
+    /// status='pending'），由数据库保证并发回调只有一个能翻转成功；
+    /// affected 为 0 表示订单不存在或非 pending（重复回调），由调用方按幂等成功处理。
+    pub fn markOrderPaidOn(_: *PaymentStore, client: anytype, tenant_id: i64, order_no: []const u8, now: i64) !bool {
+        const preds = client.recharge_order.predicates;
+        var upd = client.recharge_order.Update();
         defer upd.deinit();
         _ = try upd.set("status", .{ .string = "paid" });
         _ = try upd.setFieldValue("paid_at", now);
         _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{preds.idEQ(.{ .int = row.id })});
-        _ = try upd.Save();
-        return true;
+        _ = try upd.Where(.{
+            preds.tenant_idEQ(.{ .int = tenant_id }),
+            preds.order_noEQ(.{ .string = order_no }),
+            preds.statusEQ(.{ .string = "pending" }),
+        });
+        const affected = try upd.Save();
+        return affected > 0;
     }
 
     pub fn listOrders(self: *PaymentStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !RechargeOrderListResult {
