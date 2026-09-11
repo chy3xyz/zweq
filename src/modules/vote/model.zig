@@ -5,6 +5,7 @@
 
 const zent = @import("zent");
 const field = zent.core.field;
+const index = zent.core.index;
 const Schema = zent.core.schema.Schema;
 
 /// 投票主题。options_json = `["选项A","选项B",...]`。
@@ -27,6 +28,11 @@ pub const VoteRecord = Schema("VoteRecord", .{
         field.String("openid"),
         field.Int("vote_id"),
         field.Int("option_index").Default(0),
+    },
+    .indexes = &.{
+        // 一人一票：同租户/投票/粉丝唯一；重复投票由唯一键冲突兜底为
+        // AlreadyVoted（service 已做先查后插 + 冲突映射）。
+        index.Fields(&.{ "tenant_id", "vote_id", "openid" }).Unique(),
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

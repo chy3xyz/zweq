@@ -6,6 +6,7 @@
 
 const zent = @import("zent");
 const field = zent.core.field;
+const index = zent.core.index;
 const Schema = zent.core.schema.Schema;
 
 /// 卡等级。discount 为折扣（千分比，900=9折），points_ratio 积分倍率（100=1倍）。
@@ -32,6 +33,11 @@ pub const MemberAccount = Schema("MemberAccount", .{
         field.Int("level_id").Default(0),
         field.Int("points").Default(0), // 积分余额
         field.Int("total_points").Default(0), // 累计获得积分（升级依据）
+    },
+    .indexes = &.{
+        // 一粉丝一卡：同租户/公众号/粉丝唯一；重复开卡由唯一键冲突
+        // 兜底为 AlreadyOpened（service 已做先查后插 + 冲突映射）。
+        index.Fields(&.{ "tenant_id", "account_id", "openid" }).Unique(),
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

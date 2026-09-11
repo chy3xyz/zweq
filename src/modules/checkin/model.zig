@@ -7,6 +7,7 @@
 
 const zent = @import("zent");
 const field = zent.core.field;
+const index = zent.core.index;
 const Schema = zent.core.schema.Schema;
 
 pub const CheckinRecord = Schema("CheckinRecord", .{
@@ -16,6 +17,11 @@ pub const CheckinRecord = Schema("CheckinRecord", .{
         field.String("openid"),
         field.Int("checkin_day").Default(0),
         field.Int("points").Default(0),
+    },
+    .indexes = &.{
+        // 当天仅一次签到：同租户/公众号/粉丝/天序号唯一；并发双写由唯一
+        // 键冲突兜底为「今日已签」（service 将 UniqueViolation 映射为已签分支）。
+        index.Fields(&.{ "tenant_id", "account_id", "openid", "checkin_day" }).Unique(),
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

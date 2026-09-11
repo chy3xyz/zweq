@@ -6,6 +6,7 @@
 
 const zent = @import("zent");
 const field = zent.core.field;
+const index = zent.core.index;
 const Schema = zent.core.schema.Schema;
 
 /// 分销员。parent_openid 为上级分销员（空 = 无上级）。
@@ -18,6 +19,11 @@ pub const Distributor = Schema("Distributor", .{
         field.Decimal("commission_balance").Default("0"), // 佣金余额（分）
         field.Decimal("total_commission").Default("0"), // 累计佣金（分）
         field.Int("status").Default(1), // 1=active
+    },
+    .indexes = &.{
+        // 一粉丝一分销身份：同租户/公众号/粉丝唯一；重复加盟由唯一键
+        // 冲突兜底为 AlreadyDistributor（service 已做先查后插 + 冲突映射）。
+        index.Fields(&.{ "tenant_id", "account_id", "openid" }).Unique(),
     },
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

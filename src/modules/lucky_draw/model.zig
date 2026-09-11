@@ -13,8 +13,14 @@ pub const DrawRecord = Schema("DrawRecord", .{
         field.Int("tenant_id").Default(1),
         field.Int("account_id"),
         field.String("openid"),
+        // 天序号（Unix 秒 / 86400），与 checkin_day 同口径；由落库方写入。
+        field.Int("draw_day").Default(0),
         field.String("prize_name").Default(""),
         field.Int("points").Default(0),
     },
+    // 注意：此处刻意不加 (tenant_id, account_id, openid, draw_day) 唯一索引。
+    // daily_limit 是租户可配字段（0=不限,可配 3 等 >1 值,见 LuckyDraw.tsx），
+    // 行级唯一会把 daily_limit>1 的合法配置退化为每天 1 次。并发超限窗口由
+    // service 层 count-then-create + 注释说明承接（见 service.zig draw）。
     .mixins = &.{zent.core.mixin.TimeMixin},
 });

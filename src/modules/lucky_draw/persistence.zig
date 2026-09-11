@@ -66,6 +66,8 @@ pub const DrawStore = struct {
             .tenant_id = tenant_id,
             .account_id = account_id,
             .openid = openid,
+            // 天序号与 countToday 的 day 参数同口径（now/86400），供按天统计。
+            .draw_day = @divTrunc(now, 86400),
             .prize_name = prize_name,
             .points = points,
             .created_at = now,
