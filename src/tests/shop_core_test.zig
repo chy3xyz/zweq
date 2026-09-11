@@ -235,12 +235,12 @@ test "shop: cart/address/order trade lifecycle (Phase2)" {
     defer o2.free(allocator);
     try std.testing.expectEqual(@as(i64, 3), o2.status);
     try std.testing.expectEqualStrings("顺丰", o2.express_company);
-    try std.testing.expectError(error.OrderStateConflict, svc.cancelOrder(order_id));
+    try std.testing.expectError(error.OrderStateConflict, svc.cancelOrder(1, "o_buyer", order_id));
 
     // 清理购物车/地址。
-    try svc.updateCart(cart_id, 1);
-    try svc.deleteCart(cart_id);
-    try svc.deleteAddress(addr_id);
+    try svc.updateCart(1, "o_buyer", cart_id, 1);
+    try svc.deleteCart(1, "o_buyer", cart_id);
+    try svc.deleteAddress(1, "o_buyer", addr_id);
 }
 
 test "shop: refund apply/audit + comment + distribution hookup (Phase3)" {
@@ -474,7 +474,7 @@ test "shop: idempotency + stock restore on cancel (production hardening)" {
     try std.testing.expectEqual(@as(i64, 7), sku_after.stock);
 
     // 取消 → 库存回滚（7→10），销量回退。
-    try svc.cancelOrder(o1);
+    try svc.cancelOrder(1, "o_r", o1);
     const sku_restored = (try svc.getSku(skus[0].id)).?;
     defer sku_restored.free(allocator);
     try std.testing.expectEqual(@as(i64, 10), sku_restored.stock);
@@ -553,7 +553,7 @@ test "shop: favorite + order stats (production extras)" {
     const o2 = try svc.createOrder(1, 9, "o_s", addr_id, &.{
         .{ .product_id = pid2, .sku_id = s1[0].id, .quantity = 1 },
     }, "", "", "", 0, "");
-    try svc.cancelOrder(o2); // 取消
+    try svc.cancelOrder(1, "o_s", o2); // 取消
     _ = try svc.createOrder(1, 9, "o_s", addr_id, &.{
         .{ .product_id = pid1, .sku_id = s1[0].id, .quantity = 1 },
     }, "", "", "", 0, ""); // 待支付

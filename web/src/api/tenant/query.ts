@@ -1,13 +1,7 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { getEnvelope, postEnvelope, putEnvelope } from '#ui/api/client';
 
 import { TENANT_PATH, tenantDetail, tenantListQuery } from './path';
 import type { CreateTenantRequest, TenantItem, TenantListResult, UpdateTenantRequest } from './types';
-
-async function getEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
 
 export async function listTenants(
   page: number,
@@ -19,13 +13,11 @@ export async function listTenants(
 }
 
 export async function createTenant(body: CreateTenantRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(TENANT_PATH.create, body);
-  return unwrapEnvelope(data);
+  return postEnvelope<{ id: number }>(TENANT_PATH.create, body);
 }
 
 export async function updateTenant(id: number, body: UpdateTenantRequest): Promise<void> {
-  const { data } = await http.put<{ code: number; msg: string; data: null }>(tenantDetail(id), body);
-  unwrapEnvelope(data);
+  await putEnvelope<null>(tenantDetail(id), body);
 }
 
 export type { TenantItem, TenantListResult };

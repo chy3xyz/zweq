@@ -1,5 +1,4 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { deleteEnvelope, getEnvelope, postEnvelope, putEnvelope } from '#ui/api/client';
 
 import { ACCOUNT_PATH, accountDetail, accountListQuery, accountWechat } from './path';
 import type {
@@ -10,11 +9,6 @@ import type {
   UpdateAccountRequest,
   WechatConfigItem,
 } from './types';
-
-async function getEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
 
 export async function listAccounts(
   page: number,
@@ -27,18 +21,15 @@ export async function listAccounts(
 }
 
 export async function createAccount(body: CreateAccountRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(ACCOUNT_PATH.create, body);
-  return unwrapEnvelope(data);
+  return postEnvelope<{ id: number }>(ACCOUNT_PATH.create, body);
 }
 
 export async function updateAccount(id: number, body: UpdateAccountRequest): Promise<void> {
-  const { data } = await http.put<{ code: number; msg: string; data: null }>(accountDetail(id), body);
-  unwrapEnvelope(data);
+  await putEnvelope<null>(accountDetail(id), body);
 }
 
 export async function deleteAccount(id: number): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(accountDetail(id));
-  unwrapEnvelope(data);
+  await deleteEnvelope<null>(accountDetail(id));
 }
 
 export async function getWechatConfig(id: number): Promise<WechatConfigItem | null> {
@@ -46,8 +37,7 @@ export async function getWechatConfig(id: number): Promise<WechatConfigItem | nu
 }
 
 export async function setWechatConfig(id: number, body: SetWechatConfigRequest): Promise<void> {
-  const { data } = await http.put<{ code: number; msg: string; data: null }>(accountWechat(id), body);
-  unwrapEnvelope(data);
+  await putEnvelope<null>(accountWechat(id), body);
 }
 
 export type { AccountItem, AccountListResult };

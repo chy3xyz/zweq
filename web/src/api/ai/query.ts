@@ -1,5 +1,4 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { getEnvelope, http, postEnvelope, putEnvelope } from '#ui/api/client';
 
 import {
   AI_PATH,
@@ -24,16 +23,6 @@ import type {
   AiSkillsResult,
   AiWorkflowResult,
 } from './types';
-
-async function getEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
-
-async function postEnvelope<T>(path: string, body?: unknown): Promise<T> {
-  const { data } = await http.post<{ code: number; msg: string; data: T }>(path, body ?? {});
-  return unwrapEnvelope(data);
-}
 
 export async function listAiSessions(page: number, pageSize: number): Promise<AiSessionListResult> {
   return getEnvelope<AiSessionListResult>(aiSessionsQuery(page, pageSize));
@@ -83,8 +72,7 @@ export async function updateAiProvider(
     enabled: boolean;
   }>,
 ): Promise<void> {
-  const { data } = await http.put<{ code: number; msg: string; data: null }>(aiProviderDetail(id), body);
-  unwrapEnvelope(data);
+  await putEnvelope<null>(aiProviderDetail(id), body);
 }
 
 export async function deleteAiProvider(id: number): Promise<void> {

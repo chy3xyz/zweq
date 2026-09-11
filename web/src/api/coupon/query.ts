@@ -1,5 +1,4 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { deleteEnvelope, getEnvelope, postEnvelope, putEnvelope } from '#ui/api/client';
 
 import { couponListQuery, couponUsersQuery, COUPON_PATH } from './path';
 import type {
@@ -18,57 +17,49 @@ export async function listCoupons(
   keyword = '',
   status = -1,
 ): Promise<CouponListResult> {
-  const { data } = await http.get<{ code: number; msg: string; data: CouponListResult }>(
+  return getEnvelope<CouponListResult>(
     couponListQuery(accountId, page, pageSize, keyword, status),
   );
-  return unwrapEnvelope(data);
 }
 
 export async function setCouponStatus(id: number, status: number): Promise<void> {
-  const { data } = await http.put<{ code: number; msg: string; data: null }>(
+  await putEnvelope<null>(
     `${COUPON_PATH.coupon(id)}/status`,
     { status },
   );
-  unwrapEnvelope(data);
 }
 
 export async function createCoupon(body: CreateCouponRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(
+  return postEnvelope<{ id: number }>(
     COUPON_PATH.create,
     body,
   );
-  return unwrapEnvelope(data);
 }
 
 export async function getCoupon(id: number): Promise<CouponItem> {
-  const { data } = await http.get<{ code: number; msg: string; data: CouponItem }>(COUPON_PATH.coupon(id));
-  return unwrapEnvelope(data);
+  return getEnvelope<CouponItem>(COUPON_PATH.coupon(id));
 }
 
 export async function updateCoupon(id: number, body: UpdateCouponRequest): Promise<{ id: number }> {
-  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(
+  return putEnvelope<{ id: number }>(
     COUPON_PATH.coupon(id),
     body,
   );
-  return unwrapEnvelope(data);
 }
 
 export async function deleteCoupon(id: number): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(COUPON_PATH.coupon(id));
-  unwrapEnvelope(data);
+  await deleteEnvelope<null>(COUPON_PATH.coupon(id));
 }
 
 export async function claimCoupon(id: number, openid: string): Promise<{ code: string }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { code: string } }>(
+  return postEnvelope<{ code: string }>(
     COUPON_PATH.claim(id),
     { openid },
   );
-  return unwrapEnvelope(data);
 }
 
 export async function useCoupon(code: string): Promise<void> {
-  const { data } = await http.post<{ code: number; msg: string; data: null }>(COUPON_PATH.use, { code });
-  unwrapEnvelope(data);
+  await postEnvelope<null>(COUPON_PATH.use, { code });
 }
 
 export async function listCouponUsers(
@@ -78,10 +69,9 @@ export async function listCouponUsers(
   keyword = '',
   status = '',
 ): Promise<CouponUserListResult> {
-  const { data } = await http.get<{ code: number; msg: string; data: CouponUserListResult }>(
+  return getEnvelope<CouponUserListResult>(
     couponUsersQuery(accountId, page, pageSize, keyword, status),
   );
-  return unwrapEnvelope(data);
 }
 
 export type { CouponItem, CouponListResult, CouponUserItem, CouponUserListResult, CreateCouponRequest, UpdateCouponRequest };

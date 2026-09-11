@@ -1,5 +1,4 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { getEnvelope, postEnvelope } from '#ui/api/client';
 
 import { commissionsQuery, distributorsQuery, DISTRIBUTION_PATH } from './path';
 import type {
@@ -19,10 +18,9 @@ export async function listDistributors(
   keyword = '',
   status = -1,
 ): Promise<DistributorListResult> {
-  const { data } = await http.get<{ code: number; msg: string; data: DistributorListResult }>(
+  return getEnvelope<DistributorListResult>(
     distributorsQuery(accountId, page, pageSize, keyword, status),
   );
-  return unwrapEnvelope(data);
 }
 
 export async function listCommissions(
@@ -32,34 +30,30 @@ export async function listCommissions(
   keyword = '',
   level = -1,
 ): Promise<CommissionListResult> {
-  const { data } = await http.get<{ code: number; msg: string; data: CommissionListResult }>(
+  return getEnvelope<CommissionListResult>(
     commissionsQuery(accountId, page, pageSize, keyword, level),
   );
-  return unwrapEnvelope(data);
 }
 
 export async function joinDistributor(accountId: number, body: JoinDistributorRequest): Promise<void> {
-  const { data } = await http.post<{ code: number; msg: string; data: null }>(DISTRIBUTION_PATH.join, body);
-  unwrapEnvelope(data);
+  await postEnvelope<null>(DISTRIBUTION_PATH.join, body);
 }
 
 export async function distributeCommission(
   accountId: number,
   body: DistributeRequest,
 ): Promise<{ count: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { count: number } }>(
+  return postEnvelope<{ count: number }>(
     DISTRIBUTION_PATH.distribute,
     body,
   );
-  return unwrapEnvelope(data);
 }
 
 export async function withdrawCommission(
   accountId: number,
   body: DistributorWithdrawRequest,
 ): Promise<void> {
-  const { data } = await http.post<{ code: number; msg: string; data: null }>(DISTRIBUTION_PATH.withdraw, body);
-  unwrapEnvelope(data);
+  await postEnvelope<null>(DISTRIBUTION_PATH.withdraw, body);
 }
 
 export type {

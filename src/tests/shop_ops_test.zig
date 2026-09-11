@@ -97,8 +97,8 @@ test "shop: outlet CRUD + self-pickup verification code" {
 
     // 支付 → 核销：错误码拒绝，正确码成功（状态 3）。
     try svc.markPaid(1, 9, order_id);
-    try std.testing.expectError(error.InvalidInput, svc.pickupOrder(order_id, "000000"));
-    try svc.pickupOrder(order_id, o.pickup_code);
+    try std.testing.expectError(error.InvalidInput, svc.pickupOrder(1, order_id, "000000"));
+    try svc.pickupOrder(1, order_id, o.pickup_code);
     var o2 = (try svc.getOrder(order_id)).?;
     defer o2.free(allocator);
     try std.testing.expectEqual(@as(i64, 3), o2.status);
@@ -108,7 +108,7 @@ test "shop: outlet CRUD + self-pickup verification code" {
         .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
     }, "", "", "", 0, "");
     try svc.markPaid(1, 9, order_delivery);
-    try std.testing.expectError(error.OrderStateConflict, svc.pickupOrder(order_delivery, "123456"));
+    try std.testing.expectError(error.OrderStateConflict, svc.pickupOrder(1, order_delivery, "123456"));
 
     try svc.deleteOutlet(outlet_id);
 }
@@ -271,7 +271,7 @@ test "shop: groupon open/join/success lifecycle" {
 
     // 开团：leader o_g1，团价 8000 下单。
     const team_id = try svc.openGroupon(1, 9, "o_g1", addr_id, gid, skus[0].id);
-    var team = (try store.marketing.getTeam(team_id)).?;
+    var team = (try store.marketing.getTeam(1, team_id)).?;
     defer team.free(allocator);
     try std.testing.expectEqual(@as(i64, 1), team.current);
     try std.testing.expectEqual(@as(i64, 0), team.status); // 拼团中
@@ -286,7 +286,7 @@ test "shop: groupon open/join/success lifecycle" {
         .is_default = 1,
     });
     _ = try svc.joinGroupon(1, 9, "o_g2", addr2, team_id, skus[0].id);
-    var team2 = (try store.marketing.getTeam(team_id)).?;
+    var team2 = (try store.marketing.getTeam(1, team_id)).?;
     defer team2.free(allocator);
     try std.testing.expectEqual(@as(i64, 2), team2.current);
     try std.testing.expectEqual(@as(i64, 1), team2.status); // 成团

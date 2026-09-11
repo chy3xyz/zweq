@@ -1,5 +1,4 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { deleteEnvelope, getEnvelope, postEnvelope, putEnvelope } from '#ui/api/client';
 
 import { fileDetail, MATERIAL_PATH, newsDetail, pagedQuery } from './path';
 import type {
@@ -14,11 +13,6 @@ import type {
   UploadNewsRequest,
 } from './types';
 
-async function getEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
-
 export async function listNews(
   page: number,
   pageSize: number,
@@ -29,18 +23,15 @@ export async function listNews(
 }
 
 export async function createNews(body: CreateNewsRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(MATERIAL_PATH.news, body);
-  return unwrapEnvelope(data);
+  return postEnvelope<{ id: number }>(MATERIAL_PATH.news, body);
 }
 
 export async function updateNews(id: number, body: UpdateNewsRequest): Promise<void> {
-  const { data } = await http.put<{ code: number; msg: string; data: null }>(newsDetail(id), body);
-  unwrapEnvelope(data);
+  await putEnvelope<null>(newsDetail(id), body);
 }
 
 export async function deleteNews(id: number): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(newsDetail(id));
-  unwrapEnvelope(data);
+  await deleteEnvelope<null>(newsDetail(id));
 }
 
 export async function listMaterialFiles(page: number, pageSize: number, accountId: number, kind?: string): Promise<MaterialFileListResult> {
@@ -48,35 +39,30 @@ export async function listMaterialFiles(page: number, pageSize: number, accountI
 }
 
 export async function createMaterialFile(body: CreateFileRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(MATERIAL_PATH.files, body);
-  return unwrapEnvelope(data);
+  return postEnvelope<{ id: number }>(MATERIAL_PATH.files, body);
 }
 
 export async function deleteMaterialFile(id: number): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(fileDetail(id));
-  unwrapEnvelope(data);
+  await deleteEnvelope<null>(fileDetail(id));
 }
 
 export async function syncNews(accountId: number): Promise<void> {
-  const { data } = await http.post<{ code: number; msg: string; data: null }>(
+  await postEnvelope<null>(
     `${MATERIAL_PATH.syncNews}?${new URLSearchParams({ account_id: String(accountId) }).toString()}`,
   );
-  unwrapEnvelope(data);
 }
 
 export async function syncFiles(accountId: number, kind: MaterialKind): Promise<void> {
-  const { data } = await http.post<{ code: number; msg: string; data: null }>(
+  await postEnvelope<null>(
     `${MATERIAL_PATH.syncFiles}?${new URLSearchParams({ account_id: String(accountId), kind }).toString()}`,
   );
-  unwrapEnvelope(data);
 }
 
 export async function uploadNews(body: UploadNewsRequest): Promise<{ media_id: string }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { media_id: string } }>(
+  return postEnvelope<{ media_id: string }>(
     MATERIAL_PATH.uploadNews,
     body,
   );
-  return unwrapEnvelope(data);
 }
 
 export type { MaterialFileItem, NewsItem };

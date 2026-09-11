@@ -1,18 +1,7 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { getEnvelope, http, postEnvelope } from '#ui/api/client';
 
 import { TASK_PATH, taskCancel, taskDetail, taskListQuery, taskRetry } from './path';
 import type { TaskItem, TaskListResult, TaskStats } from './types';
-
-async function getEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
-
-async function postEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.post<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
 
 export async function listTasks(page: number, pageSize: number, status?: string): Promise<TaskListResult> {
   return getEnvelope<TaskListResult>(taskListQuery(page, pageSize, status));

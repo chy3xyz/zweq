@@ -66,7 +66,7 @@ test "points: redeem deducts points + stock, rejects insufficient/out-of-stock" 
     const fan = (try fan_store.getByOpenid(1, 5, "o_p")).?;
     defer fan.free(allocator);
     try std.testing.expectEqual(@as(i64, 0), fan.points);
-    const prod = (try svc.getProduct(pid)).?;
+    const prod = (try svc.getProduct(1, pid)).?;
     defer prod.free(allocator);
     try std.testing.expectEqual(@as(i64, 4), prod.stock);
     const orders = try svc.listOrders(1, 5, null);
@@ -470,13 +470,13 @@ test "seckill: rush lifecycle + atomic stock + dedup" {
 
     // 抢 1 件成功，sold=1。
     _ = try svc.rush(1, 9, "o_a", aid, 1);
-    const a1 = (try svc.getActivity(aid)).?;
+    const a1 = (try svc.getActivity(1, aid)).?;
     defer a1.free(allocator);
     try std.testing.expectEqual(@as(i64, 1), a1.sold);
 
     // 另一用户抢 1 件，sold=2（库存耗尽）。
     _ = try svc.rush(1, 9, "o_b", aid, 1);
-    const a2 = (try svc.getActivity(aid)).?;
+    const a2 = (try svc.getActivity(1, aid)).?;
     defer a2.free(allocator);
     try std.testing.expectEqual(@as(i64, 2), a2.sold);
 

@@ -1,5 +1,4 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { deleteEnvelope, getEnvelope, postEnvelope, putEnvelope } from '#ui/api/client';
 
 import { seckillListQuery, seckillOrdersQuery, SECKILL_PATH } from './path';
 import type {
@@ -17,59 +16,52 @@ export async function listSeckills(
   keyword = '',
   status = -1,
 ): Promise<SeckillListResult> {
-  const { data } = await http.get<{ code: number; msg: string; data: SeckillListResult }>(
+  return getEnvelope<SeckillListResult>(
     seckillListQuery(accountId, page, pageSize, keyword, status),
   );
-  return unwrapEnvelope(data);
 }
 
 export async function createSeckill(body: CreateSeckillRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(
+  return postEnvelope<{ id: number }>(
     SECKILL_PATH.create,
     body,
   );
-  return unwrapEnvelope(data);
 }
 
 export async function getSeckill(id: number): Promise<SeckillActivityItem> {
-  const { data } = await http.get<{ code: number; msg: string; data: SeckillActivityItem }>(
+  return getEnvelope<SeckillActivityItem>(
     SECKILL_PATH.seckill(id),
   );
-  return unwrapEnvelope(data);
 }
 
 export async function updateSeckill(
   id: number,
   body: UpdateSeckillRequest,
 ): Promise<{ id: number }> {
-  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(
+  return putEnvelope<{ id: number }>(
     SECKILL_PATH.seckill(id),
     body,
   );
-  return unwrapEnvelope(data);
 }
 
 export async function deleteSeckill(id: number): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(
+  await deleteEnvelope<null>(
     SECKILL_PATH.seckill(id),
   );
-  unwrapEnvelope(data);
 }
 
 export async function rushSeckill(id: number, openid: string, quantity = 1): Promise<void> {
-  const { data } = await http.post<{ code: number; msg: string; data: null }>(SECKILL_PATH.rush(id), {
+  await postEnvelope<null>(SECKILL_PATH.rush(id), {
     openid,
     quantity,
   });
-  unwrapEnvelope(data);
 }
 
 export async function setSeckillStatus(id: number, status: number): Promise<void> {
-  const { data } = await http.put<{ code: number; msg: string; data: null }>(
+  await putEnvelope<null>(
     SECKILL_PATH.status(id),
     { status },
   );
-  unwrapEnvelope(data);
 }
 
 export interface SeckillOrderListResult {
@@ -85,10 +77,9 @@ export async function listSeckillOrders(
   pageSize: number,
   keyword = '',
 ): Promise<SeckillOrderListResult> {
-  const { data } = await http.get<{ code: number; msg: string; data: SeckillOrderListResult }>(
+  return getEnvelope<SeckillOrderListResult>(
     seckillOrdersQuery(accountId, page, pageSize, keyword),
   );
-  return unwrapEnvelope(data);
 }
 
 export type {

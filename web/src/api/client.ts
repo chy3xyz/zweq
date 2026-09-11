@@ -1,5 +1,6 @@
 import axios, { type InternalAxiosRequestConfig } from 'axios';
 
+import { unwrapEnvelope, type ApiEnvelope } from '#ui/api/envelope';
 import { APP_CONFIG } from '#ui/config';
 
 let authToken: string | null = null;
@@ -56,3 +57,26 @@ http.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+// Envelope helpers shared by every module's query.ts ({ code, msg, data };
+// code === 0 means success). postEnvelope defaults the body to `{}` so
+// bodyless POSTs behave like the auth module's explicit `{}` calls.
+export async function getEnvelope<T>(path: string): Promise<T> {
+  const { data } = await http.get<ApiEnvelope<T>>(path);
+  return unwrapEnvelope(data);
+}
+
+export async function postEnvelope<T>(path: string, body: unknown = {}): Promise<T> {
+  const { data } = await http.post<ApiEnvelope<T>>(path, body);
+  return unwrapEnvelope(data);
+}
+
+export async function putEnvelope<T>(path: string, body: unknown): Promise<T> {
+  const { data } = await http.put<ApiEnvelope<T>>(path, body);
+  return unwrapEnvelope(data);
+}
+
+export async function deleteEnvelope<T>(path: string): Promise<T> {
+  const { data } = await http.delete<ApiEnvelope<T>>(path);
+  return unwrapEnvelope(data);
+}

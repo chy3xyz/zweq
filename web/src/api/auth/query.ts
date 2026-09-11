@@ -1,5 +1,5 @@
-import { http } from '#ui/api/client';
-import { ApiError, unwrapEnvelope } from '#ui/api/envelope';
+import { getEnvelope, postEnvelope, putEnvelope } from '#ui/api/client';
+import { ApiError } from '#ui/api/envelope';
 
 import { AUTH_PATH } from './path';
 import type {
@@ -13,21 +13,6 @@ import type {
   UpdateProfileRequest,
   ChangePasswordRequest,
 } from './types';
-
-async function postEnvelope<T>(path: string, body: unknown): Promise<T> {
-  const { data } = await http.post<{ code: number; msg: string; data: T }>(path, body);
-  return unwrapEnvelope(data);
-}
-
-async function getEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
-
-async function putEnvelope<T>(path: string, body: unknown): Promise<T> {
-  const { data } = await http.put<{ code: number; msg: string; data: T }>(path, body);
-  return unwrapEnvelope(data);
-}
 
 export async function login(body: LoginRequest): Promise<LoginResult> {
   return postEnvelope<LoginResult>(AUTH_PATH.login, body);

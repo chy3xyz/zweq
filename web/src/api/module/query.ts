@@ -1,26 +1,18 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { deleteEnvelope, getEnvelope, postEnvelope, putEnvelope } from '#ui/api/client';
 
 import { accountModule, accountModuleConfig, accountModules, MODULE_PATH, moduleListQuery } from './path';
 import type { AdminNavItem, BindingItem, BindModuleRequest, ModuleConfigResponse, ModuleItem, ModuleListResult, RegisterModuleRequest, UpdateModuleConfigRequest, UpdateModuleRequest } from './types';
-
-async function getEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
 
 export async function listModules(page: number, pageSize: number, keyword?: string): Promise<ModuleListResult> {
   return getEnvelope<ModuleListResult>(moduleListQuery(page, pageSize, keyword));
 }
 
 export async function registerModule(body: RegisterModuleRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(MODULE_PATH.create, body);
-  return unwrapEnvelope(data);
+  return postEnvelope<{ id: number }>(MODULE_PATH.create, body);
 }
 
 export async function updateModule(id: number, body: UpdateModuleRequest): Promise<{ id: number }> {
-  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(MODULE_PATH.update(id), body);
-  return unwrapEnvelope(data);
+  return putEnvelope<{ id: number }>(MODULE_PATH.update(id), body);
 }
 
 export async function listAccountModules(accountId: number): Promise<BindingItem[]> {
@@ -29,13 +21,11 @@ export async function listAccountModules(accountId: number): Promise<BindingItem
 }
 
 export async function bindModule(accountId: number, body: BindModuleRequest): Promise<{ id: number }> {
-  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(accountModules(accountId), body);
-  return unwrapEnvelope(data);
+  return putEnvelope<{ id: number }>(accountModules(accountId), body);
 }
 
 export async function unbindModule(accountId: number, module: string): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(accountModule(accountId, module));
-  unwrapEnvelope(data);
+  await deleteEnvelope<null>(accountModule(accountId, module));
 }
 
 export async function getModuleConfig(accountId: number, module: string): Promise<ModuleConfigResponse> {
@@ -47,8 +37,7 @@ export async function updateModuleConfig(
   module: string,
   body: UpdateModuleConfigRequest,
 ): Promise<{ id: number }> {
-  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(accountModuleConfig(accountId, module), body);
-  return unwrapEnvelope(data);
+  return putEnvelope<{ id: number }>(accountModuleConfig(accountId, module), body);
 }
 
 export async function getAdminNav(accountId?: number | null): Promise<AdminNavItem[]> {

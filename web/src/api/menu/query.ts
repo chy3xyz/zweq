@@ -1,35 +1,29 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { deleteEnvelope, getEnvelope, postEnvelope, putEnvelope } from '#ui/api/client';
 
 import { MENU_PATH } from './path';
 import type { SaveMenuRequest, WechatMenu } from './types';
 
 export async function getMenu(accountId: number): Promise<WechatMenu> {
-  const { data } = await http.get<{ code: number; msg: string; data: WechatMenu }>(MENU_PATH.get(accountId));
-  return unwrapEnvelope(data);
+  return getEnvelope<WechatMenu>(MENU_PATH.get(accountId));
 }
 
 export async function saveMenu(accountId: number, body: SaveMenuRequest): Promise<{ id: number }> {
-  const { data } = await http.put<{ code: number; msg: string; data: { id: number } }>(MENU_PATH.save(accountId), body);
-  return unwrapEnvelope(data);
+  return putEnvelope<{ id: number }>(MENU_PATH.save(accountId), body);
 }
 
 export async function publishMenu(accountId: number): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(
+  return postEnvelope<{ id: number }>(
     MENU_PATH.publish(accountId),
     {},
   );
-  return unwrapEnvelope(data);
 }
 
 export async function fetchMenu(accountId: number): Promise<WechatMenu> {
-  const { data } = await http.get<{ code: number; msg: string; data: WechatMenu }>(MENU_PATH.fetch(accountId));
-  return unwrapEnvelope(data);
+  return getEnvelope<WechatMenu>(MENU_PATH.fetch(accountId));
 }
 
 export async function deleteRemoteMenu(accountId: number): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(MENU_PATH.deleteRemote(accountId));
-  unwrapEnvelope(data);
+  await deleteEnvelope<null>(MENU_PATH.deleteRemote(accountId));
 }
 
 export type { SaveMenuRequest, WechatMenu };

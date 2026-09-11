@@ -1,5 +1,4 @@
-import { http } from '#ui/api/client';
-import { unwrapEnvelope } from '#ui/api/envelope';
+import { deleteEnvelope, getEnvelope, postEnvelope, putEnvelope } from '#ui/api/client';
 
 import { RULE_PATH, ruleDetail, ruleKeyword, ruleKeywords, ruleListQuery, ruleReply, ruleReplies } from './path';
 import type {
@@ -13,28 +12,20 @@ import type {
   UpdateRuleRequest,
 } from './types';
 
-async function getEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
-
 export async function listRules(page: number, pageSize: number, accountId: number): Promise<RuleListResult> {
   return getEnvelope<RuleListResult>(ruleListQuery(page, pageSize, accountId));
 }
 
 export async function createRule(body: CreateRuleRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(RULE_PATH.create, body);
-  return unwrapEnvelope(data);
+  return postEnvelope<{ id: number }>(RULE_PATH.create, body);
 }
 
 export async function updateRule(id: number, body: UpdateRuleRequest): Promise<void> {
-  const { data } = await http.put<{ code: number; msg: string; data: null }>(ruleDetail(id), body);
-  unwrapEnvelope(data);
+  await putEnvelope<null>(ruleDetail(id), body);
 }
 
 export async function deleteRule(id: number): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(ruleDetail(id));
-  unwrapEnvelope(data);
+  await deleteEnvelope<null>(ruleDetail(id));
 }
 
 export async function listKeywords(id: number): Promise<KeywordItem[]> {
@@ -43,13 +34,11 @@ export async function listKeywords(id: number): Promise<KeywordItem[]> {
 }
 
 export async function addKeyword(id: number, body: AddKeywordRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(ruleKeywords(id), body);
-  return unwrapEnvelope(data);
+  return postEnvelope<{ id: number }>(ruleKeywords(id), body);
 }
 
 export async function removeKeyword(id: number, kid: number): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(ruleKeyword(id, kid));
-  unwrapEnvelope(data);
+  await deleteEnvelope<null>(ruleKeyword(id, kid));
 }
 
 export async function listReplies(id: number): Promise<ReplyItem[]> {
@@ -58,13 +47,11 @@ export async function listReplies(id: number): Promise<ReplyItem[]> {
 }
 
 export async function addReply(id: number, body: AddReplyRequest): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(ruleReplies(id), body);
-  return unwrapEnvelope(data);
+  return postEnvelope<{ id: number }>(ruleReplies(id), body);
 }
 
 export async function removeReply(id: number, rid: number): Promise<void> {
-  const { data } = await http.delete<{ code: number; msg: string; data: null }>(ruleReply(id, rid));
-  unwrapEnvelope(data);
+  await deleteEnvelope<null>(ruleReply(id, rid));
 }
 
 export type { KeywordItem, ReplyItem, RuleItem, RuleListResult };

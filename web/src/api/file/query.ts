@@ -1,13 +1,8 @@
-import { http } from '#ui/api/client';
+import { getEnvelope, http, postEnvelope } from '#ui/api/client';
 import { unwrapEnvelope } from '#ui/api/envelope';
 
 import { FILE_PATH, fileDetail, fileListQuery, groupDetail, type FileListParams } from './path';
 import type { FileItem, FileListResult, UploadGroup, UploadGroupListResult } from './types';
-
-async function getEnvelope<T>(path: string): Promise<T> {
-  const { data } = await http.get<{ code: number; msg: string; data: T }>(path);
-  return unwrapEnvelope(data);
-}
 
 export async function listFiles(params: FileListParams = {}): Promise<FileListResult> {
   return getEnvelope<FileListResult>(fileListQuery(params));
@@ -37,11 +32,10 @@ export async function listGroups(): Promise<UploadGroup[]> {
 }
 
 export async function createGroup(group_name: string, sort = 0): Promise<{ id: number }> {
-  const { data } = await http.post<{ code: number; msg: string; data: { id: number } }>(FILE_PATH.groups, {
+  return postEnvelope<{ id: number }>(FILE_PATH.groups, {
     group_name,
     sort,
   });
-  return unwrapEnvelope(data);
 }
 
 export async function updateGroup(id: number, group_name: string, sort = 0): Promise<void> {
@@ -52,7 +46,13 @@ export async function deleteGroup(id: number): Promise<void> {
   await http.delete(groupDetail(id));
 }
 
-/** Authenticated download via fetch (Authorization header + blob). */
+/**
+ * Authenticated download via fetch (Authorization header + blob).
+ * Exempt from the shared axios client on purpose: the axios instance carries a
+ * 30s timeout and its 401 interceptor (global logout + redirect), and its
+ * error messages would replace the page-visible `下载失败 (status)` text — a
+ * plain fetch keeps download semantics (no timeout, no side effects) unchanged.
+ */
 export async function downloadFile(id: number, name: string): Promise<void> {
   const { getAuthToken } = await import('#ui/api/client');
   const token = getAuthToken();
