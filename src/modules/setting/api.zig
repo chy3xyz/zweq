@@ -88,8 +88,8 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 200 });
-            var result = self.svc.list(params.page, params.page_size, tid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size, tid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -137,7 +137,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
             const id = self.svc.set(tid, key, req.value) catch |err| {
                 const msg = switch (err) {
                     error.InvalidKey => "配置键不能为空",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -158,8 +158,8 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "缺少配置键");
                 return;
             };
-            self.svc.delete(tid, key) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.delete(tid, key) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "setting.delete", "setting", 0, "删除配置", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);

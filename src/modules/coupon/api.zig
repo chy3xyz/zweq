@@ -170,7 +170,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
             const id = self.svc.createCoupon(tid, req.account_id, req.title, req.amount, req.min_amount, req.total, req.per_user, req.start_at, req.end_at, req.status) catch |err| {
                 const msg = switch (err) {
                     error.InvalidInput => "参数非法",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -307,7 +307,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
                     error.Expired => "已过期",
                     error.NotStarted => "未开始",
                     error.NotFound => "券不存在",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -331,7 +331,7 @@ pub fn CouponApi(comptime Service: type, comptime UserService: type) type {
                     error.NotFound => "券码不存在",
                     error.AlreadyUsed => "已核销过",
                     error.Expired => "已过期",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

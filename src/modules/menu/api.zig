@@ -72,8 +72,8 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
 
-            const row_opt = self.svc.get(tid, account_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const row_opt = self.svc.get(tid, account_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             const row = row_opt orelse {
@@ -102,7 +102,7 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
             const id = self.svc.save(tid, account_id, req.menu_json) catch |err| {
                 const msg = switch (err) {
                     error.InvalidJson => "菜单 JSON 格式错误",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -128,7 +128,7 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
                     error.AccountNotFound => "账号不存在",
                     error.MenuNotConfigured => "尚未保存菜单",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -153,7 +153,7 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.AccountNotFound => "账号不存在",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -173,7 +173,7 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.AccountNotFound => "账号不存在",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

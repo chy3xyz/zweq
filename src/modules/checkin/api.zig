@@ -78,8 +78,8 @@ pub fn CheckinApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.list(params.page, params.page_size, tid, account_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size, tid, account_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);

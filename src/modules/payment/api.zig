@@ -212,7 +212,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                     error.InvalidAmount => "金额必须大于 0",
                     error.InvalidPayConfig => "支付配置不完整（缺 mchid/appid/serial_no/私钥）",
                     error.PrepayFailed => "微信支付下单失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -234,8 +234,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "缺少订单号");
                 return;
             };
-            const paid = self.svc.completeRecharge(tid, order_no) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const paid = self.svc.completeRecharge(tid, order_no) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             if (!paid) {
@@ -263,8 +263,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             };
             const fan_raw = ctx.queryParam("fan_id") orelse "0";
             const fan_id = std.fmt.parseInt(i64, fan_raw, 10) catch 0;
-            const row_opt = self.svc.walletBalance(tid, account_id, fan_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const row_opt = self.svc.walletBalance(tid, account_id, fan_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer if (row_opt) |r| r.free(self.svc.allocator);
@@ -289,8 +289,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -312,7 +312,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.InvalidAmount => "金额必须大于 0",
                     error.WithdrawInsufficient => "余额不足",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -337,8 +337,8 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listWithdraws(params.page, params.page_size, tid, account_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.listWithdraws(params.page, params.page_size, tid, account_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -402,7 +402,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             self.svc.refundV2(ctx.allocator, cfg, req.out_trade_no, req.out_refund_no, req.total_fee, req.refund_fee, req.refund_desc) catch |err| {
                 const msg = switch (err) {
                     error.RefundFailed => "微信退款失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -435,7 +435,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             self.svc.transferToWallet(ctx.allocator, cfg, req.open_id, req.amount, req.desc, req.partner_trade_no) catch |err| {
                 const msg = switch (err) {
                     error.TransferFailed => "企业付款失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -468,7 +468,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.InvalidPayConfig => "支付配置不完整",
                     error.PrepayFailed => "微信 v3 退款失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -503,7 +503,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.InvalidPayConfig => "支付配置不完整",
                     error.PrepayFailed => "微信 v3 转账失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

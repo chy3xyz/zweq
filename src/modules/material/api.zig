@@ -157,8 +157,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             const keyword = ctx.queryStr("keyword", "");
-            var result = self.svc.listNews(params.page, params.page_size, tid, account_id, keyword) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.listNews(params.page, params.page_size, tid, account_id, keyword) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -188,7 +188,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             const id = self.svc.createNews(tid, req.account_id, req.title, req.author orelse "", req.digest orelse "", req.content orelse "", req.thumb_media_id orelse "", req.thumb_url orelse "", req.url orelse "") catch |err| {
                 const msg = switch (err) {
                     error.InvalidTitle => "标题不能为空",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -249,7 +249,11 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             };
             defer cur.free(self.svc.allocator);
             self.svc.updateNews(id, req.title orelse cur.title, req.author orelse cur.author, req.digest orelse cur.digest, req.content orelse cur.content, req.thumb_media_id orelse cur.thumb_media_id, req.thumb_url orelse cur.thumb_url, req.url orelse cur.url) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                const msg = switch (err) {
+                    error.InvalidTitle => "标题不能为空",
+                    else => "操作失败",
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -266,8 +270,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的素材 ID");
                 return;
             };
-            self.svc.deleteNews(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.deleteNews(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.news.delete", "material", id, "删除图文素材", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
@@ -283,8 +287,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listFiles(params.page, params.page_size, tid, account_id, ctx.queryParam("kind")) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.listFiles(params.page, params.page_size, tid, account_id, ctx.queryParam("kind")) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -310,7 +314,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
             const id = self.svc.createFile(tid, req.account_id, req.kind, req.media_id, req.url orelse "") catch |err| {
                 const msg = switch (err) {
                     error.InvalidKind => "素材类型仅支持 image/voice/video",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -329,8 +333,8 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的素材 ID");
                 return;
             };
-            self.svc.deleteFile(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.deleteFile(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.file.delete", "material", id, "删除素材", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
@@ -350,7 +354,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.NotFound => "账号不存在",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -377,7 +381,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                     error.NotFound => "账号不存在",
                     error.InvalidKind => "kind 须为 image/voice/video",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -397,7 +401,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.NotFound => "账号不存在",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -428,7 +432,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                     error.NotFound => "账号不存在",
                     error.WechatApiError => "微信接口调用失败",
                     error.OutOfMemory => "内存不足",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

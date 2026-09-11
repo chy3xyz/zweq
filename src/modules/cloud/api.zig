@@ -156,7 +156,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             const row = self.svc.generateLicense(ctx.allocator, tid, req.days) catch |err| {
                 const msg = switch (err) {
                     error.InvalidDays => "授权天数必须大于 0",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -174,8 +174,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listLicenses(params.page, params.page_size, tid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.listLicenses(params.page, params.page_size, tid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -192,8 +192,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的授权码 ID");
                 return;
             };
-            self.svc.revokeLicense(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.revokeLicense(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.license.revoke", "cloud", id, "撤销授权码", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
@@ -228,8 +228,8 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listMarket(params.page, params.page_size, tid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.listMarket(params.page, params.page_size, tid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -256,7 +256,11 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                 if (req.checksum.len > 0) ctx.allocator.free(req.checksum);
             }
             const id = self.svc.publishPackage(tid, req.name, req.title, req.version, req.description, req.download_url, req.checksum) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                const msg = switch (err) {
+                    error.InvalidName => "包名不能为空",
+                    else => "操作失败",
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -285,7 +289,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                     error.NotFound => "市场包不存在",
                     error.ChecksumMismatch => "产物校验失败（sha256 不匹配）",
                     error.DownloadFailed => "产物下载失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -337,7 +341,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             const count = self.svc.syncMarketRemote(ctx.allocator, tid) catch |err| {
                 const msg = switch (err) {
                     error.RemoteUnavailable => "远端云服务不可达",
-                    else => @errorName(err),
+                    else => "远端云服务同步失败",
                 };
                 try ctx.sendErrorResponse(502, 502, msg);
                 return;
@@ -388,7 +392,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.NotFound => "动态表未注册",
                     error.InvalidName => "非法表名",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

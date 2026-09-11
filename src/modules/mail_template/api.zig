@@ -58,8 +58,8 @@ pub fn MailTemplateApi(comptime TemplateServiceT: type, comptime UserService: ty
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.list(params.page, params.page_size) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -87,8 +87,8 @@ pub fn MailTemplateApi(comptime TemplateServiceT: type, comptime UserService: ty
                 try ctx.sendErrorResponse(400, 400, "主题和正文不能为空");
                 return;
             }
-            self.svc.upsert(code, req.subject, req.body) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.upsert(code, req.subject, req.body) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             try ctx.ok("null");

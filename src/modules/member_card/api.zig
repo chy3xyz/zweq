@@ -158,7 +158,11 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             };
             defer ctx.allocator.free(req.name);
             const id = self.svc.createLevel(tid, req.account_id, req.name, req.level, req.discount, req.points_ratio, req.threshold, req.status) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                const msg = switch (err) {
+                    error.InvalidInput => "参数非法",
+                    else => "操作失败",
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -320,8 +324,12 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
                     try ctx.sendErrorResponse(400, 400, "已办卡");
                     return;
                 },
+                error.InvalidInput => {
+                    try ctx.sendErrorResponse(400, 400, "参数非法");
+                    return;
+                },
                 else => {
-                    try ctx.sendErrorResponse(400, 400, @errorName(err));
+                    try ctx.sendErrorResponse(400, 400, "操作失败");
                     return;
                 },
             };
@@ -344,7 +352,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.NotFound => "未办卡",
                     error.InsufficientPoints => "积分不足",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

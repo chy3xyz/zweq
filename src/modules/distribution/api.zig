@@ -192,7 +192,7 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
                 const msg = switch (err) {
                     error.AlreadyDistributor => "已是分销员",
                     error.InvalidParent => "上级分销员无效",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -213,7 +213,11 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
             };
             defer ctx.allocator.free(req.buyer_openid);
             const count = self.svc.distribute(tid, account_id, req.buyer_openid, req.order_amount) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                const msg = switch (err) {
+                    error.InvalidInput => "参数非法",
+                    else => "操作失败",
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "distribution.distribute", "commission_record", 0, "订单分佣", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
@@ -235,7 +239,7 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
                 const msg = switch (err) {
                     error.NotFound => "未开通分销",
                     error.InsufficientBalance => "佣金不足",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

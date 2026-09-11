@@ -72,8 +72,8 @@ pub fn TenantApi(comptime Service: type, comptime UserService: type) type {
             const keyword = ctx.queryStr("keyword", "");
             const status = ctx.queryStr("status", "");
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.list(params.page, params.page_size, keyword, status) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size, keyword, status) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -96,8 +96,8 @@ pub fn TenantApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "租户名称不能为空");
                 return;
             }
-            const id = self.svc.create(req.name) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const id = self.svc.create(req.name) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -139,8 +139,8 @@ pub fn TenantApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "状态仅支持 active/disabled");
                 return;
             }
-            _ = self.svc.update(id, name, status) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            _ = self.svc.update(id, name, status) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             var d2: [128]u8 = undefined;

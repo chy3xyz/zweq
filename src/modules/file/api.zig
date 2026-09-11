@@ -115,7 +115,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                     return;
                 },
                 else => {
-                    try ctx.sendErrorResponse(500, 500, @errorName(err));
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
                     return;
                 },
             };
@@ -143,8 +143,8 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             };
             const mime_prefix: ?[]const u8 = ctx.queryParam("type");
 
-            var result = self.svc.list(params.page, params.page_size, owner, tenant_filter, group_id, mime_prefix, sort_col, sort_desc) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size, owner, tenant_filter, group_id, mime_prefix, sort_col, sort_desc) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -161,8 +161,8 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的文件 ID");
                 return;
             };
-            const loaded_opt = self.svc.load(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const loaded_opt = self.svc.load(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             var loaded = loaded_opt orelse {
@@ -193,8 +193,8 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的文件 ID");
                 return;
             };
-            const row_opt = self.svc.get(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const row_opt = self.svc.get(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             const row = row_opt orelse {
@@ -207,8 +207,8 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(403, 403, "无权删除该文件");
                 return;
             }
-            self.svc.delete(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.delete(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             var d5: [96]u8 = undefined;
@@ -240,8 +240,8 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             }
             const sort = if (parsed.value.sort) |s| @as(i64, @intFromFloat(s)) else 0;
             const tenant_id = mw.authTenantId(ctx) orelse self.default_tenant_id;
-            const id = self.svc.createGroup(name, "image", sort, tenant_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const id = self.svc.createGroup(name, "image", sort, tenant_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             try ctx.okValue(.{ .id = id });
@@ -251,8 +251,8 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             _ = try authUser(ctx, self) orelse return;
             const tenant_id = mw.authTenantId(ctx) orelse self.default_tenant_id;
-            const rows = self.svc.listGroups(tenant_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const rows = self.svc.listGroups(tenant_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             const GroupDto = struct { id: i64, group_name: []const u8, group_type: []const u8, sort: i64 };
@@ -295,8 +295,8 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             defer parsed.deinit();
             const name = parsed.value.group_name;
             const sort = if (parsed.value.sort) |s| @as(i64, @intFromFloat(s)) else 0;
-            self.svc.updateGroup(id, name, sort) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.updateGroup(id, name, sort) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             try ctx.ok("null");
@@ -309,16 +309,16 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的分类 ID");
                 return;
             };
-            const count = self.svc.countGroupFiles(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const count = self.svc.countGroupFiles(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             if (count > 0) {
                 try ctx.sendErrorResponse(400, 400, "该分类下还有文件，无法删除");
                 return;
             }
-            self.svc.deleteGroup(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.deleteGroup(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             try ctx.ok("null");

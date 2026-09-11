@@ -79,8 +79,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
         fn stats(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const counts = self.svc.counts() catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const counts = self.svc.counts() catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             try ctx.okValue(counts);
@@ -93,8 +93,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             const status = ctx.queryParam("status");
 
-            var result = self.svc.list(params.page, params.page_size, status) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size, status) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.store.allocator);
@@ -111,8 +111,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;
             };
-            const row_opt = self.svc.get(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const row_opt = self.svc.get(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             const row = row_opt orelse {
@@ -131,8 +131,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;
             };
-            _ = self.svc.retry(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            _ = self.svc.retry(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             var d1: [96]u8 = undefined;
@@ -149,8 +149,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;
             };
-            _ = self.svc.cancel(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            _ = self.svc.cancel(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             var d2: [96]u8 = undefined;
@@ -163,8 +163,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            _ = self.svc.purge() catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            _ = self.svc.purge() catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             const det3 = "清理已完成任务";
@@ -180,8 +180,8 @@ pub fn TaskApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的任务 ID");
                 return;
             };
-            self.svc.delete(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.delete(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             var d4: [96]u8 = undefined;

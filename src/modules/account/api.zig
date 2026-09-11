@@ -119,8 +119,8 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
             const kind_raw = ctx.queryParam("kind");
             const keyword = ctx.queryStr("keyword", "");
             const status = ctx.queryStr("status", "");
-            var result = self.svc.list(params.page, params.page_size, tid, kind_raw, keyword, status) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size, tid, kind_raw, keyword, status) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -147,7 +147,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.InvalidName => "账号名称不能为空",
                     error.InvalidKind => "账号类型仅支持 wechat/wxapp/app",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -214,7 +214,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
                     error.InvalidName => "账号名称不能为空",
                     error.InvalidKind => "账号类型仅支持 wechat/wxapp/app",
                     error.InvalidStatus => "状态仅支持 active/disabled",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -234,8 +234,8 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
                 return;
             };
-            self.svc.delete(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.delete(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.delete", "account", id, "删除账号", zigmodu.http.RequestUtil.getRealIp(ctx), true, mw.authTenantId(ctx) orelse self.default_tenant_id);
@@ -308,8 +308,8 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
                 .encoding_aes_key = key_buf,
                 .verified = verified,
             };
-            _ = self.svc.upsertWechat(tid, id, cfg) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            _ = self.svc.upsertWechat(tid, id, cfg) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.wechat", "account", id, "更新微信配置", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);

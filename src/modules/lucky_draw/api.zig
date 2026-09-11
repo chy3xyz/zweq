@@ -111,7 +111,7 @@ pub fn LuckyDrawApi(comptime Service: type, comptime UserService: type) type {
             const result = self.svc.draw(ctx.allocator, tid, req.account_id, req.openid, &cfg) catch |err| {
                 const msg = switch (err) {
                     error.DailyLimit => "今日抽奖次数已用完",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

@@ -146,7 +146,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                     error.TimestampExpired => try ctx.sendErrorResponse(403, 403, "请求时间戳已过期"),
                     error.ReplayDetected => try ctx.sendErrorResponse(403, 403, "重复请求"),
                     error.AccountNotFound => try ctx.sendErrorResponse(404, 404, "账号不存在"),
-                    else => try ctx.sendErrorResponse(500, 500, @errorName(err)),
+                    else => try ctx.sendErrorResponse(500, 500, "服务器错误"),
                 }
                 return;
             };
@@ -168,8 +168,8 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listLogs(params.page, params.page_size, tid, account_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.listLogs(params.page, params.page_size, tid, account_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -295,7 +295,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                     error.TokenCacheUnavailable => "access_token 缓存未就绪",
                     error.AccountNotFound => "账号不存在",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

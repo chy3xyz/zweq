@@ -124,8 +124,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.list(params.page, params.page_size, tid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size, tid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -150,7 +150,11 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 ctx.allocator.free(req.version);
             }
             const id = self.svc.register(tid, req.name, req.title, req.version) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                const msg = switch (err) {
+                    error.InvalidName => "模块名不能为空",
+                    else => "操作失败",
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -208,8 +212,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
                 return;
             };
-            const rows = self.svc.accountModules(tid, account_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const rows = self.svc.accountModules(tid, account_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer {
@@ -243,7 +247,12 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             }
             const status = req.status orelse "active";
             const id = self.svc.bind(tid, account_id, req.module, status) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                const msg = switch (err) {
+                    error.InvalidName => "模块名不能为空",
+                    error.InvalidStatus => "状态仅支持 active/disabled",
+                    else => "操作失败",
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -266,8 +275,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "缺少模块名");
                 return;
             };
-            self.svc.unbind(tid, account_id, module) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.unbind(tid, account_id, module) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "module.unbind", "module", account_id, "解绑模块", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
@@ -287,8 +296,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "缺少模块名");
                 return;
             };
-            const cfg = self.svc.getConfig(ctx.allocator, tid, account_id, module) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const cfg = self.svc.getConfig(ctx.allocator, tid, account_id, module) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer if (cfg) |c| ctx.allocator.free(c);
@@ -314,8 +323,8 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer ctx.allocator.free(req.config);
-            const id = self.svc.setConfig(tid, account_id, module, req.config) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+            const id = self.svc.setConfig(tid, account_id, module, req.config) catch {
+                try ctx.sendErrorResponse(400, 400, "操作失败");
                 return;
             };
             var d1: [128]u8 = undefined;

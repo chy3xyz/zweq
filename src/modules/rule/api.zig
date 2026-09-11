@@ -144,8 +144,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listRules(params.page, params.page_size, tid, account_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.listRules(params.page, params.page_size, tid, account_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -168,7 +168,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
             const id = self.svc.createRule(tid, req.account_id, req.name) catch |err| {
                 const msg = switch (err) {
                     error.InvalidName => "规则名称不能为空",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -231,7 +231,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.InvalidName => "规则名称不能为空",
                     error.InvalidStatus => "状态仅支持 active/disabled",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -251,8 +251,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
                 return;
             };
-            self.svc.deleteRule(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.deleteRule(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.delete", "rule", id, "删除规则", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
@@ -267,8 +267,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
                 return;
             };
-            const rows = self.svc.store.listKeywordsForRule(rule_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const rows = self.svc.store.listKeywordsForRule(rule_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer {
@@ -318,7 +318,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.InvalidKeyword => "关键词不能为空",
                     error.InvalidMatchType => "匹配方式仅支持 full/contain",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -338,8 +338,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的关键词 ID");
                 return;
             };
-            self.svc.removeKeyword(kid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.removeKeyword(kid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.keyword.delete", "rule", kid, "删除关键词", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
@@ -354,8 +354,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的规则 ID");
                 return;
             };
-            const rows = self.svc.store.listRepliesForRule(rule_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const rows = self.svc.store.listRepliesForRule(rule_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer {
@@ -422,7 +422,7 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
             ) catch |err| {
                 const msg = switch (err) {
                     error.InvalidReplyType => "回复类型仅支持 text/news，text 时内容不能为空",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -440,8 +440,8 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的回复 ID");
                 return;
             };
-            self.svc.removeReply(rid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.removeReply(rid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "rule.reply.delete", "rule", rid, "删除回复", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));

@@ -211,7 +211,11 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
                 ctx.allocator.free(req.title);
             }
             const id = self.svc.createActivity(tid, req.account_id, req.title, req.price, req.original_price, req.stock, req.per_user, req.start_at, req.end_at, req.status) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                const msg = switch (err) {
+                    error.InvalidInput => "参数非法",
+                    else => "操作失败",
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -345,7 +349,7 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
                     error.NotStarted => "未开始",
                     error.Ended => "已结束",
                     error.NotFound => "活动不存在",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

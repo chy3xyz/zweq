@@ -62,8 +62,8 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             const unread = ctx.queryInt(usize, "unread", 0) == 1;
 
-            var result = self.svc.list(uid, params.page, params.page_size, unread) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(uid, params.page, params.page_size, unread) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -78,8 +78,8 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            const count = self.svc.unreadCount(uid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const count = self.svc.unreadCount(uid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             try ctx.okValue(.{ .unread = count });
@@ -95,8 +95,8 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
                 try ctx.sendErrorResponse(400, 400, "无效的通知 ID");
                 return;
             };
-            _ = self.svc.markRead(id, uid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            _ = self.svc.markRead(id, uid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             try ctx.ok("null");
@@ -108,8 +108,8 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            self.svc.markAllRead(uid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.markAllRead(uid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             try ctx.ok("null");
@@ -125,8 +125,8 @@ pub fn NotificationApi(comptime Service: type, comptime UserService: type) type 
                 try ctx.sendErrorResponse(400, 400, "无效的通知 ID");
                 return;
             };
-            _ = self.svc.delete(id, uid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            _ = self.svc.delete(id, uid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             try ctx.ok("null");

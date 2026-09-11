@@ -139,7 +139,11 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
             const options_json = try std.json.Stringify.valueAlloc(ctx.allocator, req.options, .{});
             defer ctx.allocator.free(options_json);
             const id = self.svc.createVote(tid, req.account_id, req.title, options_json, req.end_at) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                const msg = switch (err) {
+                    error.InvalidInput => "参数非法",
+                    else => "操作失败",
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -221,7 +225,7 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
             const tally = self.svc.tally(ctx.allocator, id) catch |err| {
                 const msg = switch (err) {
                     error.NotFound => "投票不存在",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -250,7 +254,7 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
                     error.InvalidOption => "选项非法",
                     error.Ended => "已截止",
                     error.NotFound => "投票不存在",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

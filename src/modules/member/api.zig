@@ -90,8 +90,8 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
             if (ctx.queryParam("subscribed")) |s| {
                 subscribed_only = std.mem.eql(u8, s, "1") or std.mem.eql(u8, s, "true");
             }
-            var result = self.svc.list(params.page, params.page_size, tid, account_id, keyword, subscribed_only) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size, tid, account_id, keyword, subscribed_only) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -134,7 +134,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
                     error.TokenCacheUnavailable => "access_token 缓存未就绪",
                     error.NotFound => "账号不存在",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -167,7 +167,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
                     error.TokenCacheUnavailable => "access_token 缓存未就绪",
                     error.NotFound => "账号不存在",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -192,7 +192,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
                     error.TokenCacheUnavailable => "access_token 缓存未就绪",
                     error.NotFound => "账号不存在",
                     error.WechatApiError => "微信接口调用失败",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

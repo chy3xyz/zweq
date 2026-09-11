@@ -151,8 +151,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             const tid = tenantScope(ctx, self);
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.list(params.page, params.page_size, tid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.list(params.page, params.page_size, tid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -181,7 +181,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.InvalidName => "角色名称不能为空",
                     error.InvalidCode => "角色编码仅支持 founder/admin/operator",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -227,7 +227,7 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.InvalidName => "角色名称不能为空",
                     error.InvalidCode => "角色编码仅支持 founder/admin/operator",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -247,8 +247,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的角色 ID");
                 return;
             };
-            self.svc.delete(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.delete(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "role.delete", "role", id, "删除角色", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
@@ -266,8 +266,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
             if (account_raw) |raw| {
                 account_id = std.fmt.parseInt(i64, raw, 10) catch null;
             }
-            var result = self.svc.listPermissions(params.page, params.page_size, tid, account_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            var result = self.svc.listPermissions(params.page, params.page_size, tid, account_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer result.free(self.svc.allocator);
@@ -291,7 +291,11 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 ctx.allocator.free(req.action);
             }
             const id = self.svc.grant(tid, req.account_id, req.module, req.action) catch |err| {
-                try ctx.sendErrorResponse(400, 400, @errorName(err));
+                const msg = switch (err) {
+                    error.InvalidName => "模块和动作不能为空",
+                    else => "操作失败",
+                };
+                try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -309,8 +313,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的权限 ID");
                 return;
             };
-            self.svc.revoke(id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            self.svc.revoke(id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "permission.revoke", "permission", id, "撤销授权", zigmodu.http.RequestUtil.getRealIp(ctx), true, tenantScope(ctx, self));
@@ -325,8 +329,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的用户 ID");
                 return;
             };
-            const rows = self.svc.listRolesForUser(user_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const rows = self.svc.listRolesForUser(user_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer ctx.allocator.free(rows);
@@ -351,8 +355,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;
             };
-            const id = self.svc.assignRole(tid, user_id, req.role_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const id = self.svc.assignRole(tid, user_id, req.role_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             var d1: [128]u8 = undefined;
@@ -369,8 +373,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的角色 ID");
                 return;
             };
-            const rows = self.svc.listPermissionsForRole(role_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const rows = self.svc.listPermissionsForRole(role_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer {
@@ -395,8 +399,8 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;
             };
-            const id = self.svc.bindPermission(tid, role_id, req.permission_id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const id = self.svc.bindPermission(tid, role_id, req.permission_id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             var d1: [128]u8 = undefined;

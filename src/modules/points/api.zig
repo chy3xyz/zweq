@@ -139,7 +139,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                     error.InvalidName => "商品名不能为空",
                     error.InvalidPoints => "积分须大于 0",
                     error.InvalidStock => "库存不能为负",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -189,7 +189,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                     error.InvalidName => "商品名不能为空",
                     error.InvalidPoints => "积分须大于 0",
                     error.InvalidStock => "库存不能为负",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -230,7 +230,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                     error.OutOfStock => "库存不足",
                     error.FanNotFound => "粉丝不存在",
                     error.InsufficientPoints => "积分不足",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
@@ -252,7 +252,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 const msg = switch (err) {
                     error.FanNotFound => "粉丝不存在",
                     error.InsufficientPoints => "积分不足",
-                    else => @errorName(err),
+                    else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;

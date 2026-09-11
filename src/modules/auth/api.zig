@@ -257,8 +257,8 @@ pub fn AuthApi(comptime Service: type) type {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            const row_opt = self.svc.getUserById(uid) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const row_opt = self.svc.getUserById(uid) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             const row = row_opt orelse {
@@ -269,7 +269,7 @@ pub fn AuthApi(comptime Service: type) type {
             const perms = catalog_permissions.listCodes(ctx.allocator, uid) catch |err| switch (err) {
                 error.CatalogPermissionsNotInitialized => try ctx.allocator.alloc([]const u8, 0),
                 else => {
-                    try ctx.sendErrorResponse(500, 500, @errorName(err));
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
                     return;
                 },
             };

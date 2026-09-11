@@ -88,8 +88,8 @@ pub fn AppBffApi(comptime AccountService: type, comptime ModuleService: type, co
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
                 return;
             };
-            const rows = self.module_svc.accountModules(tid, id) catch |err| {
-                try ctx.sendErrorResponse(500, 500, @errorName(err));
+            const rows = self.module_svc.accountModules(tid, id) catch {
+                try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
             defer {

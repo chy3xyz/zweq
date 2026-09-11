@@ -383,9 +383,10 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                     return;
                 },
                 else => {
-                    const msg = try std.fmt.allocPrint(ctx.allocator, "连接失败: {s}", .{@errorName(err)});
-                    defer ctx.allocator.free(msg);
-                    try ctx.sendErrorResponse(502, 502, msg);
+                    // 连接失败的内部错误类型只记录到服务端日志（见下方 std.log.err），
+                    // 不再透传给客户端，避免泄漏内部错误名。
+                    std.log.err("provider connect test failed: {s}", .{@errorName(err)});
+                    try ctx.sendErrorResponse(502, 502, "连接测试失败，请检查网络或 Provider 配置");
                     return;
                 },
             };
