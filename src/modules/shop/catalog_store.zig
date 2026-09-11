@@ -339,12 +339,11 @@ pub const CatalogStore = struct {
 
     /// 原子扣 SKU 库存（乐观锁）：UPDATE stock=stock-n WHERE id=? AND stock>=n。
     pub fn consumeSkuStock(self: *CatalogStore, allocator: std.mem.Allocator, sku_id: i64, n: i64) !bool {
+        _ = allocator; // 守卫改为 RawArgs 参数化后不再拼串，保留参数以维持调用方签名。
         const preds = self.client.shop_product_sku.predicates;
-        const guard = try std.fmt.allocPrint(allocator, "stock >= {d}", .{n});
-        defer allocator.free(guard);
         const affected = crud.increment(self.client.shop_product_sku, "stock", -n, &.{
             preds.idEQ(.{ .int = sku_id }),
-            zent.sql.Predicate{ .raw = guard },
+            zent.sql.RawArgs("stock >= ?", &.{.{ .int = n }}),
         }) catch return false;
         return affected > 0;
     }

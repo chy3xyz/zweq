@@ -281,12 +281,11 @@ pub const SeckillStore = struct {
     /// 原子扣库存：`sold = sold + n WHERE id=? AND sold + n <= stock`（乐观锁防超卖）。
     /// 返回是否扣减成功（库存不足返回 false）。
     pub fn tryConsumeStock(self: *SeckillStore, allocator: std.mem.Allocator, activity_id: i64, n: i64) !bool {
+        _ = allocator; // 守卫改为 RawArgs 参数化后不再拼串，保留参数以维持调用方签名。
         const preds = self.client.seckill_activity.predicates;
-        const guard = try std.fmt.allocPrint(allocator, "sold + {d} <= stock", .{n});
-        defer allocator.free(guard);
         const affected = crud.increment(self.client.seckill_activity, "sold", n, &.{
             preds.idEQ(.{ .int = activity_id }),
-            zent.sql.Predicate{ .raw = guard },
+            zent.sql.RawArgs("sold + ? <= stock", &.{.{ .int = n }}),
         }) catch return false;
         return affected > 0;
     }

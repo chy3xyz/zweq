@@ -56,8 +56,17 @@ pub const TradeStore = struct {
     allocator: std.mem.Allocator,
     client: Client,
 
+    /// 已存在则数量累加；不存在则插入。
+    /// 保留 query-then-update/insert 而不用 zent SaveOrUpdate，原因：
+    /// 1) shop_cart 无 (tenant_id, openid, sku_id) 唯一索引，SaveOrUpdateOn 没有
+    ///    冲突目标（SQLite 侧无唯一键匹配会直接报错），SaveOrUpdate 退化为按主键
+    ///    冲突，新行未带主键时仍是裸 INSERT，并发重复行依旧；
+    /// 2) zent 单行 SaveOrUpdate 在 SQLite 是 INSERT OR REPLACE（整行删除重插），
+    ///    会换新行 id，且无法表达 "quantity = 旧值 + n" 的累加语义。
+    /// 遗留竞态：两个并发请求同时查不到行时仍会产生重复购物车行（丢更新不至于，
+    /// 已有行的累加是单行原子 UPDATE）；彻底修法是给表加唯一索引后改走
+    /// SaveOrUpdateOnWith + "{t:quantity} + {x:quantity}"（需动 model/迁移）。
     pub fn upsertCart(self: *TradeStore, tenant_id: i64, account_id: i64, openid: []const u8, product_id: i64, sku_id: i64, quantity: i64, now: i64) !i64 {
-        // 已存在则数量累加
         var q = self.client.shop_cart.Query();
         defer q.deinit();
         const preds = self.client.shop_cart.predicates;
@@ -217,6 +226,11 @@ pub const TradeStore = struct {
         return (try d.Exec()) > 0;
     }
 
+    /// 置默认地址：单语句原子翻转——CASE 把本用户地址的 is_default 一次写成
+    /// "目标是 1、其余是 0"，消除原"先置 1 再清其他"两写之间的多默认/零默认窗口
+    /// （原顺序并发下可能出现双默认，反向顺序则可能把默认全清掉）。
+    /// 归属校验仍依赖前置 getAddress（tenant + openid），WHERE 也带 tenant+openid，
+    /// 目标行必然落在本用户地址集内。
     pub fn setDefaultAddress(self: *TradeStore, tenant_id: i64, openid: []const u8, id: i64, now: i64) !void {
         const row_opt = try self.getAddress(tenant_id, id);
         const row = row_opt orelse return error.AddressNotFound;
@@ -226,11 +240,11 @@ pub const TradeStore = struct {
         const preds = self.client.shop_address.predicates;
         var upd = self.client.shop_address.Update();
         defer upd.deinit();
-        _ = try upd.set("is_default", .{ .int = 1 });
-        _ = try upd.set("updated_at", .{ .int = now });
-        _ = try upd.Where(.{ preds.idEQ(.{ .int = id }) });
+        _ = try upd.setExprArgs("is_default", "CASE WHEN id = ? THEN 1 ELSE 0 END", &.{.{ .int = id }});
+        // updated_at 只对目标行刷新，保持与原两写版本逐字段等价。
+        _ = try upd.setExprArgs("updated_at", "CASE WHEN id = ? THEN ? ELSE updated_at END", &.{ .{ .int = id }, .{ .int = now } });
+        _ = try upd.Where(.{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.openidEQ(.{ .string = openid }) });
         _ = try upd.Save();
-        try self.clearDefaultAddress(tenant_id, openid, id);
     }
 
     pub fn updateAddress(self: *TradeStore, tenant_id: i64, openid: []const u8, id: i64, a: anytype, now: i64) !void {
@@ -684,18 +698,17 @@ pub const TradeStore = struct {
         const preds = self.client.shop_order.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
+        // 过滤下推 SQL：只统计 已支付/已发货/已完成（>0）且跳过已取消（!=4），
+        // 不再整表扫回 Zig 过滤。status>0 已排除待支付（0），无需再挡。
         _ = try q.Where(.{preds.statusGT(.{ .int = 0 })});
-        // 求和用 SQL：直接扫行累加（量小场景足够；跳过已取消 4）。
-        var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopOrderInfo, e, self.allocator);
-            rows.deinit();
-        }
-        var sum: i64 = 0;
-        for (rows.items) |e| {
-            if (e.status != 4) sum += std.fmt.parseInt(i64, e.pay_amount, 10) catch 0;
-        }
-        return sum;
+        _ = try q.Where(.{preds.statusNE(.{ .int = 4 })});
+        // pay_amount 是 TEXT 存数字，求和需 CAST；用 AggregateText 取精确文本
+        // 再 parseInt（SumOrZero 走 f64，金钱累加有精度风险，不适用）。
+        // 注：CAST 对非数字文本得 0，与原 parseInt catch 0 的兜底语义一致
+        // （极端形如 "12x" 时 SQL 取 12、原 Zig 取 0，实际写入均为纯数字，不影响）。
+        const sum_text = (try q.AggregateText("SUM(CAST(pay_amount AS INTEGER))")) orelse return 0;
+        defer self.allocator.free(sum_text);
+        return std.fmt.parseInt(i64, sum_text, 10) catch 0;
     }
 
     // ── 退款 ──────────────────────────────────────────────

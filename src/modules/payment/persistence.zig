@@ -190,15 +190,14 @@ pub const PaymentStore = struct {
         _ = allocator;
         const wid = try self.ensureWallet(tenant_id, account_id, fan_id, now);
         const preds = self.client.wallet.predicates;
-        const guard = try std.fmt.allocPrint(self.allocator, "CAST(balance AS INTEGER) >= {d}", .{amount});
-        defer self.allocator.free(guard);
+        // 余额守卫参数化（zent.sql.RawArgs）：amount 走绑定参数而非拼进 SQL 文本。
         const amount_str = try std.fmt.allocPrint(self.allocator, "{d}", .{amount});
         defer self.allocator.free(amount_str);
         var upd = self.client.wallet.Update();
         defer upd.deinit();
         _ = try upd.setExprArgs("balance", "balance - ?", &.{.{ .string = amount_str }});
         _ = try upd.setFieldValue("updated_at", now);
-        _ = try upd.Where(.{ preds.idEQ(.{ .int = wid }), zent.sql.Predicate{ .raw = guard } });
+        _ = try upd.Where(.{ preds.idEQ(.{ .int = wid }), zent.sql.RawArgs("CAST(balance AS INTEGER) >= ?", &.{.{ .int = amount }}) });
         const affected = try upd.Save();
         return affected > 0;
     }

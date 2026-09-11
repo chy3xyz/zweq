@@ -320,11 +320,10 @@ pub const ShopService = struct {
                 const product = product_opt orelse return error.NotFound;
                 defer product.free(self.allocator);
                 const pp = tx.client.shop_product.predicates;
-                const guard = std.fmt.allocPrint(self.allocator, "stock >= {d}", .{it.quantity}) catch return error.Unexpected;
-                defer self.allocator.free(guard);
+                // 库存守卫参数化（zent.sql.RawArgs）：数量走绑定参数而非拼进 SQL 文本。
                 const affected = crud.increment(tx.client.shop_product, "stock", -it.quantity, &.{
                     pp.idEQ(.{ .int = it.product_id }),
-                    zent.sql.Predicate{ .raw = guard },
+                    zent.sql.RawArgs("stock >= ?", &.{.{ .int = it.quantity }}),
                 }) catch {
                     tx.rollback() catch {};
                     return error.OutOfStock;
@@ -341,11 +340,10 @@ pub const ShopService = struct {
                 const sku_opt = self.store.catalog.getSkuOn(tx.client, tenant_id, it.sku_id) catch return error.Unexpected;
                 const sku = sku_opt orelse return error.NotFound;
                 defer sku.free(self.allocator);
-                const guard = std.fmt.allocPrint(self.allocator, "stock >= {d}", .{it.quantity}) catch return error.Unexpected;
-                defer self.allocator.free(guard);
+                // 库存守卫参数化（zent.sql.RawArgs），同商品分支。
                 const affected = crud.increment(tx.client.shop_product_sku, "stock", -it.quantity, &.{
                     sp.idEQ(.{ .int = it.sku_id }),
-                    zent.sql.Predicate{ .raw = guard },
+                    zent.sql.RawArgs("stock >= ?", &.{.{ .int = it.quantity }}),
                 }) catch {
                     tx.rollback() catch {};
                     return error.OutOfStock;
@@ -1112,9 +1110,23 @@ pub const ShopService = struct {
         const a_opt = self.store.marketing.getGroupon(tenant_id, t.activity_id) catch return error.Unexpected;
         const a = a_opt orelse return error.NotFound;
         defer a.free(self.allocator);
+        // 满员守卫：marketing.joinTeam 的 increment 无 current<group_size 上限条件，
+        // 超团只能靠调用方在 join 前拦截。这里重读团（t 是进入接口时的快照，期间
+        // 其他参团者可能已把 current 顶满），满员按"已结束"同一语义拒绝——必须先
+        // 于 grouponOrder 拦截，否则先建单/扣库存再报错会留下悬空待支付订单。
+        // 遗留竞态：重读与 joinTeam 的 increment 之间仍有窗口，严格有序的并发请求
+        // 仍可能把 current 顶超 group_size；彻底修法是给 joinTeam 的 increment 加
+        // "current + 1 <= group_size" 条件（marketing_store 不在本次改动范围）。
+        const fresh_opt = self.store.marketing.getTeam(tenant_id, team_id) catch return error.Unexpected;
+        const fresh = fresh_opt orelse return error.NotFound;
+        defer fresh.free(self.allocator);
+        if (fresh.status != 0 or fresh.current >= a.group_size) return error.InvalidInput; // 已满员/已结束
         const order_id = self.grouponOrder(tenant_id, account_id, openid, address_id, a, sku_id, team_id) catch |err| {
             return err;
         };
+        // joinTeam 返回 false 混合了两种不可区分的情形：increment 失败（团行消失/
+        // DB 错误，此时订单已建但人数未计入，该成员单可能永远无法成团——遗留风险）
+        // 与"未成团"；返回 true 仅表示"本次 increment 后已满员"，触发成团批量支付。
         if (self.store.marketing.joinTeam(self.allocator, tenant_id, team_id, a.group_size) catch false) {
             // 成团：团内全部订单 mock 支付 → 触发分销/积分。
             const orders = self.store.marketing.listOrdersByTeam(team_id) catch &.{};
