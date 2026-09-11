@@ -66,6 +66,23 @@ const shop = @import("modules/shop/root.zig");
 const menu = @import("modules/menu/root.zig");
 const points = @import("modules/points/root.zig");
 
+/// C 端(fan)经济接口的 per-openid 限流阈值表（挂载点见下方 fan_limited scope）。
+/// 微信出口 IP 集中，per-IP 维度不适用，故按 fan JWT 的 openid(sub) 计数。
+/// 阈值均为经验初值（可调）：claim/draw/checkin/vote 为高频轻操作 10 次/分；
+/// rush/redeem/withdraw 涉及库存/积分/资金 5 次/分；member-card/open 最重 3 次/分。
+/// 窗口默认 60 秒（Redis 固定窗口精确生效；registry 令牌桶仅近似，见 OpenidRule）。
+/// 8 个端点全部为 POST，新增非 POST 经济端点时需显式写 method 字段。
+const fan_econ_rules = [_]mw_rate.OpenidRule{
+    .{ .name = "coupon-claim", .path = "api/v1/app/coupons/{id}/claim", .max = 10 },
+    .{ .name = "lucky-draw", .path = "api/v1/app/lucky-draw/draw", .max = 10 },
+    .{ .name = "checkin", .path = "api/v1/app/checkin", .max = 10 },
+    .{ .name = "vote-ballot", .path = "api/v1/app/votes/{id}/ballot", .max = 10 },
+    .{ .name = "seckill-rush", .path = "api/v1/app/seckill/activities/{id}/rush", .max = 5 },
+    .{ .name = "points-redeem", .path = "api/v1/app/points/redeem", .max = 5 },
+    .{ .name = "distribution-withdraw", .path = "api/v1/app/distribution/withdraw", .max = 5 },
+    .{ .name = "member-card-open", .path = "api/v1/app/member-card/open", .max = 3 },
+};
+
 /// Set by SIGINT/SIGTERM so the main thread can stop the server gracefully.
 const ShutdownFlag = struct {
     var requested = std.atomic.Value(bool).init(false);
@@ -425,6 +442,8 @@ pub fn main(init: std.process.Init) !void {
         .max = 20,
         .window_seconds = 60,
         .refill_rate = 1,
+        // 认证入口（防爆破等）：后端故障按 fail-closed，宁可短暂不可用也不放行。
+        .on_internal_error = .closed,
     };
     // WeChat callback flood guard (global token bucket — WeChat pushes from a
     // shared server pool, so per-IP limiting would misfire on bursts).
@@ -512,6 +531,17 @@ pub fn main(init: std.process.Init) !void {
         .max = 30,
         .window_seconds = 60,
         .refill_rate = 1,
+        // C 端下单属经济接口：后端故障按 fail-open 放行并 log.warn，保可用性。
+        .on_internal_error = .open,
+    };
+    // C 端 fan 经济接口 per-openid 限流（挂载点见下方 fan_limited scope）。
+    // 与 auth/shop 共用 Redis/registry 后端选择；阈值表为文件级 fan_econ_rules。
+    var fan_registry = zigmodu.RateLimiterRegistry.init(allocator, 10, 1);
+    defer fan_registry.deinit();
+    var fan_openid_limiter = mw_rate.PerOpenidLimiter{
+        .backend = if (redis_ptr) |r| .{ .redis = r } else .{ .registry = &fan_registry },
+        .sec = &sec,
+        .rules = &fan_econ_rules,
     };
     var shop_api = shop.api.ShopApi(@TypeOf(shop_svc), @TypeOf(user_svc)).init(&shop_svc, &user_svc, &audit_svc, default_tenant_id, &shop_limiter, &fan_store, &setting_store, cfg.shop_order_timeout);
     var menu_api = menu.api.MenuApi(@TypeOf(menu_svc), @TypeOf(user_svc)).init(&menu_svc, &user_svc, &audit_svc, default_tenant_id);
@@ -602,8 +632,11 @@ pub fn main(init: std.process.Init) !void {
     try v1_scope.mount(appmod.api.ModuleApi(@TypeOf(module_svc), @TypeOf(user_svc)), &module_api);
     try v1_scope.mount(payment.api.PaymentApi(@TypeOf(payment_svc), @TypeOf(user_svc)), &payment_api);
     try v1_scope.mount(app_bff.api.AppBffApi(@TypeOf(account_svc), @TypeOf(module_svc), @TypeOf(user_svc)), &app_bff_api);
-    try v1_scope.mount(app_bff.fan_api.FanAppApi(@TypeOf(user_svc), @TypeOf(fan_store), @TypeOf(points_svc), @TypeOf(coupon_svc), @TypeOf(lucky_draw_svc), @TypeOf(module_svc), @TypeOf(payment_svc)), &fan_app_api);
-    try v1_scope.mount(app_bff.fan_scene_api.FanSceneApi(@TypeOf(user_svc), @TypeOf(checkin_svc), @TypeOf(vote_svc), @TypeOf(seckill_svc), @TypeOf(member_card_svc), @TypeOf(distribution_svc), @TypeOf(module_svc)), &fan_scene_api);
+    // fan 端 BFF 挂 per-openid 限流：只约束 fan_econ_rules 表内的 8 个经济端点，
+    // 两个模块下的其他 fan 路由（资料/列表等）不受影响。
+    var fan_limited = try v1_scope.use(mw_rate.perOpenidRateLimit(&fan_openid_limiter));
+    try fan_limited.mount(app_bff.fan_api.FanAppApi(@TypeOf(user_svc), @TypeOf(fan_store), @TypeOf(points_svc), @TypeOf(coupon_svc), @TypeOf(lucky_draw_svc), @TypeOf(module_svc), @TypeOf(payment_svc)), &fan_app_api);
+    try fan_limited.mount(app_bff.fan_scene_api.FanSceneApi(@TypeOf(user_svc), @TypeOf(checkin_svc), @TypeOf(vote_svc), @TypeOf(seckill_svc), @TypeOf(member_card_svc), @TypeOf(distribution_svc), @TypeOf(module_svc)), &fan_scene_api);
     try v1_scope.mount(cloud.api.CloudApi(@TypeOf(cloud_svc), @TypeOf(user_svc)), &cloud_api);
     try v1_scope.mount(material.api.MaterialApi(@TypeOf(material_svc), @TypeOf(user_svc)), &material_api);
     try v1_scope.mount(checkin.api.CheckinApi(@TypeOf(checkin_svc), @TypeOf(user_svc)), &checkin_api);
