@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI 前端 job（`npm run typecheck` + `vitest`）。
 
 ### Changed
-- 依赖升级（零 breaking）：见下文 zent v0.34.0 条目。
+- 依赖升级（零 breaking，代码零改动即适配）：zent **v0.34.0 → v0.37.0**（主站 + `zweq-cloud`；`zig build` / `zig build test` 93/93 全绿，真实库启动迁移通过）。新能力可用：连接池 `max_wait_ms` 真正阻塞等待（默认 0 = 旧语义）、嵌套预加载每层一次查询（消 N+1）、`StorageKey` 字段↔列名映射、`BulkInsert` 按参数上限分片、`In/NotIn/IsNull/HasPrefix/ContainsFold` 等类型化谓词、边写入（`AddEdgeIDs`/`SetEdgeIDs`/`ClearEdge`）、outbox 认领式派发、迁移默认加锁 + checksum 校验。本项目未用 outbox/BulkInsert/预加载，`UPGRADING` §10 的 outbox 迁移与 `createAllTables` 签名变更均不适用。
+- 依赖升级（零 breaking，代码零改动即适配）：zigmodu **v0.15.35 → v0.15.37**（`zweq-cloud` 同步从 v0.15.24 直升）。
 - RBAC 闭环：`RolePermission` 关联表 + `collectPermissionCodes`（user.admin / 角色 code / module:action）；`GET /auth/me` 返回 `permissions`；角色权限 API `GET|POST|DELETE /roles/{id}/permissions`；前端菜单按 `canAccessAdmin` 隐藏。
 - 小程序商城 C 端登录：`wx.login` → `miniprogram/login`（公开）→ `shop/auth/login` fan JWT；`shopSession` store 替换 `DEMO_OPENID`。
 - CI 增加 `zig build lint-size` 门禁。
