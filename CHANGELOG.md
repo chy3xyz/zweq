@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 侧栏菜单细粒度映射（`navItems.ts` + `PermissionGate`）；后端路由 `admin` 改为 `{module}:read|write`。
 
 ### Changed
+- 依赖升级（零 breaking，代码零改动即适配）：zent **v0.33.0 → v0.34.0**（主站 + `zweq-cloud`；清 `.zig-cache` 后 `zig build` / `zig build test` 全绿）。新能力可用：`sql.RawArgs`、聚合助手（`SumOrZero`/`Aggregate*`）、`SaveOrUpdateOnWith`、`ForUpdateWith`、`sql_scan.queryAll`/`queryOne`。
 - 依赖升级（零 breaking，代码零改动即适配）：zigmodu **v0.15.34 → v0.15.35**、zent **v0.32.2 → v0.33.0**（`zig build` + `zig build test` 全绿）。
 - 巨型文件按子域拆分（正文逐字搬运，语义零变更；全部源文件 ≤ 1200 行，新增 `zig build lint-size` 门禁）：
   - `src/tests.zig`（3962 行）→ `src/tests/` 共 10 个按域测试文件 + `common.zig` 夹具，原文件保留为聚合入口。

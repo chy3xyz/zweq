@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zent = .{
-            .url = "git+https://github.com/chy3xyz/zent?ref=v0.33.0",
-            .hash = "zent-0.33.0-oiur-wshEACkXfOmzXP3wqJ8avtVSl-ND3SWCoUrOwgT",
+            .url = "git+https://github.com/chy3xyz/zent?ref=v0.34.0#119f6a22c396a82d802f76890a9489cbd521cbb8",
+            .hash = "zent-0.34.0-oiur-46_EAAQKFZBOWrJhi-5Epx_-r5widvnFmOuzVTC",
         },
         .zigmodu = .{
             .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.15.35",
