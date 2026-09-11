@@ -67,8 +67,9 @@ pub const SeckillService = struct {
         return self.store.setActivityStatus(id, status, self.now()) catch error.Unexpected;
     }
 
-    pub fn getActivity(self: *SeckillService, id: i64) SeckillError!?SeckillActivityRow {
-        return self.store.getActivity(id) catch error.Unexpected;
+    /// 按 id 取单条（tenant 过滤）。测试/内部读取用；管理端走 `getActivityById`。
+    pub fn getActivity(self: *SeckillService, tenant_id: i64, id: i64) SeckillError!?SeckillActivityRow {
+        return self.store.getActivity(tenant_id, id) catch error.Unexpected;
     }
 
     /// 按 id 取单条（tenant 过滤）——管理端详情/更新/删除先经此校验存在性
@@ -147,10 +148,12 @@ pub const SeckillService = struct {
         };
     }
 
-    /// 抢购：时间窗 → 限购 → 原子库存 → 落单。
+    /// 抢购：时间窗 → 限购（快速路径）→ 原子库存 → 限购复核 → 落单。
+    /// 扣库存后落单/复核失败一律回补库存，杜绝「扣了库存没订单」的永久流失。
     pub fn rush(self: *SeckillService, tenant_id: i64, account_id: i64, openid: []const u8, activity_id: i64, quantity: i64) SeckillError!i64 {
         if (quantity <= 0) return error.InvalidInput;
-        const a_opt = self.store.getActivity(activity_id) catch return error.Unexpected;
+        // tenant 过滤：跨租户活动不可见（效果同 NotFound），杜绝越权抢别租户活动。
+        const a_opt = self.store.getActivity(tenant_id, activity_id) catch return error.Unexpected;
         const a = a_opt orelse return error.NotFound;
         defer a.free(self.allocator);
         const now_secs = self.now();
@@ -159,7 +162,7 @@ pub const SeckillService = struct {
         if (a.start_at > 0 and now_secs < a.start_at) return error.NotStarted;
         if (a.end_at > 0 and now_secs > a.end_at) return error.Ended;
 
-        // 限购优先：该 openid 已抢数量 + 本次 <= per_user。
+        // 限购优先（快速路径）：已超限直接拒绝，不触碰库存。
         const already = self.store.countOrdered(tenant_id, activity_id, openid) catch return error.Unexpected;
         if (already + quantity > a.per_user) return error.LimitReached;
 
@@ -169,7 +172,30 @@ pub const SeckillService = struct {
         // 原子扣库存（乐观锁），失败即超卖/并发竞争 → 库存不足。
         if (!(self.store.tryConsumeStock(self.allocator, activity_id, quantity) catch return error.Unexpected)) return error.OutOfStock;
 
-        return self.store.createOrder(tenant_id, account_id, openid, activity_id, quantity, now_secs) catch error.Unexpected;
+        // 权威限购复核：扣库存成功后、落单前再 count 一次。快速路径与扣库存
+        // 之间可能已并发落单，彻底消除该竞态需 (activity_id, openid) 唯一索引或
+        // 跨模块事务，本修复把超限窗口收敛到最小；复核不通过须回补已扣库存。
+        const ordered = self.store.countOrdered(tenant_id, activity_id, openid) catch {
+            self.rollbackConsumedStock(activity_id, quantity);
+            return error.Unexpected;
+        };
+        if (ordered + quantity > a.per_user) {
+            self.rollbackConsumedStock(activity_id, quantity);
+            return error.LimitReached;
+        }
+
+        return self.store.createOrder(tenant_id, account_id, openid, activity_id, quantity, now_secs) catch {
+            // 落单失败必须回补已扣库存，否则漏单导致库存永久流失（P0）。
+            self.rollbackConsumedStock(activity_id, quantity);
+            return error.Unexpected;
+        };
+    }
+
+    /// 回补 rush 已扣库存；回补失败仅记日志（已扣库存无法自动恢复，需人工对账）。
+    fn rollbackConsumedStock(self: *SeckillService, activity_id: i64, quantity: i64) void {
+        self.store.restoreStock(activity_id, quantity) catch |err| {
+            std.log.err("seckill 回补库存失败: activity_id={d} quantity={d} err={s}", .{ activity_id, quantity, @errorName(err) });
+        };
     }
 };
 

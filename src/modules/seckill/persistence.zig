@@ -180,9 +180,11 @@ pub const SeckillStore = struct {
         _ = try crud.delete(self.client.seckill_order, .{preds.activity_idEQ(.{ .int = activity_id })});
     }
 
-    pub fn getActivity(self: *SeckillStore, id: i64) !?SeckillActivityRow {
+    /// 按 id 取单条（tenant 过滤），供 C 端 rush 读取活动：跨租户活动不可见
+    /// （效果同 NotFound），杜绝越权抢别租户活动。
+    pub fn getActivity(self: *SeckillStore, tenant_id: i64, id: i64) !?SeckillActivityRow {
         const preds = self.client.seckill_activity.predicates;
-        var entity = (try crud.first(self.client.seckill_activity, .{preds.idEQ(.{ .int = id })})) orelse return null;
+        var entity = (try crud.first(self.client.seckill_activity, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
         defer zent.codegen.deinitEntity(infos, SeckillActivityInfo, &entity, self.allocator);
         return try self.dupActivity(entity);
     }
@@ -287,6 +289,13 @@ pub const SeckillStore = struct {
             zent.sql.Predicate{ .raw = guard },
         }) catch return false;
         return affected > 0;
+    }
+
+    /// 库存回补：下单失败/限购复核失败时回滚已扣库存（`sold -= n`，increment 反操作）。
+    /// 失败必须上抛给调用方记日志——静默吞错会造成库存永久流失。
+    pub fn restoreStock(self: *SeckillStore, activity_id: i64, n: i64) !void {
+        const preds = self.client.seckill_activity.predicates;
+        _ = try crud.increment(self.client.seckill_activity, "sold", -n, &.{preds.idEQ(.{ .int = activity_id })});
     }
 
     pub fn createOrder(self: *SeckillStore, tenant_id: i64, account_id: i64, openid: []const u8, activity_id: i64, quantity: i64, now: i64) !i64 {
