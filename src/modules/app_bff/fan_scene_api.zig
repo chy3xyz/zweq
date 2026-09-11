@@ -1,4 +1,53 @@
 //! C 端场景 BFF — 签到/投票/秒杀/会员卡/分销（粉丝 JWT）。
+//!
+//! ── 端点契约（OpenAPI 注解说明）────────────────────────────────────────
+//! 库限制：zigmodu `RouteMeta` 只有 `openapi_params` 能进入 openapi.json；
+//! summary 由库硬编码为 permission 码（本模块无 permission → 模块名），
+//! description 硬编码为 public/jwt，request_body 无注入通道。因此各端点的
+//! 中文 summary 与 body 结构以本注释为权威契约，openapi.json 中可见的是
+//! 经 openapi_params 注入的 query/path 参数注解。
+//! 统一约定：粉丝 JWT 鉴权（Authorization: Bearer，handler 内 requireFanOpenid
+//! 校验，catalog 标记 public 仅为跳过平台 JWT 中间件）；分页响应统一为
+//! `{code:0, msg:"ok", data:{list, total, page, pageSize}}`（ruoyi 信封）。
+//!
+//!  1. POST /api/v1/app/checkin —— 执行每日签到
+//!     body: {account_id: i64}
+//!     resp: {points, fresh}（fresh=false 表示今日已签过）
+//!  2. GET  /api/v1/app/checkin/records —— 分页查询我的签到记录
+//!     query: account_id?, page?（默认 1）, page_size?（默认 20，最大 100）
+//!     resp: data.{list: [{id, day, points, created_at}], total}
+//!  3. GET  /api/v1/app/votes —— 分页查询投票活动列表
+//!     query: account_id?, page?, page_size?（默认 20，最大 50）
+//!  4. GET  /api/v1/app/votes/{id} —— 查询投票详情与计票结果
+//!     path: id: i64（投票 ID）
+//!     resp: {id, title, options_json, end_at, tally}
+//!  5. POST /api/v1/app/votes/{id}/ballot —— 提交投票选票
+//!     path: id: i64（投票 ID）
+//!     body: {account_id: i64, option_index: i64}
+//!     resp: null; 400: 您已投过票 / 投票已结束 / 选项无效
+//!  6. GET  /api/v1/app/seckill/activities —— 分页查询秒杀活动列表（仅上架）
+//!     query: account_id?, page?, page_size?（默认 20，最大 50）
+//!  7. GET  /api/v1/app/seckill/orders —— 分页查询我的秒杀订单
+//!     query: account_id?, page?, page_size?（默认 20，最大 50）
+//!  8. POST /api/v1/app/seckill/activities/{id}/rush —— 参与秒杀下单
+//!     path: id: i64（活动 ID）
+//!     body: {account_id: i64, quantity?: i64（默认 1）}
+//!     resp: {order_id}
+//!  9. GET  /api/v1/app/member-card —— 查询我的会员卡
+//!     query: account_id?
+//!     resp: {openid, level_name, level, discount, points, total_points}（未开卡返回 null）
+//! 10. POST /api/v1/app/member-card/open —— 开通会员卡
+//!     body: {account_id: i64}
+//!     resp: null
+//! 11. GET  /api/v1/app/distribution —— 查询我的分销信息
+//!     query: account_id?
+//!     resp: {openid, parent_openid, commission_balance, total_commission}（未开通返回 null）
+//! 12. POST /api/v1/app/distribution/join —— 申请成为分销员
+//!     body: {account_id: i64, parent_openid?: string（默认 ""，上级 openid）}
+//!     resp: null; 400: 您已是分销员 / 上级无效
+//! 13. POST /api/v1/app/distribution/withdraw —— 申请分销佣金提现
+//!     body: {account_id: i64, amount: i64}（amount 单位为分）
+//!     resp: null; 400: 未开通分销 / 佣金不足 / 提现金额无效
 
 const std = @import("std");
 const zigmodu = @import("zigmodu");
@@ -17,6 +66,26 @@ const BallotReq = struct { account_id: i64, option_index: i64 };
 const RushReq = struct { account_id: i64, quantity: i64 = 1 };
 const JoinReq = struct { account_id: i64, parent_openid: []const u8 = "" };
 const WithdrawReq = struct { account_id: i64, amount: i64 };
+
+// ── OpenAPI query 参数注解（经 RouteMeta.openapi_params 进入 openapi.json）──
+// 库限制：summary/description/body 结构无注入通道，契约见本文件顶部注释。
+
+/// 可选 query：账号 ID（各端点 `account_id` 缺省按 0 处理）。
+const q_acct = [_]http.ApiParam{
+    .{ .name = "account_id", .location = .query, .param_type = "integer", .required = false, .description = "账号 ID，默认 0（默认账号）" },
+};
+/// 可选 query：分页参数（PageParams 解析，page 最小 1，page_size 钳制 1..100）。
+const q_page100 = [_]http.ApiParam{
+    .{ .name = "page", .location = .query, .param_type = "integer", .required = false, .description = "页码，默认 1" },
+    .{ .name = "page_size", .location = .query, .param_type = "integer", .required = false, .description = "每页条数，默认 20，最大 100" },
+};
+/// 可选 query：分页参数（投票/秒杀端点，page_size 钳制 1..50）。
+const q_page50 = [_]http.ApiParam{
+    .{ .name = "page", .location = .query, .param_type = "integer", .required = false, .description = "页码，默认 1" },
+    .{ .name = "page_size", .location = .query, .param_type = "integer", .required = false, .description = "每页条数，默认 20，最大 50" },
+};
+const q_acct_page100 = q_acct ++ q_page100;
+const q_acct_page50 = q_acct ++ q_page50;
 
 pub fn FanSceneApi(
     comptime UserService: type,
@@ -44,16 +113,16 @@ pub fn FanSceneApi(
 
         pub const routes: []const http.RouteSpec(Self) = &.{
             .{ .method = .POST, .path = "app/checkin", .handler = http.wrapHandler(Self, doCheckin), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/checkin/records", .handler = http.wrapHandler(Self, checkinRecords), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/votes", .handler = http.wrapHandler(Self, listVotes), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "app/checkin/records", .handler = http.wrapHandler(Self, checkinRecords), .meta = .{ .auth = .public, .openapi_params = &q_acct_page100 } },
+            .{ .method = .GET, .path = "app/votes", .handler = http.wrapHandler(Self, listVotes), .meta = .{ .auth = .public, .openapi_params = &q_acct_page50 } },
             .{ .method = .GET, .path = "app/votes/{id}", .handler = http.wrapHandler(Self, voteDetail), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "app/votes/{id}/ballot", .handler = http.wrapHandler(Self, voteBallot), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/seckill/activities", .handler = http.wrapHandler(Self, listSeckill), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/seckill/orders", .handler = http.wrapHandler(Self, listSeckillOrders), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "app/seckill/activities", .handler = http.wrapHandler(Self, listSeckill), .meta = .{ .auth = .public, .openapi_params = &q_acct_page50 } },
+            .{ .method = .GET, .path = "app/seckill/orders", .handler = http.wrapHandler(Self, listSeckillOrders), .meta = .{ .auth = .public, .openapi_params = &q_acct_page50 } },
             .{ .method = .POST, .path = "app/seckill/activities/{id}/rush", .handler = http.wrapHandler(Self, seckillRush), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/member-card", .handler = http.wrapHandler(Self, memberCardView), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "app/member-card", .handler = http.wrapHandler(Self, memberCardView), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
             .{ .method = .POST, .path = "app/member-card/open", .handler = http.wrapHandler(Self, memberCardOpen), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/distribution", .handler = http.wrapHandler(Self, distributionView), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "app/distribution", .handler = http.wrapHandler(Self, distributionView), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
             .{ .method = .POST, .path = "app/distribution/join", .handler = http.wrapHandler(Self, distributionJoin), .meta = .{ .auth = .public } },
             .{ .method = .POST, .path = "app/distribution/withdraw", .handler = http.wrapHandler(Self, distributionWithdraw), .meta = .{ .auth = .public } },
         };

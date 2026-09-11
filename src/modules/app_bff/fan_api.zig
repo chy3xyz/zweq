@@ -1,4 +1,49 @@
 //! 小程序 C 端 BFF — 粉丝 JWT 鉴权，聚合积分/券/抽奖等场景接口。
+//!
+//! ── 端点契约（OpenAPI 注解说明）────────────────────────────────────────
+//! 库限制：zigmodu `RouteMeta` 只有 `openapi_params` 能进入 openapi.json；
+//! summary 由库硬编码为 permission 码（本模块无 permission → 模块名），
+//! description 硬编码为 public/jwt，request_body 无注入通道。因此各端点的
+//! 中文 summary 与 body 结构以本注释为权威契约，openapi.json 中可见的是
+//! 经 openapi_params 注入的 query/path 参数注解。
+//! 统一约定：粉丝 JWT 鉴权（Authorization: Bearer，handler 内 requireFanOpenid
+//! 校验，catalog 标记 public 仅为跳过平台 JWT 中间件）；分页响应统一为
+//! `{list, total, page, pageSize}`；金额/积分单位均为分。
+//!
+//!  1. GET  /api/v1/app/fan/profile —— 查询粉丝资料
+//!     query: account_id?: i64（默认 0，默认账号）
+//!     resp: {openid, nickname, avatar, points}
+//!  2. GET  /api/v1/app/points/products —— 分页查询积分商品列表（仅上架）
+//!     query: account_id?, page?（默认 1）, page_size?（默认 20，最大 100）
+//!     resp: {list: [{id, account_id, name, points, stock}], total, page, pageSize}
+//!  3. POST /api/v1/app/points/redeem —— 兑换积分商品
+//!     body: {account_id: i64, product_id: i64}
+//!     resp: {order_id}; 400: 库存不足 / 积分不足 / 商品不存在
+//!  4. GET  /api/v1/app/points/orders —— 查询我的积分兑换订单
+//!     query: account_id?
+//!     resp: [{id, product_id, product_name, points_spent, status}]
+//!  5. GET  /api/v1/app/coupons —— 分页查询可领取优惠券列表（仅上架）
+//!     query: account_id?, page?, page_size?（默认 20，最大 100）
+//!     resp: {list: [{id, account_id, title, amount, min_amount, total, per_user, start_at, end_at}], total, page, pageSize}
+//!  6. POST /api/v1/app/coupons/{id}/claim —— 领取优惠券
+//!     path: id: i64（券模板 ID）
+//!     body: {account_id: i64}
+//!     resp: {code}; 400: 券已领完 / 已达领取上限 / 活动未开始 / 活动已结束 / 券不存在
+//!  7. GET  /api/v1/app/my-coupons —— 分页查询我的优惠券
+//!     query: account_id?, page?, page_size?（默认 20，最大 100）
+//!     resp: {list: [{id, coupon_id, code, status, created_at, title, amount, min_amount}], total, page, pageSize}
+//!  8. GET  /api/v1/app/lucky-draw/records —— 分页查询我的抽奖记录
+//!     query: account_id?, page?, page_size?（默认 20，最大 100）
+//!     resp: {list: [{id, prize_name, points, created_at}], total, page, pageSize}
+//!  9. GET  /api/v1/app/lucky-draw/config —— 查询抽奖配置
+//!     query: account_id?
+//!     resp: {cost, daily_limit, prize_count}
+//! 10. POST /api/v1/app/lucky-draw/draw —— 执行抽奖
+//!     body: {account_id: i64}
+//!     resp: {prize_name, points}; 400: 今日抽奖次数已用完
+//! 11. GET  /api/v1/app/wallet —— 查询 C 端钱包余额
+//!     query: account_id?
+//!     resp: {balance: i64}（分；无钱包记录时返回 0）
 
 const std = @import("std");
 const zigmodu = @import("zigmodu");
@@ -84,6 +129,20 @@ const DrawConfigDto = struct {
     prize_count: i64,
 };
 
+// ── OpenAPI query 参数注解（经 RouteMeta.openapi_params 进入 openapi.json）──
+// 库限制：summary/description/body 结构无注入通道，契约见本文件顶部注释。
+
+/// 可选 query：账号 ID（各端点 `account_id` 缺省按 0 处理）。
+const q_acct = [_]http.ApiParam{
+    .{ .name = "account_id", .location = .query, .param_type = "integer", .required = false, .description = "账号 ID，默认 0（默认账号）" },
+};
+/// 可选 query：分页参数（PageParams 解析，page 最小 1，page_size 钳制 1..100）。
+const q_page = [_]http.ApiParam{
+    .{ .name = "page", .location = .query, .param_type = "integer", .required = false, .description = "页码，默认 1" },
+    .{ .name = "page_size", .location = .query, .param_type = "integer", .required = false, .description = "每页条数，默认 20，最大 100" },
+};
+const q_acct_page = q_acct ++ q_page;
+
 const PointsOrderDto = struct {
     id: i64,
     product_id: i64,
@@ -117,17 +176,17 @@ pub fn FanAppApi(
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "app/fan/profile", .handler = http.wrapHandler(Self, fanProfile), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/points/products", .handler = http.wrapHandler(Self, listPointsProducts), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "app/fan/profile", .handler = http.wrapHandler(Self, fanProfile), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
+            .{ .method = .GET, .path = "app/points/products", .handler = http.wrapHandler(Self, listPointsProducts), .meta = .{ .auth = .public, .openapi_params = &q_acct_page } },
             .{ .method = .POST, .path = "app/points/redeem", .handler = http.wrapHandler(Self, redeemPoints), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/points/orders", .handler = http.wrapHandler(Self, listPointsOrders), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/coupons", .handler = http.wrapHandler(Self, listCoupons), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "app/points/orders", .handler = http.wrapHandler(Self, listPointsOrders), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
+            .{ .method = .GET, .path = "app/coupons", .handler = http.wrapHandler(Self, listCoupons), .meta = .{ .auth = .public, .openapi_params = &q_acct_page } },
             .{ .method = .POST, .path = "app/coupons/{id}/claim", .handler = http.wrapHandler(Self, claimCoupon), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/my-coupons", .handler = http.wrapHandler(Self, myCoupons), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/lucky-draw/records", .handler = http.wrapHandler(Self, listDrawRecords), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/lucky-draw/config", .handler = http.wrapHandler(Self, luckyDrawConfig), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "app/my-coupons", .handler = http.wrapHandler(Self, myCoupons), .meta = .{ .auth = .public, .openapi_params = &q_acct_page } },
+            .{ .method = .GET, .path = "app/lucky-draw/records", .handler = http.wrapHandler(Self, listDrawRecords), .meta = .{ .auth = .public, .openapi_params = &q_acct_page } },
+            .{ .method = .GET, .path = "app/lucky-draw/config", .handler = http.wrapHandler(Self, luckyDrawConfig), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
             .{ .method = .POST, .path = "app/lucky-draw/draw", .handler = http.wrapHandler(Self, draw), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/wallet", .handler = http.wrapHandler(Self, walletBalance), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "app/wallet", .handler = http.wrapHandler(Self, walletBalance), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
         };
 
         pub fn init(

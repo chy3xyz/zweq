@@ -1,4 +1,49 @@
 //! Admin-facing payment API — recharge orders, wallet, withdraws.
+//!
+//! ── 端点契约（OpenAPI 注解说明）────────────────────────────────────────
+//! 库限制：zigmodu `RouteMeta` 只有 `openapi_params` 能进入 openapi.json；
+//! summary 由库硬编码为 permission 码（如 payment:write），description 硬编码为
+//! public/jwt，request_body 无注入通道。因此各端点的中文 summary 与 body 结构
+//! 以本注释为权威契约，openapi.json 中可见的是经 openapi_params 注入的 query
+//! 参数注解；端点级 permission 码即 openapi.json 中的 summary 值。
+//! 统一约定：平台 JWT 鉴权（Authorization: Bearer + RBAC 权限码）；审计日志由
+//! handler 自动写入；金额单位均为分；分页响应为 ruoyi 信封
+//! `{code:0, msg:"ok", data:{list, total, page, pageSize}}`。
+//!
+//!  1. POST /api/v1/pay/recharge —— 创建充值订单（permission: payment:write）
+//!     body: {account_id: i64, fan_id: i64, amount: i64, openid?: string}
+//!     已配置微信支付 v3 时走 JSAPI 预下单（openid 必填），否则生成模拟订单。
+//!     resp: OrderDto {id, order_no, fan_id, amount, channel, status, paid_at, created_at}
+//!     400: 金额必须大于 0 / 支付配置不完整 / 微信支付下单失败
+//!  2. POST /api/v1/pay/recharge/{order_no}/complete —— 完成充值订单（模拟支付回调）
+//!     path: order_no: string（订单号）
+//!     resp: null; 409: 订单不存在或已处理
+//!  3. GET  /api/v1/pay/wallet —— 查询粉丝钱包余额（permission: payment:read）
+//!     query: account_id: i64（必填）, fan_id?: i64（默认 0）
+//!     resp: {account_id, fan_id, balance}（无钱包记录时 balance=0）
+//!  4. GET  /api/v1/pay/orders —— 分页查询充值订单
+//!     query: account_id: i64（必填）, page?（默认 1）, page_size?（默认 20，最大 100）
+//!  5. POST /api/v1/pay/withdraws —— 申请提现（permission: payment:write）
+//!     body: {account_id: i64, fan_id: i64, amount: i64}
+//!     resp: {id}; 400: 金额必须大于 0 / 余额不足
+//!  6. GET  /api/v1/pay/withdraws —— 分页查询提现记录
+//!     query: account_id: i64（必填）, page?, page_size?（默认 20，最大 100）
+//!  7. POST /api/v1/pay/refund —— 微信 V2 退款（permission: payment:write）
+//!     body: {out_trade_no: string, out_refund_no: string, total_fee: string,
+//!            refund_fee: string, refund_desc?: string（默认 ""）}
+//!     需配置 wechat_pay_v2_mchid/key/cert_p12；金额字段为字符串（分）。
+//!     resp: null; 400: 未配置 V2 / 微信退款失败
+//!  8. POST /api/v1/pay/transfer —— 微信 V2 企业付款到零钱（permission: payment:write）
+//!     body: {open_id: string, amount: i64, desc: string, partner_trade_no: string}
+//!     resp: null; 400: 未配置 V2 / 企业付款失败
+//!  9. POST /api/v1/pay/refund/v3 —— 微信 V3 退款（permission: payment:write）
+//!     body: {out_trade_no: string, out_refund_no: string, refund_amount: i64, total_amount: i64}
+//!     需配置 wechat_pay_mchid/appid/serial_no/private_key。
+//!     resp: null; 400: 未配置 v3 / 微信 v3 退款失败
+//! 10. POST /api/v1/pay/transfer/v3 —— 微信 V3 商家转账（permission: payment:write）
+//!     body: {openid: string, amount: i64, out_batch_no: string, out_detail_no: string,
+//!            remark?: string（默认 "转账"）}
+//!     resp: null; 400: 未配置 v3 / 微信 v3 转账失败
 
 const std = @import("std");
 const zigmodu = @import("zigmodu");
@@ -72,6 +117,26 @@ const WithdrawReq = struct {
     amount: i64,
 };
 
+// ── OpenAPI query 参数注解（经 RouteMeta.openapi_params 进入 openapi.json）──
+// 库限制：summary 固定为 permission 码、description 固定为 jwt、body 无注入
+// 通道，端点中文契约与 body 结构见本文件顶部注释。
+
+/// 必填 query：账号 ID（缺失时 handler 返回 400）。
+const q_acct_req = [_]http.ApiParam{
+    .{ .name = "account_id", .location = .query, .param_type = "integer", .required = true, .description = "账号 ID（必填）" },
+};
+/// 可选 query：钱包查询的粉丝 ID（缺省按 0 处理）。
+const q_fan = [_]http.ApiParam{
+    .{ .name = "fan_id", .location = .query, .param_type = "integer", .required = false, .description = "粉丝 ID，默认 0" },
+};
+/// 可选 query：分页参数（PageParams 解析，page 最小 1，page_size 钳制 1..100）。
+const q_page = [_]http.ApiParam{
+    .{ .name = "page", .location = .query, .param_type = "integer", .required = false, .description = "页码，默认 1" },
+    .{ .name = "page_size", .location = .query, .param_type = "integer", .required = false, .description = "每页条数，默认 20，最大 100" },
+};
+const q_wallet = q_acct_req ++ q_fan;
+const q_acct_page = q_acct_req ++ q_page;
+
 pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
     return struct {
         const Self = @This();
@@ -88,10 +153,10 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
         pub const routes: []const http.RouteSpec(Self) = &.{
             .{ .method = .POST, .path = "pay/recharge", .handler = http.wrapHandler(Self, recharge), .meta = .{ .permission = "payment:write" } },
             .{ .method = .POST, .path = "pay/recharge/{order_no}/complete", .handler = http.wrapHandler(Self, complete), .meta = .{ .permission = "payment:write" } },
-            .{ .method = .GET, .path = "pay/wallet", .handler = http.wrapHandler(Self, wallet), .meta = .{ .permission = "payment:read" } },
-            .{ .method = .GET, .path = "pay/orders", .handler = http.wrapHandler(Self, orders), .meta = .{ .permission = "payment:read" } },
+            .{ .method = .GET, .path = "pay/wallet", .handler = http.wrapHandler(Self, wallet), .meta = .{ .permission = "payment:read", .openapi_params = &q_wallet } },
+            .{ .method = .GET, .path = "pay/orders", .handler = http.wrapHandler(Self, orders), .meta = .{ .permission = "payment:read", .openapi_params = &q_acct_page } },
             .{ .method = .POST, .path = "pay/withdraws", .handler = http.wrapHandler(Self, withdraw), .meta = .{ .permission = "payment:write" } },
-            .{ .method = .GET, .path = "pay/withdraws", .handler = http.wrapHandler(Self, withdraws), .meta = .{ .permission = "payment:read" } },
+            .{ .method = .GET, .path = "pay/withdraws", .handler = http.wrapHandler(Self, withdraws), .meta = .{ .permission = "payment:read", .openapi_params = &q_acct_page } },
             .{ .method = .POST, .path = "pay/refund", .handler = http.wrapHandler(Self, refundV2), .meta = .{ .permission = "payment:write" } },
             .{ .method = .POST, .path = "pay/transfer", .handler = http.wrapHandler(Self, transferV2), .meta = .{ .permission = "payment:write" } },
             .{ .method = .POST, .path = "pay/refund/v3", .handler = http.wrapHandler(Self, refundV3), .meta = .{ .permission = "payment:write" } },
