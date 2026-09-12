@@ -63,14 +63,14 @@ pub const TenantStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, TenantInfo, &entity, self.allocator);
+        defer self.client.tenant.deinitRow(&entity);
         return entity.id;
     }
 
     pub fn getById(self: *TenantStore, id: i64) !?TenantRow {
         const preds = self.client.tenant.predicates;
         var entity = (try crud.first(self.client.tenant, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, TenantInfo, &entity, self.allocator);
+        defer self.client.tenant.deinitRow(&entity);
         return try self.dup(entity);
     }
 

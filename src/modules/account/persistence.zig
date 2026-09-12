@@ -90,14 +90,14 @@ pub const AccountStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, AccountInfo, &row, self.allocator);
+        defer self.client.account.deinitRow(&row);
         return row.id;
     }
 
     pub fn getById(self: *AccountStore, id: i64) !?AccountRow {
         const preds = self.client.account.predicates;
         var entity = (try crud.first(self.client.account, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, AccountInfo, &entity, self.allocator);
+        defer self.client.account.deinitRow(&entity);
         return try self.dupAccount(entity);
     }
 
@@ -173,7 +173,7 @@ pub const AccountStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, AccountWechatInfo, &entity, self.allocator);
+        defer self.client.account_wechat.deinitRow(&entity);
         return try self.dupWechat(entity);
     }
 
@@ -187,7 +187,7 @@ pub const AccountStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, AccountWechatInfo, &entity, self.allocator);
+        defer self.client.account_wechat.deinitRow(&entity);
         return try self.dupWechat(entity);
     }
 
@@ -200,7 +200,7 @@ pub const AccountStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, AccountWechatInfo, &entity, self.allocator);
+        defer self.client.account_wechat.deinitRow(&entity);
         const secret = try self.allocator.dupe(u8, entity.secret);
         errdefer self.allocator.free(secret);
         const key = try self.allocator.dupe(u8, entity.encoding_aes_key);
@@ -238,7 +238,7 @@ pub const AccountStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, AccountWechatInfo, &row, self.allocator);
+        defer self.client.account_wechat.deinitRow(&row);
         return row.id;
     }
 

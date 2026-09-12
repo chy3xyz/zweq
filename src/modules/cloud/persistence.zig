@@ -133,7 +133,7 @@ pub const CloudStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, LicenseInfo, &row, self.allocator);
+        defer self.client.license.deinitRow(&row);
         return row.id;
     }
 
@@ -146,7 +146,7 @@ pub const CloudStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, LicenseInfo, &entity, self.allocator);
+        defer self.client.license.deinitRow(&entity);
         return try self.dupLicense(entity);
     }
 
@@ -157,7 +157,7 @@ pub const CloudStore = struct {
         _ = try q.Where(.{preds.idEQ(.{ .int = id })});
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, LicenseInfo, &entity, self.allocator);
+        defer self.client.license.deinitRow(&entity);
         return try self.dupLicense(entity);
     }
 
@@ -205,7 +205,7 @@ pub const CloudStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, MarketPackageInfo, &entity, self.allocator);
+        defer self.client.market_package.deinitRow(&entity);
         return try self.dupPackage(entity);
     }
 
@@ -238,7 +238,7 @@ pub const CloudStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, MarketPackageInfo, &row, self.allocator);
+        defer self.client.market_package.deinitRow(&row);
         return row.id;
     }
 
@@ -311,7 +311,7 @@ pub const DynamicTableStore = struct {
         _ = q.Limit(1);
         if (try q.First()) |e_const| {
             var e = e_const;
-            defer zent.codegen.deinitEntity(infos, DynamicTableInfo, &e, self.allocator);
+            defer self.client.dynamic_table.deinitRow(&e);
             var upd = self.client.dynamic_table.Update();
             defer upd.deinit();
             _ = try upd.set("module", .{ .string = module });
@@ -332,7 +332,7 @@ pub const DynamicTableStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, DynamicTableInfo, &row, self.allocator);
+        defer self.client.dynamic_table.deinitRow(&row);
         return row.id;
     }
 
@@ -343,10 +343,7 @@ pub const DynamicTableStore = struct {
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("table_name")});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, DynamicTableInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.dynamic_table.deinitRows(&rows);
         var out = try self.allocator.alloc(DynamicTableRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -367,7 +364,7 @@ pub const DynamicTableStore = struct {
         _ = q.Limit(1);
         const e_opt = try q.First();
         var e = e_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, DynamicTableInfo, &e, self.allocator);
+        defer self.client.dynamic_table.deinitRow(&e);
         return try self.dup(e);
     }
 };

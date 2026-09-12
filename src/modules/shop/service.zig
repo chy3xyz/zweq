@@ -424,7 +424,7 @@ pub const ShopService = struct {
                 tx.rollback() catch {};
                 return error.Unexpected;
             };
-            defer zent.codegen.deinitEntity(persist.infos, persist.ShopOrderInfo, &row, self.allocator);
+            defer tx.client.shop_order.deinitRow(&row);
             break :blk row.id;
         };
 
@@ -458,7 +458,7 @@ pub const ShopService = struct {
                 tx.rollback() catch {};
                 return error.Unexpected;
             };
-            defer zent.codegen.deinitEntity(schema.infos, persist.ShopOrderProductInfo, &op_row, self.allocator);
+            defer tx.client.shop_order_product.deinitRow(&op_row);
         }
 
         // 事务提交（原子）。提交后马上归还池连接，后续查询才借得到。

@@ -112,14 +112,14 @@ pub const TaskStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, TaskInfo, &row, self.allocator);
+        defer self.client.task.deinitRow(&row);
         return row.id;
     }
 
     pub fn getTaskById(self: *TaskStore, id: i64) !?TaskRow {
         const preds = self.client.task.predicates;
         var entity = (try crud.first(self.client.task, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, TaskInfo, &entity, self.allocator);
+        defer self.client.task.deinitRow(&entity);
         return try self.dupTask(entity);
     }
 
@@ -159,7 +159,7 @@ pub const TaskStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, TaskInfo, &entity, self.allocator);
+        defer self.client.task.deinitRow(&entity);
 
         // Mark claimed atomically-ish: only a row still pending may be claimed.
         var upd = self.client.task.Update();
@@ -220,10 +220,7 @@ pub const TaskStore = struct {
         _ = try q.Where(.{preds.statusEQ(.{ .string = "claimed" })});
         _ = try q.Where(.{preds.started_atLT(.{ .int = now - stale_after })});
         var found = try q.All();
-        defer {
-            for (found.items) |*e| zent.codegen.deinitEntity(infos, TaskInfo, e, self.allocator);
-            found.deinit();
-        }
+        defer self.client.task.deinitRows(&found);
 
         var count: usize = 0;
         for (found.items) |e| {

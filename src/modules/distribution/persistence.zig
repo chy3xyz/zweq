@@ -124,7 +124,7 @@ pub const DistributionStore = struct {
         _ = try q.Where(.{preds.openidEQ(.{ .string = openid })});
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, DistributorInfo, &entity, self.allocator);
+        defer self.client.distributor.deinitRow(&entity);
         return try self.dupDistributor(entity);
     }
 
@@ -140,7 +140,7 @@ pub const DistributionStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, DistributorInfo, &row, self.allocator);
+        defer self.client.distributor.deinitRow(&row);
         return row.id;
     }
 
@@ -192,7 +192,7 @@ pub const DistributionStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, CommissionRecordInfo, &row, self.allocator);
+        defer self.client.commission_record.deinitRow(&row);
         return row.id;
     }
 

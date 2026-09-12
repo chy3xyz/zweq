@@ -111,7 +111,7 @@ pub const ModuleStore = struct {
     pub fn getModuleByName(self: *ModuleStore, tenant_id: i64, name: []const u8) !?AppModuleRow {
         const preds = self.client.app_module.predicates;
         var entity = (try crud.first(self.client.app_module, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.nameEQ(.{ .string = name }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, AppModuleInfo, &entity, self.allocator);
+        defer self.client.app_module.deinitRow(&entity);
         return try self.dupModule(entity);
     }
 
@@ -119,7 +119,7 @@ pub const ModuleStore = struct {
     pub fn getModuleById(self: *ModuleStore, tenant_id: i64, id: i64) !?AppModuleRow {
         const preds = self.client.app_module.predicates;
         var entity = (try crud.first(self.client.app_module, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, AppModuleInfo, &entity, self.allocator);
+        defer self.client.app_module.deinitRow(&entity);
         return try self.dupModule(entity);
     }
 
@@ -158,7 +158,7 @@ pub const ModuleStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, AppModuleInfo, &row, self.allocator);
+        defer self.client.app_module.deinitRow(&row);
         return row.id;
     }
 
@@ -190,7 +190,7 @@ pub const ModuleStore = struct {
     pub fn getBinding(self: *ModuleStore, tenant_id: i64, account_id: i64, module: []const u8) !?ModuleBindingRow {
         const preds = self.client.module_binding.predicates;
         var entity = (try crud.first(self.client.module_binding, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.account_idEQ(.{ .int = account_id }), preds.moduleEQ(.{ .string = module }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ModuleBindingInfo, &entity, self.allocator);
+        defer self.client.module_binding.deinitRow(&entity);
         return try self.dupBinding(entity);
     }
 
@@ -214,7 +214,7 @@ pub const ModuleStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ModuleBindingInfo, &row, self.allocator);
+        defer self.client.module_binding.deinitRow(&row);
         return row.id;
     }
 
@@ -239,7 +239,7 @@ pub const ModuleStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ModuleBindingInfo, &row, self.allocator);
+        defer self.client.module_binding.deinitRow(&row);
         return row.id;
     }
 
@@ -256,10 +256,7 @@ pub const ModuleStore = struct {
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("module")});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ModuleBindingInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.module_binding.deinitRows(&rows);
         var out = try self.allocator.alloc(ModuleBindingRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;

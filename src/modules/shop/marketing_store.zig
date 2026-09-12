@@ -71,7 +71,7 @@ pub const MarketingStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopBalancePlanInfo, &row, self.allocator);
+        defer self.client.shop_balance_plan.deinitRow(&row);
         return row.id;
     }
 
@@ -84,10 +84,7 @@ pub const MarketingStore = struct {
         _ = try q.Where(.{preds.statusEQ(.{ .int = 1 })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("amount")});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopBalancePlanInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_balance_plan.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopBalancePlanRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -110,7 +107,7 @@ pub const MarketingStore = struct {
     pub fn getBalancePlan(self: *MarketingStore, id: i64) !?ShopBalancePlanRow {
         const preds = self.client.shop_balance_plan.predicates;
         var entity = (try crud.first(self.client.shop_balance_plan, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopBalancePlanInfo, &entity, self.allocator);
+        defer self.client.shop_balance_plan.deinitRow(&entity);
         return .{
             .id = entity.id,
             .account_id = entity.account_id,
@@ -143,7 +140,7 @@ pub const MarketingStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopInviteGiftInfo, &row, self.allocator);
+        defer self.client.shop_invite_gift.deinitRow(&row);
         return row.id;
     }
 
@@ -155,10 +152,7 @@ pub const MarketingStore = struct {
         if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.Where(.{preds.statusEQ(.{ .int = 1 })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopInviteGiftInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_invite_gift.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopInviteGiftRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -201,7 +195,7 @@ pub const MarketingStore = struct {
         _ = try cb.setFieldValue("created_at", now);
         _ = try cb.setFieldValue("updated_at", now);
         var row = try cb.SaveIgnore();
-        defer zent.codegen.deinitEntity(infos, ShopInviteRecordInfo, &row, self.allocator);
+        defer self.client.shop_invite_record.deinitRow(&row);
         // 唯一键冲突被忽略时 id 为 0（SQLite/PG 无 RETURNING 行，MySQL last_insert_id=0）。
         return row.id != 0;
     }
@@ -233,7 +227,7 @@ pub const MarketingStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopGrouponInfo, &row, self.allocator);
+        defer self.client.shop_groupon.deinitRow(&row);
         return row.id;
     }
 
@@ -241,7 +235,7 @@ pub const MarketingStore = struct {
     pub fn getGroupon(self: *MarketingStore, tenant_id: i64, id: i64) !?ShopGrouponRow {
         const preds = self.client.shop_groupon.predicates;
         var entity = (try crud.first(self.client.shop_groupon, .{ preds.idEQ(.{ .int = id }), preds.tenant_idEQ(.{ .int = tenant_id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopGrouponInfo, &entity, self.allocator);
+        defer self.client.shop_groupon.deinitRow(&entity);
         return .{
             .id = entity.id,
             .account_id = entity.account_id,
@@ -263,10 +257,7 @@ pub const MarketingStore = struct {
         if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.Where(.{preds.statusEQ(.{ .int = 1 })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopGrouponInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_groupon.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopGrouponRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -298,7 +289,7 @@ pub const MarketingStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopGrouponTeamInfo, &row, self.allocator);
+        defer self.client.shop_groupon_team.deinitRow(&row);
         return row.id;
     }
 
@@ -306,7 +297,7 @@ pub const MarketingStore = struct {
     pub fn getTeam(self: *MarketingStore, tenant_id: i64, id: i64) !?ShopGrouponTeamRow {
         const preds = self.client.shop_groupon_team.predicates;
         var entity = (try crud.first(self.client.shop_groupon_team, .{ preds.idEQ(.{ .int = id }), preds.tenant_idEQ(.{ .int = tenant_id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopGrouponTeamInfo, &entity, self.allocator);
+        defer self.client.shop_groupon_team.deinitRow(&entity);
         return .{
             .id = entity.id,
             .account_id = entity.account_id,
@@ -345,10 +336,7 @@ pub const MarketingStore = struct {
         const preds = self.client.shop_order.predicates;
         _ = try q.Where(.{preds.groupon_team_idEQ(.{ .int = team_id })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopOrderInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_order.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopOrderRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;

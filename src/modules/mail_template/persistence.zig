@@ -65,10 +65,7 @@ pub const TemplateStore = struct {
         _ = try q.Where(.{preds.codeEQ(.{ .string = code })});
         _ = q.Limit(1);
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, EmailTemplateInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.email_template.deinitRows(&rows);
         if (rows.items.len == 0) return null;
         return try self.dup(rows.items[0]);
     }
@@ -81,10 +78,7 @@ pub const TemplateStore = struct {
         _ = try q.Where(.{preds.codeEQ(.{ .string = code })});
         _ = q.Limit(1);
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, EmailTemplateInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.email_template.deinitRows(&rows);
         if (rows.items.len == 0) {
             var b = try self.client.email_template.Create();
             defer b.deinit();
@@ -94,7 +88,7 @@ pub const TemplateStore = struct {
             _ = try b.setFieldValue("created_at", now);
             _ = try b.setFieldValue("updated_at", now);
             var row = try b.Save();
-            defer zent.codegen.deinitEntity(infos, EmailTemplateInfo, &row, self.allocator);
+            defer self.client.email_template.deinitRow(&row);
             return;
         }
         var upd = self.client.email_template.Update();

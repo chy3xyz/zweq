@@ -75,7 +75,7 @@ pub const NotificationStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, NotificationInfo, &row, self.allocator);
+        defer self.client.notification.deinitRow(&row);
         return row.id;
     }
 

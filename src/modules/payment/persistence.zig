@@ -146,7 +146,7 @@ pub const PaymentStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, WalletInfo, &entity, self.allocator);
+        defer client.wallet.deinitRow(&entity);
         const balance = try self.allocator.dupe(u8, entity.balance);
         errdefer self.allocator.free(balance);
         return .{
@@ -181,7 +181,7 @@ pub const PaymentStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, WalletInfo, &row, self.allocator);
+        defer client.wallet.deinitRow(&row);
         return row.id;
     }
 
@@ -242,7 +242,7 @@ pub const PaymentStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, RechargeOrderInfo, &row, self.allocator);
+        defer self.client.recharge_order.deinitRow(&row);
         return row.id;
     }
 
@@ -256,7 +256,7 @@ pub const PaymentStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, RechargeOrderInfo, &entity, self.allocator);
+        defer self.client.recharge_order.deinitRow(&entity);
         return try self.dupOrder(entity);
     }
 
@@ -274,7 +274,7 @@ pub const PaymentStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, RechargeOrderInfo, &entity, self.allocator);
+        defer client.recharge_order.deinitRow(&entity);
         return try self.dupOrder(entity);
     }
 
@@ -341,7 +341,7 @@ pub const PaymentStore = struct {
         _ = try b.setFieldValue("status", "pending");
         _ = try b.setFieldValue("created_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, WithdrawInfo, &row, self.allocator);
+        defer self.client.withdraw.deinitRow(&row);
         return row.id;
     }
 

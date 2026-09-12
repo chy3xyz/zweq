@@ -60,7 +60,7 @@ pub const SettingStore = struct {
     pub fn get(self: *SettingStore, tenant_id: i64, key: []const u8) !?SettingRow {
         const preds = self.client.site_setting.predicates;
         var entity = (try crud.first(self.client.site_setting, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.keyEQ(.{ .string = key }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, SettingInfo, &entity, self.allocator);
+        defer self.client.site_setting.deinitRow(&entity);
         return try self.dup(entity);
     }
 
@@ -82,7 +82,7 @@ pub const SettingStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, SettingInfo, &row, self.allocator);
+        defer self.client.site_setting.deinitRow(&row);
         return row.id;
     }
 

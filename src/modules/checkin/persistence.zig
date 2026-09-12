@@ -67,7 +67,7 @@ pub const CheckinStore = struct {
             preds.openidEQ(.{ .string = openid }),
             preds.checkin_dayEQ(.{ .int = day }),
         })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, CheckinRecordInfo, &entity, self.allocator);
+        defer self.client.checkin_record.deinitRow(&entity);
         return try self.dup(entity);
     }
 
@@ -81,7 +81,7 @@ pub const CheckinStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, CheckinRecordInfo, &row, self.allocator);
+        defer self.client.checkin_record.deinitRow(&row);
         return row.id;
     }
 

@@ -111,7 +111,7 @@ pub const AuditStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, AuditLogInfo, &row, self.allocator);
+        defer self.client.audit_log.deinitRow(&row);
         return row.id;
     }
 

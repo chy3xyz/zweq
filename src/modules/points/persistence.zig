@@ -125,7 +125,7 @@ pub const PointsStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, PointsProductInfo, &row, self.allocator);
+        defer self.client.points_product.deinitRow(&row);
         return row.id;
     }
 
@@ -135,7 +135,7 @@ pub const PointsStore = struct {
         defer q.deinit();
         _ = try q.Where(.{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) });
         var entity = (try q.First()) orelse return null;
-        defer zent.codegen.deinitEntity(infos, PointsProductInfo, &entity, self.allocator);
+        defer self.client.points_product.deinitRow(&entity);
         return try self.dupProduct(entity);
     }
 
@@ -226,7 +226,7 @@ pub const PointsStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, PointsOrderInfo, &row, self.allocator);
+        defer self.client.points_order.deinitRow(&row);
         return row.id;
     }
 
@@ -241,10 +241,7 @@ pub const PointsStore = struct {
         }
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("id")});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, PointsOrderInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.points_order.deinitRows(&rows);
         var out = try self.allocator.alloc(PointsOrderRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;

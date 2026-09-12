@@ -154,7 +154,7 @@ pub const MaterialStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, MaterialNewsInfo, &row, self.allocator);
+        defer self.client.material_news.deinitRow(&row);
         return row.id;
     }
 
@@ -165,7 +165,7 @@ pub const MaterialStore = struct {
         _ = try q.Where(.{preds.idEQ(.{ .int = id })});
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, MaterialNewsInfo, &entity, self.allocator);
+        defer self.client.material_news.deinitRow(&entity);
         return try self.dupNews(entity);
     }
 
@@ -228,7 +228,7 @@ pub const MaterialStore = struct {
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.Where(.{preds.media_idEQ(.{ .string = media_id })});
         var entity = (try q.First()) orelse return null;
-        defer zent.codegen.deinitEntity(infos, MaterialNewsInfo, &entity, self.allocator);
+        defer self.client.material_news.deinitRow(&entity);
         return try self.dupNews(entity);
     }
 
@@ -266,7 +266,7 @@ pub const MaterialStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var nrow = try b.Save();
-        defer zent.codegen.deinitEntity(infos, MaterialNewsInfo, &nrow, self.allocator);
+        defer self.client.material_news.deinitRow(&nrow);
         return nrow.id;
     }
 
@@ -283,7 +283,7 @@ pub const MaterialStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, MaterialFileInfo, &row, self.allocator);
+        defer self.client.material_file.deinitRow(&row);
         return row.id;
     }
 
@@ -331,7 +331,7 @@ pub const MaterialStore = struct {
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.Where(.{preds.media_idEQ(.{ .string = media_id })});
         var entity = (try q.First()) orelse return null;
-        defer zent.codegen.deinitEntity(infos, MaterialFileInfo, &entity, self.allocator);
+        defer self.client.material_file.deinitRow(&entity);
         return try self.dupFile(entity);
     }
 
@@ -359,7 +359,7 @@ pub const MaterialStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var nrow = try b.Save();
-        defer zent.codegen.deinitEntity(infos, MaterialFileInfo, &nrow, self.allocator);
+        defer self.client.material_file.deinitRow(&nrow);
         return nrow.id;
     }
 };

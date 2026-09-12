@@ -76,7 +76,7 @@ pub const TradeStore = struct {
         const entity_opt = try q.First();
         if (entity_opt) |e_opt| {
             var e = e_opt;
-            defer zent.codegen.deinitEntity(infos, ShopCartInfo, &e, self.allocator);
+            defer self.client.shop_cart.deinitRow(&e);
             var upd = self.client.shop_cart.Update();
             defer upd.deinit();
             _ = try upd.set("quantity", .{ .int = e.quantity + quantity });
@@ -94,7 +94,7 @@ pub const TradeStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopCartInfo, &row, self.allocator);
+        defer self.client.shop_cart.deinitRow(&row);
         return row.id;
     }
 
@@ -105,10 +105,7 @@ pub const TradeStore = struct {
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.openidEQ(.{ .string = openid })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopCartInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_cart.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopCartRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -155,7 +152,7 @@ pub const TradeStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopAddressInfo, &row, self.allocator);
+        defer self.client.shop_address.deinitRow(&row);
         if (a.is_default == 1) {
             self.clearDefaultAddress(tenant_id, a.openid, row.id) catch {};
         }
@@ -179,10 +176,7 @@ pub const TradeStore = struct {
         _ = try q.Where(.{preds.openidEQ(.{ .string = openid })});
         _ = try q.OrderBy(&[_]zent.sql.Order{ zent.sql.OrderDesc("is_default"), zent.sql.OrderDesc("created_at") });
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopAddressInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_address.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopAddressRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -208,7 +202,7 @@ pub const TradeStore = struct {
     pub fn getAddress(self: *TradeStore, tenant_id: i64, id: i64) !?ShopAddressRow {
         const preds = self.client.shop_address.predicates;
         var entity = (try crud.first(self.client.shop_address, .{ preds.idEQ(.{ .int = id }), preds.tenant_idEQ(.{ .int = tenant_id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopAddressInfo, &entity, self.allocator);
+        defer self.client.shop_address.deinitRow(&entity);
         const openid_dup = try self.allocator.dupe(u8, entity.openid);
         const name = try self.allocator.dupe(u8, entity.name);
         const mobile = try self.allocator.dupe(u8, entity.mobile);
@@ -298,7 +292,7 @@ pub const TradeStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopOrderInfo, &row, self.allocator);
+        defer self.client.shop_order.deinitRow(&row);
         return row.id;
     }
 
@@ -319,7 +313,7 @@ pub const TradeStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopOrderProductInfo, &row, self.allocator);
+        defer self.client.shop_order_product.deinitRow(&row);
         return row.id;
     }
 
@@ -332,7 +326,7 @@ pub const TradeStore = struct {
         _ = try q.Where(.{preds.client_trade_noEQ(.{ .string = client_trade_no })});
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopOrderInfo, &entity, self.allocator);
+        defer self.client.shop_order.deinitRow(&entity);
         return .{
             .id = entity.id,
             .account_id = entity.account_id,
@@ -357,7 +351,7 @@ pub const TradeStore = struct {
     pub fn getOrder(self: *TradeStore, id: i64) !?ShopOrderRow {
         const preds = self.client.shop_order.predicates;
         var entity = (try crud.first(self.client.shop_order, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopOrderInfo, &entity, self.allocator);
+        defer self.client.shop_order.deinitRow(&entity);
         return .{
             .id = entity.id,
             .account_id = entity.account_id,
@@ -429,10 +423,7 @@ pub const TradeStore = struct {
         const preds = client.shop_order_product.predicates;
         _ = try q.Where(.{preds.order_idEQ(.{ .int = order_id })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopOrderProductInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer client.shop_order_product.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopOrderProductRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -462,7 +453,7 @@ pub const TradeStore = struct {
     pub fn getOrderProduct(self: *TradeStore, id: i64) !?ShopOrderProductRow {
         const preds = self.client.shop_order_product.predicates;
         var entity = (try crud.first(self.client.shop_order_product, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopOrderProductInfo, &entity, self.allocator);
+        defer self.client.shop_order_product.deinitRow(&entity);
         return .{
             .id = entity.id,
             .order_id = entity.order_id,
@@ -552,10 +543,7 @@ pub const TradeStore = struct {
         _ = try q.Where(.{preds.created_atLTE(.{ .int = before_ts })});
         _ = q.Limit(50);
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopOrderInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_order.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopOrderRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -616,7 +604,7 @@ pub const TradeStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopFavoriteInfo, &row, self.allocator);
+        defer self.client.shop_favorite.deinitRow(&row);
     }
 
     pub fn isFavorite(self: *TradeStore, tenant_id: i64, openid: []const u8, product_id: i64) !bool {
@@ -646,10 +634,7 @@ pub const TradeStore = struct {
         _ = try q.Where(.{preds.openidEQ(.{ .string = openid })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopFavoriteInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_favorite.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopFavoriteRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -727,7 +712,7 @@ pub const TradeStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopRefundInfo, &row, self.allocator);
+        defer self.client.shop_refund.deinitRow(&row);
         return row.id;
     }
 
@@ -739,7 +724,7 @@ pub const TradeStore = struct {
         _ = try q.Where(.{preds.order_idEQ(.{ .int = order_id })});
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopRefundInfo, &entity, self.allocator);
+        defer self.client.shop_refund.deinitRow(&entity);
         return .{
             .id = entity.id,
             .account_id = entity.account_id,
@@ -836,7 +821,7 @@ pub const TradeStore = struct {
     pub fn getRefundByIdOn(self: *TradeStore, client: anytype, id: i64) !?ShopRefundRow {
         const preds = client.shop_refund.predicates;
         var entity = (try crud.first(client.shop_refund, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopRefundInfo, &entity, self.allocator);
+        defer client.shop_refund.deinitRow(&entity);
         return .{
             .id = entity.id,
             .account_id = entity.account_id,
@@ -858,10 +843,7 @@ pub const TradeStore = struct {
         _ = try q.Where(.{preds.order_product_idEQ(.{ .int = order_product_id })});
         _ = q.Limit(1);
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopCommentInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_comment.deinitRows(&rows);
         if (rows.items.len == 0) return null;
         const e = rows.items[0];
         return .{
@@ -888,7 +870,7 @@ pub const TradeStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopCommentInfo, &row, self.allocator);
+        defer self.client.shop_comment.deinitRow(&row);
         return row.id;
     }
 
@@ -899,10 +881,7 @@ pub const TradeStore = struct {
         _ = try q.Where(.{preds.product_idEQ(.{ .int = product_id })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderDesc("created_at")});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopCommentInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_comment.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopCommentRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;

@@ -116,7 +116,7 @@ pub const MemberCardStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, MemberCardLevelInfo, &row, self.allocator);
+        defer self.client.member_card_level.deinitRow(&row);
         return row.id;
     }
 
@@ -133,7 +133,7 @@ pub const MemberCardStore = struct {
     pub fn getLevel(self: *MemberCardStore, id: i64) !?MemberCardLevelRow {
         const preds = self.client.member_card_level.predicates;
         var entity = (try crud.first(self.client.member_card_level, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, MemberCardLevelInfo, &entity, self.allocator);
+        defer self.client.member_card_level.deinitRow(&entity);
         return try self.dupLevel(entity);
     }
 
@@ -149,7 +149,7 @@ pub const MemberCardStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, MemberCardLevelInfo, &entity, self.allocator);
+        defer self.client.member_card_level.deinitRow(&entity);
         return try self.dupLevel(entity);
     }
 
@@ -185,7 +185,7 @@ pub const MemberCardStore = struct {
     pub fn getById(self: *MemberCardStore, tenant_id: i64, id: i64) !?MemberCardLevelRow {
         const preds = self.client.member_card_level.predicates;
         var entity = (try crud.first(self.client.member_card_level, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, MemberCardLevelInfo, &entity, self.allocator);
+        defer self.client.member_card_level.deinitRow(&entity);
         return try self.dupLevel(entity);
     }
 
@@ -231,7 +231,7 @@ pub const MemberCardStore = struct {
         _ = try q.Where(.{preds.openidEQ(.{ .string = openid })});
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, MemberAccountInfo, &entity, self.allocator);
+        defer self.client.member_account.deinitRow(&entity);
         return try self.dupAccount(entity);
     }
 
@@ -246,7 +246,7 @@ pub const MemberCardStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, MemberAccountInfo, &row, self.allocator);
+        defer self.client.member_account.deinitRow(&row);
         return row.id;
     }
 

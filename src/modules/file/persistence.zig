@@ -97,21 +97,21 @@ pub const FileStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, FileInfo, &row, self.allocator);
+        defer self.client.file.deinitRow(&row);
         return row.id;
     }
 
     pub fn getById(self: *FileStore, id: i64) !?FileRow {
         const preds = self.client.file.predicates;
         var entity = (try crud.first(self.client.file, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, FileInfo, &entity, self.allocator);
+        defer self.client.file.deinitRow(&entity);
         return try self.dup(entity);
     }
 
     pub fn getByStorageKey(self: *FileStore, storage_key: []const u8) !?FileRow {
         const preds = self.client.file.predicates;
         var entity = (try crud.first(self.client.file, .{preds.storage_keyEQ(.{ .string = storage_key })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, FileInfo, &entity, self.allocator);
+        defer self.client.file.deinitRow(&entity);
         return try self.dup(entity);
     }
 
@@ -195,7 +195,7 @@ pub const GroupStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, GroupInfo, &row, self.allocator);
+        defer self.client.upload_group.deinitRow(&row);
         return row.id;
     }
 
@@ -223,7 +223,7 @@ pub const GroupStore = struct {
     pub fn getById(self: *GroupStore, id: i64) !?GroupRow {
         const preds = self.client.upload_group.predicates;
         var entity = (try crud.first(self.client.upload_group, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, GroupInfo, &entity, self.allocator);
+        defer self.client.upload_group.deinitRow(&entity);
         return try self.dupGroup(entity);
     }
 

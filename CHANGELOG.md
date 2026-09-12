@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI 前端 job（`npm run typecheck` + `vitest`）。
 
 ### Changed
+- 依赖升级（主站 + `zweq-cloud` 同步）：zent **v0.37.0 → v0.45.0**、zigmodu **v0.15.37 → v0.15.44**（8 + 7 个 minor）。逐条核对上游 `CHANGELOG` 与 zent `docs/UPGRADING.md` 后的结论：
+  - **采用（唯一需要动代码的一条）**：zent v0.40 的一行式实体释放。177 处手写 `zent.codegen.deinitEntity(infos, XInfo, &e, self.allocator)` 与 27 处 `defer { for (rows.items) |*e| deinitEntity(…); rows.deinit(); }` 释放循环迁移为 `client.<实体>.deinitRow(&e)` / `deinitRows(&rows)`（33 个文件）。调用方不再需要持有 graph 与分配器；`deinitRows` 会重置列表使其可复用（等价于原 `rows.deinit()`），反复调用是 no-op 而非二次释放。
+  - **BREAKING 不适用**：zent v0.38 把 `queryTargets`/`queryTargetsByValue` 改为 fail-closed（旧「仅软删」语义改名为 `*Unscoped`）——本仓库无 `queryTargets`/`QueryEdge` 用法，无迁移步骤。
+  - **不适用**：zent v0.39 `zent.scope`（裸 SQL 的读契约）——本仓库没有命中 graph 表的手写 SQL（仅谓词内 `sql.RawArgs` 参数化，走 Builder 路径自带契约；`cloud` 的动态表预览查的是运行时创建的表，不在 graph 内）；v0.43 不再接受 `[N]u8` 数组值（`setFieldValue`）——编译通过即证明无此用法；v0.39 `<col>Contains` 命名澄清——本仓库搜索一直用 `ContainsEscaped`，`Contains`（等值匹配、不补 `%`）从未被误用；v0.45 空更新报 `error.NoFieldsToUpdate`、纯边写补主键自赋值——本仓库无纯边写更新路径。
+  - **新能力已可用、本轮未采用（留作单独变更）**：zigmodu v0.15.41 `Auth.optional`（公开但可个性化路由）、v0.15.38 `ctx.multipart` / `ctx.bindForm` / `ctx.bindQuery` / 静态文件服务、v0.15.39 `Params` 多值容器（`get()` 仍返回最后一次出现的值，故无破坏）。fan C 端路由目前是 catalog `.public` + handler 内 `requireFanOpenid`（fan token 与后台 token 同密钥、角色/受众不同），改 `.optional` 只省一次重复验签却要重审 platform gate 与 `tokenVersionGuard` 交互，收益不匹配风险，故不动。
 - 依赖升级（零 breaking，代码零改动即适配）：zent **v0.34.0 → v0.37.0**（主站 + `zweq-cloud`；`zig build` / `zig build test` 93/93 全绿，真实库启动迁移通过）。新能力可用：连接池 `max_wait_ms` 真正阻塞等待（默认 0 = 旧语义）、嵌套预加载每层一次查询（消 N+1）、`StorageKey` 字段↔列名映射、`BulkInsert` 按参数上限分片、`In/NotIn/IsNull/HasPrefix/ContainsFold` 等类型化谓词、边写入（`AddEdgeIDs`/`SetEdgeIDs`/`ClearEdge`）、outbox 认领式派发、迁移默认加锁 + checksum 校验。本项目未用 outbox/BulkInsert/预加载，`UPGRADING` §10 的 outbox 迁移与 `createAllTables` 签名变更均不适用。
 - 依赖升级（零 breaking，代码零改动即适配）：zigmodu **v0.15.35 → v0.15.37**（`zweq-cloud` 同步从 v0.15.24 直升）。
 - RBAC 闭环：`RolePermission` 关联表 + `collectPermissionCodes`（user.admin / 角色 code / module:action）；`GET /auth/me` 返回 `permissions`；角色权限 API `GET|POST|DELETE /roles/{id}/permissions`；前端菜单按 `canAccessAdmin` 隐藏。

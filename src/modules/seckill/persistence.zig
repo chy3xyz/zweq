@@ -132,7 +132,7 @@ pub const SeckillStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, SeckillActivityInfo, &row, self.allocator);
+        defer self.client.seckill_activity.deinitRow(&row);
         return row.id;
     }
 
@@ -185,7 +185,7 @@ pub const SeckillStore = struct {
     pub fn getActivity(self: *SeckillStore, tenant_id: i64, id: i64) !?SeckillActivityRow {
         const preds = self.client.seckill_activity.predicates;
         var entity = (try crud.first(self.client.seckill_activity, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, SeckillActivityInfo, &entity, self.allocator);
+        defer self.client.seckill_activity.deinitRow(&entity);
         return try self.dupActivity(entity);
     }
 
@@ -193,7 +193,7 @@ pub const SeckillStore = struct {
     pub fn getById(self: *SeckillStore, tenant_id: i64, id: i64) !?SeckillActivityRow {
         const preds = self.client.seckill_activity.predicates;
         var entity = (try crud.first(self.client.seckill_activity, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, SeckillActivityInfo, &entity, self.allocator);
+        defer self.client.seckill_activity.deinitRow(&entity);
         return try self.dupActivity(entity);
     }
 
@@ -210,7 +210,7 @@ pub const SeckillStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, SeckillActivityInfo, &entity, self.allocator);
+        defer self.client.seckill_activity.deinitRow(&entity);
         return try self.dupActivity(entity);
     }
 
@@ -307,7 +307,7 @@ pub const SeckillStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, SeckillOrderInfo, &row, self.allocator);
+        defer self.client.seckill_order.deinitRow(&row);
         return row.id;
     }
 };

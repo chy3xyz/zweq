@@ -73,7 +73,7 @@ pub const DrawStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, DrawRecordInfo, &row, self.allocator);
+        defer self.client.draw_record.deinitRow(&row);
         return row.id;
     }
 

@@ -50,7 +50,7 @@ pub const MenuStore = struct {
             preds.tenant_idEQ(.{ .int = tenant_id }),
             preds.account_idEQ(.{ .int = account_id }),
         })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, WechatMenuInfo, &entity, self.allocator);
+        defer self.client.wechat_menu.deinitRow(&entity);
         return try self.dup(entity);
     }
 
@@ -72,7 +72,7 @@ pub const MenuStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, WechatMenuInfo, &row, self.allocator);
+        defer self.client.wechat_menu.deinitRow(&row);
         return row.id;
     }
 };

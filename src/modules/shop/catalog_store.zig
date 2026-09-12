@@ -129,7 +129,7 @@ pub const CatalogStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopCategoryInfo, &row, self.allocator);
+        defer self.client.shop_category.deinitRow(&row);
         return row.id;
     }
 
@@ -141,10 +141,7 @@ pub const CatalogStore = struct {
         if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.OrderBy(&[_]zent.sql.Order{ zent.sql.OrderAsc("sort"), zent.sql.OrderAsc("id") });
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopCategoryInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_category.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopCategoryRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -188,7 +185,7 @@ pub const CatalogStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopProductInfo, &row, self.allocator);
+        defer self.client.shop_product.deinitRow(&row);
         return row.id;
     }
 
@@ -203,7 +200,7 @@ pub const CatalogStore = struct {
         _ = try q.Where(.{preds.idEQ(.{ .int = id })});
         if (tenant_id > 0) _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         var entity = (try q.First()) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopProductInfo, &entity, self.allocator);
+        defer client.shop_product.deinitRow(&entity);
         return try self.dupProduct(entity);
     }
 
@@ -286,7 +283,7 @@ pub const CatalogStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopProductSkuInfo, &row, self.allocator);
+        defer self.client.shop_product_sku.deinitRow(&row);
         return row.id;
     }
 
@@ -296,10 +293,7 @@ pub const CatalogStore = struct {
         const preds = self.client.shop_product_sku.predicates;
         _ = try q.Where(.{preds.product_idEQ(.{ .int = product_id })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopProductSkuInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_product_sku.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopSkuRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -319,7 +313,7 @@ pub const CatalogStore = struct {
         _ = try q.Where(.{preds.idEQ(.{ .int = id })});
         if (tenant_id > 0) _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         var entity = (try q.First()) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopProductSkuInfo, &entity, self.allocator);
+        defer client.shop_product_sku.deinitRow(&entity);
         return try self.dupSku(entity);
     }
 

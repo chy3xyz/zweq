@@ -152,7 +152,7 @@ pub const CouponStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, CouponInfo, &row, self.allocator);
+        defer self.client.coupon.deinitRow(&row);
         return row.id;
     }
 
@@ -162,7 +162,7 @@ pub const CouponStore = struct {
     pub fn getCouponOn(self: *CouponStore, client: anytype, id: i64) !?CouponRow {
         const preds = client.coupon.predicates;
         var entity = (try crud.first(client.coupon, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, CouponInfo, &entity, self.allocator);
+        defer client.coupon.deinitRow(&entity);
         return try self.dupCoupon(entity);
     }
 
@@ -174,7 +174,7 @@ pub const CouponStore = struct {
     pub fn getById(self: *CouponStore, tenant_id: i64, id: i64) !?CouponRow {
         const preds = self.client.coupon.predicates;
         var entity = (try crud.first(self.client.coupon, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, CouponInfo, &entity, self.allocator);
+        defer self.client.coupon.deinitRow(&entity);
         return try self.dupCoupon(entity);
     }
 
@@ -274,7 +274,7 @@ pub const CouponStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, CouponUserInfo, &row, self.allocator);
+        defer self.client.coupon_user.deinitRow(&row);
         return row.id;
     }
 
@@ -301,6 +301,7 @@ pub const CouponStore = struct {
 
     /// 事务感知 insert — 在事务里创建用户券记录。
     pub fn createUserCouponOn(allocator: std.mem.Allocator, client: anytype, tenant_id: i64, account_id: i64, openid: []const u8, coupon_id: i64, code: []const u8, now: i64) !i64 {
+        _ = allocator; // deinitRow 自带分配器后不再需要，保留参数以维持调用方签名。
         var row = try crud.create(client.coupon_user, .{
             .tenant_id = tenant_id,
             .account_id = account_id,
@@ -312,7 +313,7 @@ pub const CouponStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, CouponUserInfo, &row, allocator);
+        defer client.coupon_user.deinitRow(&row);
         return row.id;
     }
 
@@ -353,7 +354,7 @@ pub const CouponStore = struct {
     pub fn getByCodeOn(self: *CouponStore, client: anytype, code: []const u8) !?CouponUserRow {
         const preds = client.coupon_user.predicates;
         var entity = (try crud.first(client.coupon_user, .{preds.codeEQ(.{ .string = code })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, CouponUserInfo, &entity, self.allocator);
+        defer client.coupon_user.deinitRow(&entity);
         return try self.dupUser(entity);
     }
 

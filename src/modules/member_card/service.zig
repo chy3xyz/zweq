@@ -140,7 +140,7 @@ pub const MemberCardService = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(persist.infos, persist.MemberCardLevelInfo, &entity, self.allocator);
+        defer self.store.client.member_card_level.deinitRow(&entity);
         const name = try self.allocator.dupe(u8, entity.name);
         errdefer self.allocator.free(name);
         return .{

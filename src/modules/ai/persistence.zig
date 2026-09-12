@@ -303,7 +303,7 @@ pub const AiStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ProviderInfo, &row, self.allocator);
+        defer self.client.ai_provider.deinitRow(&row);
         return row.id;
     }
 
@@ -342,14 +342,14 @@ pub const AiStore = struct {
     pub fn getProvider(self: *AiStore, id: i64) !?ProviderRow {
         const preds = self.client.ai_provider.predicates;
         var entity = (try crud.first(self.client.ai_provider, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ProviderInfo, &entity, self.allocator);
+        defer self.client.ai_provider.deinitRow(&entity);
         return try self.dupProvider(entity);
     }
 
     pub fn getProviderByName(self: *AiStore, name: []const u8) !?ProviderRow {
         const preds = self.client.ai_provider.predicates;
         var entity = (try crud.first(self.client.ai_provider, .{preds.nameEQ(.{ .string = name })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ProviderInfo, &entity, self.allocator);
+        defer self.client.ai_provider.deinitRow(&entity);
         return try self.dupProvider(entity);
     }
 
@@ -368,7 +368,7 @@ pub const AiStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, SessionInfo, &row, self.allocator);
+        defer self.client.ai_session.deinitRow(&row);
         return row.id;
     }
 
@@ -396,7 +396,7 @@ pub const AiStore = struct {
     pub fn getSession(self: *AiStore, id: i64, user_id: i64) !?SessionRow {
         const preds = self.client.ai_session.predicates;
         var entity = (try crud.first(self.client.ai_session, .{ preds.idEQ(.{ .int = id }), preds.user_idEQ(.{ .int = user_id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, SessionInfo, &entity, self.allocator);
+        defer self.client.ai_session.deinitRow(&entity);
         return try self.dupSession(entity);
     }
 
@@ -421,7 +421,7 @@ pub const AiStore = struct {
             .reasoning_content = reasoning_content,
             .created_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, MessageInfo, &row, self.allocator);
+        defer self.client.ai_message.deinitRow(&row);
         return row.id;
     }
 
@@ -459,7 +459,7 @@ pub const AiStore = struct {
             .approved_at = @as(i64, 0),
             .created_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ApprovalInfo, &row, self.allocator);
+        defer self.client.ai_approval.deinitRow(&row);
         return row.id;
     }
 
@@ -491,7 +491,7 @@ pub const AiStore = struct {
     pub fn getApproval(self: *AiStore, id: i64) !?ApprovalRow {
         const preds = self.client.ai_approval.predicates;
         var entity = (try crud.first(self.client.ai_approval, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ApprovalInfo, &entity, self.allocator);
+        defer self.client.ai_approval.deinitRow(&entity);
         return try self.dupApproval(entity);
     }
 
@@ -524,7 +524,7 @@ pub const AiStore = struct {
             .err_msg = err,
             .created_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, RunInfo, &row, self.allocator);
+        defer self.client.ai_run.deinitRow(&row);
         return row.id;
     }
 

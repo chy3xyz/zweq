@@ -99,7 +99,7 @@ pub const FanStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, FanInfo, &entity, self.allocator);
+        defer self.client.fan.deinitRow(&entity);
         return try self.dup(entity);
     }
 
@@ -133,7 +133,7 @@ pub const FanStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.SaveOrUpdateOn(&.{ "tenant_id", "account_id", "openid" });
-        defer zent.codegen.deinitEntity(infos, FanInfo, &row, self.allocator);
+        defer self.client.fan.deinitRow(&row);
         return row.id;
     }
 
@@ -185,7 +185,7 @@ pub const FanStore = struct {
         _ = try q.Where(.{preds.idEQ(.{ .int = id })});
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, FanInfo, &entity, self.allocator);
+        defer self.client.fan.deinitRow(&entity);
         return try self.dup(entity);
     }
 
@@ -251,7 +251,7 @@ pub const TagStore = struct {
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.Where(.{preds.wx_tag_idEQ(.{ .int = wx_tag_id })});
         var entity = (try q.First()) orelse return null;
-        defer zent.codegen.deinitEntity(infos, FanTagInfo, &entity, self.allocator);
+        defer self.client.fan_tag.deinitRow(&entity);
         return try self.dupTag(entity);
     }
 
@@ -272,7 +272,7 @@ pub const TagStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.SaveOrUpdateOn(&.{ "tenant_id", "account_id", "wx_tag_id" });
-        defer zent.codegen.deinitEntity(infos, FanTagInfo, &row, self.allocator);
+        defer self.client.fan_tag.deinitRow(&row);
         return row.id;
     }
 
@@ -284,10 +284,7 @@ pub const TagStore = struct {
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("wx_tag_id")});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, FanTagInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.fan_tag.deinitRows(&rows);
         var out = try self.allocator.alloc(FanTagRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;

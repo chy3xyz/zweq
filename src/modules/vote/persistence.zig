@@ -69,7 +69,7 @@ pub const VoteStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, VoteInfo, &row, self.allocator);
+        defer self.client.vote.deinitRow(&row);
         return row.id;
     }
 
@@ -78,7 +78,7 @@ pub const VoteStore = struct {
     pub fn getVote(self: *VoteStore, tenant_id: i64, id: i64) !?VoteRow {
         const preds = self.client.vote.predicates;
         var entity = (try crud.first(self.client.vote, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, VoteInfo, &entity, self.allocator);
+        defer self.client.vote.deinitRow(&entity);
         return try self.dup(entity);
     }
 
@@ -88,7 +88,7 @@ pub const VoteStore = struct {
     pub fn getTenantId(self: *VoteStore, id: i64) !?i64 {
         const preds = self.client.vote.predicates;
         var entity = (try crud.first(self.client.vote, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, VoteInfo, &entity, self.allocator);
+        defer self.client.vote.deinitRow(&entity);
         return entity.tenant_id;
     }
 
@@ -96,7 +96,7 @@ pub const VoteStore = struct {
     pub fn getById(self: *VoteStore, tenant_id: i64, id: i64) !?VoteRow {
         const preds = self.client.vote.predicates;
         var entity = (try crud.first(self.client.vote, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
-        defer zent.codegen.deinitEntity(infos, VoteInfo, &entity, self.allocator);
+        defer self.client.vote.deinitRow(&entity);
         return try self.dup(entity);
     }
 
@@ -111,7 +111,7 @@ pub const VoteStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, VoteInfo, &entity, self.allocator);
+        defer self.client.vote.deinitRow(&entity);
         return try self.dup(entity);
     }
 
@@ -184,7 +184,7 @@ pub const VoteStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, VoteRecordInfo, &row, self.allocator);
+        defer self.client.vote_record.deinitRow(&row);
         return row.id;
     }
 

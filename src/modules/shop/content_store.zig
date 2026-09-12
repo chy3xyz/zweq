@@ -66,7 +66,7 @@ pub const ContentStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopWebhookInfo, &row, self.allocator);
+        defer self.client.shop_webhook.deinitRow(&row);
         return row.id;
     }
 
@@ -78,10 +78,7 @@ pub const ContentStore = struct {
         if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.Where(.{preds.statusEQ(.{ .int = 1 })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopWebhookInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_webhook.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopWebhookRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -120,14 +117,14 @@ pub const ContentStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopArticleInfo, &row, self.allocator);
+        defer self.client.shop_article.deinitRow(&row);
         return row.id;
     }
 
     pub fn getArticle(self: *ContentStore, id: i64) !?ShopArticleRow {
         const preds = self.client.shop_article.predicates;
         var entity = (try crud.first(self.client.shop_article, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, ShopArticleInfo, &entity, self.allocator);
+        defer self.client.shop_article.deinitRow(&entity);
         return .{
             .id = entity.id,
             .account_id = entity.account_id,
@@ -189,7 +186,7 @@ pub const ContentStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, ShopOutletInfo, &row, self.allocator);
+        defer self.client.shop_outlet.deinitRow(&row);
         return row.id;
     }
 
@@ -200,10 +197,7 @@ pub const ContentStore = struct {
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, ShopOutletInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.shop_outlet.deinitRows(&rows);
         var out = try self.allocator.alloc(ShopOutletRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;

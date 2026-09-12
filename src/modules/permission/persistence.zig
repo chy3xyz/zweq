@@ -127,14 +127,14 @@ pub const RoleStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, RoleInfo, &row, self.allocator);
+        defer self.client.role.deinitRow(&row);
         return row.id;
     }
 
     pub fn getRoleById(self: *RoleStore, id: i64) !?RoleRow {
         const preds = self.client.role.predicates;
         var entity = (try crud.first(self.client.role, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, RoleInfo, &entity, self.allocator);
+        defer self.client.role.deinitRow(&entity);
         return try self.dupRole(entity);
     }
 
@@ -188,7 +188,7 @@ pub const RoleStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, PermissionInfo, &row, self.allocator);
+        defer self.client.permission.deinitRow(&row);
         return row.id;
     }
 
@@ -232,7 +232,7 @@ pub const RoleStore = struct {
             .role_id = role_id,
             .created_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, UserRoleInfo, &row, self.allocator);
+        defer self.client.user_role.deinitRow(&row);
         return row.id;
     }
 
@@ -247,10 +247,7 @@ pub const RoleStore = struct {
         const preds = self.client.user_role.predicates;
         _ = try q.Where(.{preds.user_idEQ(.{ .int = user_id })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, UserRoleInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.user_role.deinitRows(&rows);
 
         var out = try self.allocator.alloc(UserRoleRow, rows.items.len);
         errdefer self.allocator.free(out);
@@ -292,7 +289,7 @@ pub const RoleStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, RolePermissionInfo, &row, self.allocator);
+        defer self.client.role_permission.deinitRow(&row);
         return row.id;
     }
 
@@ -307,10 +304,7 @@ pub const RoleStore = struct {
         const rp_preds = self.client.role_permission.predicates;
         _ = try rp_q.Where(.{rp_preds.role_idEQ(.{ .int = role_id })});
         var rp_rows = try rp_q.All();
-        defer {
-            for (rp_rows.items) |*e| zent.codegen.deinitEntity(infos, RolePermissionInfo, e, self.allocator);
-            rp_rows.deinit();
-        }
+        defer self.client.role_permission.deinitRows(&rp_rows);
 
         var out = try self.allocator.alloc(PermissionRow, 0);
         errdefer self.allocator.free(out);
@@ -326,7 +320,7 @@ pub const RoleStore = struct {
     pub fn getPermissionById(self: *RoleStore, id: i64) !?PermissionRow {
         const preds = self.client.permission.predicates;
         var entity = (try crud.first(self.client.permission, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, PermissionInfo, &entity, self.allocator);
+        defer self.client.permission.deinitRow(&entity);
         return try self.dupPermission(entity);
     }
 
@@ -350,7 +344,7 @@ pub const RoleStore = struct {
         var superuser = false;
         if ((try crud.first(self.client.user, .{user_preds.idEQ(.{ .int = user_id })}))) |found| {
             var entity = found;
-            defer zent.codegen.deinitEntity(user_persist.infos, user_persist.UserInfo, &entity, self.allocator);
+            defer self.client.user.deinitRow(&entity);
             if (entity.admin) {
                 try appendUniqueCode(&codes, allocator, "admin");
                 superuser = true;

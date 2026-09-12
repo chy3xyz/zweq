@@ -103,7 +103,7 @@ pub const UserStore = struct {
             .created_at = now,
             .updated_at = now,
         });
-        defer zent.codegen.deinitEntity(infos, UserInfo, &row, self.allocator);
+        defer self.client.user.deinitRow(&row);
         return row.id;
     }
 
@@ -125,14 +125,14 @@ pub const UserStore = struct {
     pub fn getUserById(self: *UserStore, id: i64) !?UserRow {
         const preds = self.client.user.predicates;
         var entity = (try crud.first(self.client.user, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, UserInfo, &entity, self.allocator);
+        defer self.client.user.deinitRow(&entity);
         return try self.dupUser(entity);
     }
 
     pub fn getUserByEmail(self: *UserStore, email: []const u8) !?UserRow {
         const preds = self.client.user.predicates;
         var entity = (try crud.first(self.client.user, .{preds.emailEQ(.{ .string = email })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, UserInfo, &entity, self.allocator);
+        defer self.client.user.deinitRow(&entity);
         return try self.dupUser(entity);
     }
 
@@ -140,7 +140,7 @@ pub const UserStore = struct {
     pub fn getPasswordHashById(self: *UserStore, id: i64) !?[]const u8 {
         const preds = self.client.user.predicates;
         var entity = (try crud.first(self.client.user, .{preds.idEQ(.{ .int = id })})) orelse return null;
-        defer zent.codegen.deinitEntity(infos, UserInfo, &entity, self.allocator);
+        defer self.client.user.deinitRow(&entity);
         return try self.allocator.dupe(u8, entity.password);
     }
 
@@ -247,7 +247,7 @@ pub const UserStore = struct {
         _ = try b.setFieldValue("token", token_hash);
         _ = try b.setFieldValue("created_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, PasswordTokenInfo, &row, self.allocator);
+        defer self.client.password_token.deinitRow(&row);
         return row.id;
     }
 
@@ -273,7 +273,7 @@ pub const UserStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, PasswordTokenInfo, &entity, self.allocator);
+        defer self.client.password_token.deinitRow(&entity);
         const token_dup = try self.allocator.dupe(u8, entity.token);
         return .{
             .id = entity.id,
@@ -300,7 +300,7 @@ pub const UserStore = struct {
         _ = try b.setFieldValue("token", token_hash);
         _ = try b.setFieldValue("created_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, EmailVerificationInfo, &row, self.allocator);
+        defer self.client.email_verification.deinitRow(&row);
         return row.id;
     }
 
@@ -324,7 +324,7 @@ pub const UserStore = struct {
         _ = q.Limit(1);
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, EmailVerificationInfo, &entity, self.allocator);
+        defer self.client.email_verification.deinitRow(&entity);
         const token_dup = try self.allocator.dupe(u8, entity.token);
         return .{
             .id = entity.id,

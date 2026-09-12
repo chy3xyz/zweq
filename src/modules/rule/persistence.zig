@@ -144,7 +144,7 @@ pub const RuleStore = struct {
         _ = try b.setFieldValue("created_at", now);
         _ = try b.setFieldValue("updated_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, RuleInfo, &row, self.allocator);
+        defer self.client.rule.deinitRow(&row);
         return row.id;
     }
 
@@ -155,7 +155,7 @@ pub const RuleStore = struct {
         _ = try q.Where(.{preds.idEQ(.{ .int = id })});
         const entity_opt = try q.First();
         var entity = entity_opt orelse return null;
-        defer zent.codegen.deinitEntity(infos, RuleInfo, &entity, self.allocator);
+        defer self.client.rule.deinitRow(&entity);
         return try self.dupRule(entity);
     }
 
@@ -218,7 +218,7 @@ pub const RuleStore = struct {
         _ = try b.setFieldValue("match_type", match_type);
         _ = try b.setFieldValue("created_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, RuleKeywordInfo, &row, self.allocator);
+        defer self.client.rule_keyword.deinitRow(&row);
         return row.id;
     }
 
@@ -228,10 +228,7 @@ pub const RuleStore = struct {
         const preds = self.client.rule_keyword.predicates;
         _ = try q.Where(.{preds.rule_idEQ(.{ .int = rule_id })});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, RuleKeywordInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.rule_keyword.deinitRows(&rows);
         var out = try self.allocator.alloc(RuleKeywordRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -252,10 +249,7 @@ pub const RuleStore = struct {
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("rule_id")});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, RuleKeywordInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.rule_keyword.deinitRows(&rows);
         var out = try self.allocator.alloc(RuleKeywordRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;
@@ -299,7 +293,7 @@ pub const RuleStore = struct {
         _ = try b.setFieldValue("news_url", news_url);
         _ = try b.setFieldValue("created_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, RuleReplyInfo, &row, self.allocator);
+        defer self.client.rule_reply.deinitRow(&row);
         return row.id;
     }
 
@@ -310,10 +304,7 @@ pub const RuleStore = struct {
         _ = try q.Where(.{preds.rule_idEQ(.{ .int = rule_id })});
         _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("id")});
         var rows = try q.All();
-        defer {
-            for (rows.items) |*e| zent.codegen.deinitEntity(infos, RuleReplyInfo, e, self.allocator);
-            rows.deinit();
-        }
+        defer self.client.rule_reply.deinitRows(&rows);
         var out = try self.allocator.alloc(RuleReplyRow, rows.items.len);
         errdefer self.allocator.free(out);
         var n: usize = 0;

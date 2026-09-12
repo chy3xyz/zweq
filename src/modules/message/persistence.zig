@@ -97,7 +97,7 @@ pub const MessageStore = struct {
         _ = try b.setFieldValue("reply_content", reply_content);
         _ = try b.setFieldValue("created_at", now);
         var row = try b.Save();
-        defer zent.codegen.deinitEntity(infos, MessageLogInfo, &row, self.allocator);
+        defer self.client.message_log.deinitRow(&row);
         return row.id;
     }
 
