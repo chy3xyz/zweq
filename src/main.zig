@@ -850,7 +850,11 @@ pub fn main(init: std.process.Init) !void {
         }
     };
     const server_handle = try std.Thread.spawn(.{ .stack_size = 4 * 1024 * 1024 }, ServerThread.run, .{&server});
-    defer server_handle.join();
+    // `join` 是消费性操作：join 过的 pthread_t 立即失效，重复 join 会以 ESRCH 触发
+    // `std.Thread.join` 内部的 `unreachable`（每次停机必 panic）。下面的显式 join 与
+    // 这个 defer 兜底必须互斥，标志保证任何路径下只 join 一次。
+    var server_joined = false;
+    defer if (!server_joined) server_handle.join();
 
     const poll = std.posix.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_ms };
     var last_license_check = zigmodu.time.wallClockSeconds(io);
@@ -869,7 +873,18 @@ pub fn main(init: std.process.Init) !void {
     std.log.info("shutdown signal received, draining in-flight requests...", .{});
     server.stop();
     server_handle.join();
+    server_joined = true; // 已 join，defer 兜底不再重复 join
     std.log.info("server stopped gracefully", .{});
+
+    // 订单支付总线是按进程生命周期堆分配的（见上面 `heap_bus` 的说明）。这里在
+    // 在途请求已排空、模块停机尚未开始（`defer app.deinit()` 在 main 返回后才跑）
+    // 的时刻释放并清空引用：此刻已无请求会发布事件，之后的任何路径看到的都是 null
+    // 而不是悬垂指针，调试分配器也不会在每次停机时打泄漏报告。
+    if (shop_svc.order_paid_bus) |bus| {
+        bus.deinit();
+        allocator.destroy(bus);
+        shop_svc.order_paid_bus = null;
+    }
 }
 
 /// Parse `ZWEQ_CORS_ORIGINS` ("*" or a comma-separated allow-list) into

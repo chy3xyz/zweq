@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **越权（IDOR）**：购物车/地址写操作 WHERE 加 openid 归属；`pickupOrder` 加 tenant；C 端 6 处 store 查询补 tenant 过滤（秒杀活动/积分商品/投票/地址快照/拼团/下单商品归属）。
 - **静默失败**：邮件任务 SMTP 失败走既有重试链路（不再记成功丢信）；分销台账/清理 job/cleanup 全部补 `log.err`；27 个 api.zig 约 100 处 `@errorName` 内部错误名不再泄漏给用户。
 - **前端**：业务错误（400/404/500）的中文 msg 现在真正展示给用户（client.ts 非 2xx envelope 解包，此前只显示 axios 英文兜底）；Points 页三 modal 共享提交状态串错（拆为独立 signal）；envelope 泛型 helper 上移到 `client.ts`（约 30 个模块 -463 行样板）。
+- **停机 panic**：`defer server_handle.join()` 与停机段的显式 join 必然各 join 一次；POSIX 下 join 过的 `pthread_t` 立即失效，二次 join 以 `ESRCH` 撞上 `std.Thread.join` 内的 `.SRCH => unreachable`，**每次 SIGINT/SIGTERM 都 panic**（并吞掉了后续的模块停机与分配器报告）。改用 `server_joined` 标志互斥，保留 defer 兜底（提前 return 的错误路径仍不泄漏线程）。
+- **停机泄漏**：上面那个 panic 一直掩盖着一条泄漏——`OrderPaidBus` 按进程生命周期堆分配且从未释放（debug 分配器每次停机报 2 条 `leaked`，共约 288 B）。现在在「在途请求已排空、模块停机尚未开始」的时刻 `deinit` + `destroy` 并置空引用。不能挪到服务层释放：`defer app.deinit()`（模块停机）注册得比总线创建早，晚注册的 defer 会先于模块停机执行、留下悬垂指针；且测试传的是栈上 `&bus`，无条件释放会砸掉测试。
 
 ### Added
 - **安全**：fan 经济接口（领券/抽奖/兑换/秒杀/提现/开卡/签到/投票）per-openid 限流（10/5/3 次每分档）+ fail-open/closed 统一策略；`shop_invite_record` 加 `UNIQUE(tenant_id, invitee_openid)`，`bindInvite` 改 `SaveIgnore` 幂等；checkin/member_account/distributor/vote_record 补唯一索引（并发撞键映射为已签/已开卡/已加盟/已投票）；`draw_record` 加 `draw_day` 列（不落唯一索引——daily_limit 可配 >1）。
