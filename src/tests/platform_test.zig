@@ -128,6 +128,21 @@ test "file: upload mime validation rejects active content (XSS)" {
     try std.testing.expect(!file.service.FileService.validMime("application/xhtml+xml"));
 }
 
+test "file: upload content sniffing rejects spoofed active content" {
+    const UploadGuard = zigmodu.http.UploadGuard;
+    // 用的就是生产策略本身，策略漂移会被这条钉住。
+    const policy = file.service.upload_policy;
+    // 声明头由客户端写、可伪造：`说明.png` + `image/png` 里装 HTML —— 字节嗅探必须拦下。
+    try std.testing.expectError(error.ActiveContentNotAllowed, UploadGuard.check("说明.png", "<html><script>alert(1)</script></html>", policy));
+    try std.testing.expectError(error.ActiveContentNotAllowed, UploadGuard.check("logo.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"><script/></svg>", policy));
+    // 反向：真实 PNG 字节即便扩展名不符也放行——通用文件管理故意**不**要求扩展名与
+    // 内容一致（docx/xlsx 内容本就是 ZIP、heic/rar 无魔数，对齐会把正常上传判死）。
+    const png = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01";
+    _ = try UploadGuard.check("photo.bin", png, policy);
+    // 无魔数的二进制同样放行：unknown 不等于主动内容。
+    _ = try UploadGuard.check("blob.dat", "\x01\x02\x03\x04\x05", policy);
+}
+
 test "tenant service: ensureDefault is idempotent, CRUD works" {
     const allocator = std.testing.allocator;
     var env = try openMemory(allocator);

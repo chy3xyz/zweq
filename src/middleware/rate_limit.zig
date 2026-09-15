@@ -38,6 +38,24 @@ pub const FailPolicy = enum {
     closed,
 };
 
+/// registry 后端的键上限（zigmodu v0.15.46 起 `RateLimiterRegistry` 支持
+/// `max_keys` + LRU 淘汰，默认 `0` = 无上限）。
+///
+/// 必须有上限：registry 的键来自攻击者可轮换的输入（`X-Real-IP` 头或 openid），
+/// 无上限就是"换一个 key 涨一份内存"的放大器——本文件头把这条列为改用 Redis 的
+/// 理由，而单节点/开发环境用的正是 registry。`max_keys` 把内存钉死；周期回收
+/// （`reapIdle`）让正常流量下几乎碰不到上界，只有真被刷 key 时才淘汰（被淘汰者
+/// 的桶额度重置，这是上游文档写明的淘汰期取舍）。
+pub const registry_max_keys: usize = 8192;
+
+/// 空闲超过这个秒数的桶由 `reapIdle` 删除（900s = 15 分钟无请求即回收）。
+pub const registry_idle_reap_seconds: i64 = 900;
+
+/// 周期回收一组 registry 的空闲桶。`retain` 内部持锁，可在主循环里安全调用。
+pub fn reapIdle(registries: []const *zigmodu.RateLimiterRegistry) void {
+    for (registries) |r| _ = r.retain(registry_idle_reap_seconds);
+}
+
 /// 统一处理限流后端内部错误：按配置策略放行（fail-open）或 429（fail-closed）。
 fn onInternalError(
     ctx: *http.Context,

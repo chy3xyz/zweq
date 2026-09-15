@@ -1,6 +1,7 @@
 //! File service — local-disk storage with DB metadata.
 
 const std = @import("std");
+const zigmodu = @import("zigmodu");
 const persist = @import("persistence.zig");
 
 pub const FileRow = persist.FileRow;
@@ -15,6 +16,12 @@ pub const LoadedFile = struct {
         allocator.free(self.bytes);
     }
 };
+
+/// 上传内容策略（生产与测试共用同一份，避免推断漂移）：字节嗅探 + 主动内容
+/// fail-closed，但**不**要求扩展名与内容一致——本模块是通用文件管理，
+/// `.docx`/`.xlsx`/`.jar` 内容本就是 ZIP、`.heic`/`.rar`/`.mov` 无魔数，
+/// 开了对齐会把正常上传判死。窄接口（例如只收头像）应另配白名单收紧。
+pub const upload_policy = zigmodu.http.UploadGuard.Policy{ .require_extension_match = false };
 
 pub const FileService = struct {
     allocator: std.mem.Allocator,
@@ -62,6 +69,14 @@ pub const FileService = struct {
     pub fn save(self: *FileService, uploader_id: i64, tenant_id: i64, group_id: i64, filename: []const u8, mime: []const u8, data: []const u8) !FileRow {
         if (data.len > self.max_bytes) return error.FileTooLarge;
         if (!validMime(mime)) return error.InvalidMime;
+        // 内容判定以**字节**为准（zigmodu v0.15.46 `http.UploadGuard` 嗅探魔数）：
+        // 上面两道检查用的都是客户端自己写的头/文件名，`说明.png` + `image/png`
+        // 里装 HTML/SVG 正是同源存储型 XSS 的经典形态。策略见 `upload_policy`
+        // （主动内容 fail-closed 拒绝；不要求扩展名与内容一致）。
+        _ = zigmodu.http.UploadGuard.check(filename, data, upload_policy) catch |err| switch (err) {
+            error.ActiveContentNotAllowed => return error.ActiveContent,
+            else => return error.InvalidMime,
+        };
         try self.ensureDir();
 
         const key = try self.storageKey(filename);
@@ -158,7 +173,6 @@ pub const FileService = struct {
 };
 
 fn wallNow(io: std.Io) i64 {
-    const zigmodu = @import("zigmodu");
     return zigmodu.time.wallClockSeconds(io);
 }
 

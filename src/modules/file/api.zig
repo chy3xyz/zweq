@@ -114,6 +114,12 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                     try ctx.sendErrorResponse(400, 400, "不允许的文件类型");
                     return;
                 },
+                error.ActiveContent => {
+                    // 字节嗅探判定为 SVG/HTML（可执行/可脚本容器）：与"类型不允许"
+                    // 分开报，便于排查是声明头伪造而非单纯选了不受支持的类型。
+                    try ctx.sendErrorResponse(400, 400, "文件内容不允许（SVG/HTML 等主动内容）");
+                    return;
+                },
                 else => {
                     try ctx.sendErrorResponse(500, 500, "服务器错误");
                     return;

@@ -169,6 +169,22 @@ test "HTTP dispatch: public auth flow (register -> me) via Testkit" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"code\":0") != null);
 }
 
+test "rate limit: registry max_keys bounds per-key memory growth" {
+    // 键取自 IP / openid（可轮换），无上限即"换一个 key 涨一份内存"；生产配置用
+    // mw_rate.registry_max_keys，这里用小上界验证机制本身生效。
+    const allocator = std.testing.allocator;
+    var registry = zigmodu.RateLimiterRegistry.initWithCapacity(allocator, 5, 1, 8);
+    defer registry.deinit();
+
+    var key_buf: [32]u8 = undefined;
+    var i: usize = 0;
+    while (i < 64) : (i += 1) {
+        const key = try std.fmt.bufPrint(&key_buf, "ip-{d}", .{i});
+        _ = try registry.getOrCreateForClient(key, 5, 1);
+    }
+    try std.testing.expect(registry.count() <= 8);
+}
+
 test "rate limit: per-IP isolation via realIp + perIpRateLimit" {
     const allocator = std.testing.allocator;
     const real_ip = @import("../middleware/real_ip.zig");

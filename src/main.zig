@@ -443,7 +443,8 @@ pub fn main(init: std.process.Init) !void {
     defer if (redis_ptr) |_| redis.deinit();
 
     // ── HTTP API ──
-    var auth_registry = zigmodu.RateLimiterRegistry.init(allocator, 20, 1);
+    // 三个 registry 都按上限建表：键来自 IP / openid（可轮换），无上限即内存增长向量。
+    var auth_registry = zigmodu.RateLimiterRegistry.initWithCapacity(allocator, 20, 1, mw_rate.registry_max_keys);
     defer auth_registry.deinit();
     var auth_limiter = mw_rate.PerIpLimiter{
         .backend = if (redis_ptr) |r| .{ .redis = r } else .{ .registry = &auth_registry },
@@ -532,7 +533,7 @@ pub fn main(init: std.process.Init) !void {
         heap_bus.* = order_paid_bus;
         shop_svc.order_paid_bus = heap_bus;
     }
-    var shop_registry = zigmodu.RateLimiterRegistry.init(allocator, 30, 1);
+    var shop_registry = zigmodu.RateLimiterRegistry.initWithCapacity(allocator, 30, 1, mw_rate.registry_max_keys);
     defer shop_registry.deinit();
     var shop_limiter = mw_rate.PerIpLimiter{
         .backend = if (redis_ptr) |r| .{ .redis = r } else .{ .registry = &shop_registry },
@@ -544,7 +545,7 @@ pub fn main(init: std.process.Init) !void {
     };
     // C 端 fan 经济接口 per-openid 限流（挂载点见下方 fan_limited scope）。
     // 与 auth/shop 共用 Redis/registry 后端选择；阈值表为文件级 fan_econ_rules。
-    var fan_registry = zigmodu.RateLimiterRegistry.init(allocator, 10, 1);
+    var fan_registry = zigmodu.RateLimiterRegistry.initWithCapacity(allocator, 10, 1, mw_rate.registry_max_keys);
     defer fan_registry.deinit();
     var fan_openid_limiter = mw_rate.PerOpenidLimiter{
         .backend = if (redis_ptr) |r| .{ .redis = r } else .{ .registry = &fan_registry },
@@ -858,6 +859,7 @@ pub fn main(init: std.process.Init) !void {
 
     const poll = std.posix.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_ms };
     var last_license_check = zigmodu.time.wallClockSeconds(io);
+    var last_rate_reap = last_license_check;
     while (!ShutdownFlag.requested.load(.acquire)) {
         _ = std.c.nanosleep(&poll, null);
         // 远端模式下每 24h 重新校验站点授权码（fail-closed）。
@@ -868,6 +870,13 @@ pub fn main(init: std.process.Init) !void {
                 last_license_check = now;
                 std.log.info("[cloud] periodic license check: licensed={}", .{cloud_svc.isLicensed()});
             }
+        }
+        // 每 5 分钟回收限流桶里的空闲键，让 `registry_max_keys` 上界只在真被刷 key
+        // 时才起作用（正常流量下桶数远低于上界，不会被 LRU 淘汰掉活跃客户端）。
+        const reap_now = zigmodu.time.wallClockSeconds(io);
+        if (reap_now - last_rate_reap >= 300) {
+            last_rate_reap = reap_now;
+            mw_rate.reapIdle(&.{ &auth_registry, &shop_registry, &fan_registry });
         }
     }
     std.log.info("shutdown signal received, draining in-flight requests...", .{});
