@@ -328,8 +328,9 @@ pub fn FanAppApi(
                 return;
             };
             defer {
-                for (rows) |r| r.free(ctx.allocator);
-                ctx.allocator.free(rows);
+                // 兑换行数组与行内字符串均由 store 分配器（进程 gpa）分配，ctx.allocator 是连接 arena（free 是 no-op）→ 用拥有者释放
+                for (rows) |r| r.free(self.points_svc.allocator);
+                self.points_svc.allocator.free(rows);
             }
             const dtos = try ctx.allocator.alloc(PointsOrderDto, rows.len);
             defer ctx.allocator.free(dtos);

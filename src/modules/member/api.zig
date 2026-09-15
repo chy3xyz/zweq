@@ -139,9 +139,10 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
+            // rows 的行/数组由 `TagStore.list` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
             defer {
-                for (rows) |r| r.free(ctx.allocator);
-                ctx.allocator.free(rows);
+                for (rows) |r| r.free(self.svc.allocator);
+                self.svc.allocator.free(rows);
             }
             try ctx.okValue(.{ .items = rows });
         }

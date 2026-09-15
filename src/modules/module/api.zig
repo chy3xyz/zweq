@@ -217,8 +217,9 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer {
-                for (rows) |r| r.free(ctx.allocator);
-                ctx.allocator.free(rows);
+                // 行与数组由 store 分配器（进程 gpa）分配，ctx.allocator 是连接 arena（free 是 no-op）→ 用拥有者释放。
+                for (rows) |r| r.free(self.svc.store.allocator);
+                self.svc.store.allocator.free(rows);
             }
             const dtos = try ctx.allocator.alloc(BindingDto, rows.len);
             for (rows, 0..) |r, i| {

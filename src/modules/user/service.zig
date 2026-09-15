@@ -140,7 +140,9 @@ pub const UserService = struct {
 
         const hash_opt = self.store.getPasswordHashById(row.id) catch return error.InvalidCredentials;
         const hash = hash_opt orelse return null;
-        defer allocator.free(hash);
+        // 哈希由 UserStore 用 store 分配器 dupe，`allocator` 是调用方的请求 arena
+        // （free 是 no-op）→ 必须用拥有者释放，否则每次登录泄漏一份哈希。
+        defer self.store.allocator.free(hash);
 
         if (!self.sec.module.verifyPassword(password, hash)) return null;
         return self.issueSession(allocator, row.email, row.admin, row.tenant_id) catch return error.InvalidCredentials;

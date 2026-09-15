@@ -105,7 +105,10 @@ pub fn UserApi(comptime Service: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            defer result.free(ctx.allocator);
+            // 行由 `UserStore.dupUser` 用 **store 分配器**（进程 gpa）分配，而
+            // `ctx.allocator` 是连接 fiber 的 arena（Zig 0.17 里 arena.free 是 no-op）：
+            // 用 arena 释放等于整页泄漏（实测 CSV 导出每次泄漏全部用户行）。
+            defer self.svc.freeList(&result);
 
             var csv = zigmodu.csv.Writer.init(ctx.allocator);
             defer csv.deinit();

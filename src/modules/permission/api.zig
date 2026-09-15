@@ -333,7 +333,9 @@ pub fn PermissionApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            defer ctx.allocator.free(rows);
+            // 用户角色行数组由 RoleStore 分配器分配（`self.svc.store`），
+            // `ctx.allocator` 是连接 arena（free 是 no-op）。
+            defer self.svc.store.allocator.free(rows);
             const dtos = try ctx.allocator.alloc(UserRoleDto, rows.len);
             for (rows, 0..) |r, i| {
                 dtos[i] = .{ .user_id = r.user_id, .role_id = r.role_id };

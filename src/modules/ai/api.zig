@@ -212,7 +212,8 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            defer result.free(ctx.allocator);
+            // 行与数组由 `AiStore.dupProvider`/`listProviders` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer result.free(self.svc.store.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, ProviderDto, toProviderDto);
             try zigmodu.http.sendPaged(ctx, dtos, @intCast(result.total), params, .ruoyi);
         }
@@ -290,7 +291,8 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(404, 404, "Provider 不存在");
                 return;
             };
-            defer cur.free(ctx.allocator);
+            // 行由 `AiStore.dupProvider` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer cur.free(self.svc.store.allocator);
 
             const req = ctx.bindJson(SaveProviderReq) catch {
                 try ctx.sendErrorResponse(400, 400, "无效的请求 JSON");
@@ -404,7 +406,8 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            defer result.free(ctx.allocator);
+            // 行与数组由 `AiStore.dupSession`/`listSessions` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer result.free(self.svc.store.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, SessionDto, toSessionDto);
             try zigmodu.http.sendPaged(ctx, dtos, @intCast(result.total), params, .ruoyi);
         }
@@ -440,14 +443,16 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(404, 404, "Session 不存在");
                 return;
             };
-            defer sess.free(ctx.allocator);
+            // 行由 `AiStore.dupSession` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer sess.free(self.svc.store.allocator);
 
             var result = self.svc.store.listMessages(sid) catch |err| {
                 std.log.err("internal error: {s}", .{@errorName(err)});
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            defer result.free(ctx.allocator);
+            // 行与数组由 `AiStore.dupMessage`/`listMessages` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer result.free(self.svc.store.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, MessageDto, toMessageDto);
             try ctx.okValue(.{ .list = dtos, .total = result.total });
         }
@@ -468,7 +473,8 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(404, 404, "Session 不存在");
                 return;
             };
-            defer session.free(ctx.allocator);
+            // 行由 `AiStore.dupSession` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer session.free(self.svc.store.allocator);
 
             const req = ctx.bindJson(ChatReq) catch {
                 try ctx.sendErrorResponse(400, 400, "无效的请求 JSON");
@@ -544,7 +550,8 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            defer result.free(ctx.allocator);
+            // 行与数组由 `AiStore.dupApproval`/`listApprovals` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer result.free(self.svc.store.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, ApprovalDto, toApprovalDto);
             try zigmodu.http.sendPaged(ctx, dtos, @intCast(result.total), params, .ruoyi);
         }
@@ -587,7 +594,8 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            defer result.free(ctx.allocator);
+            // 行与数组由 `AiStore.dupRun`/`listRuns` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer result.free(self.svc.store.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, RunDto, toRunDto);
             try zigmodu.http.sendPaged(ctx, dtos, @intCast(result.total), params, .ruoyi);
         }

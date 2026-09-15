@@ -169,7 +169,8 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            defer result.free(ctx.allocator);
+            // 佣金行数组与行内字符串均由 store 分配器（进程 gpa）分配，ctx.allocator 是连接 arena（free 是 no-op）→ 用拥有者释放
+            defer result.free(self.svc.allocator);
             const dtos = try zigmodu.http.Extract.toDtoList(ctx.allocator, result.items, CommissionDto, toCommissionDto);
             try zigmodu.http.sendPaged(ctx, dtos, @intCast(result.total), params, .ruoyi);
         }

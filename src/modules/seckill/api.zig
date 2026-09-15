@@ -315,7 +315,8 @@ pub fn SeckillApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            defer result.free(ctx.allocator);
+            // result 的行/数组由 `SeckillStore.listOrders` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer result.free(self.svc.allocator);
             // 每行按 activity_id 补齐活动标题（页 ≤ 100，逐行小查询可接受）。
             const rows = self.svc.enrichOrders(ctx.allocator, tid, result.items) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");

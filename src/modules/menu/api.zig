@@ -178,7 +178,9 @@ pub fn MenuApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            defer ctx.allocator.free(data);
+            // `fetchMenu` 用 service 分配器 dupe（进程 gpa），`ctx.allocator` 是连接
+            // arena（free 是 no-op）→ 用拥有者释放。
+            defer self.svc.allocator.free(data);
             try ctx.okValue(.{ .menu_json = data });
         }
     };

@@ -280,9 +280,10 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
+            // result 的行/数组由 `MemberCardStore.listAccounts` 用 store 分配器（进程 gpa）分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
             defer {
-                for (result.items) |r| r.free(ctx.allocator);
-                ctx.allocator.free(result.items);
+                for (result.items) |r| r.free(self.svc.allocator);
+                self.svc.allocator.free(result.items);
             }
             try zigmodu.http.sendPaged(ctx, result.items, @intCast(result.total), params, .ruoyi);
         }
@@ -304,7 +305,8 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.ok("null");
                 return;
             };
-            defer v.free(ctx.allocator);
+            // v 的两个字符串由 `MemberCardService.view` 用 svc/store 分配器（进程 gpa）dupe，`ctx.allocator` 是连接 arena（free 是 no-op）→ 用拥有者释放。
+            defer v.free(self.svc.allocator);
             try ctx.okValue(v);
         }
 

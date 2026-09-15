@@ -78,7 +78,9 @@ pub fn AuditApi(comptime AuditServiceT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器内部错误");
                 return;
             };
-            defer result.free(ctx.allocator);
+            // 同 user CSV 导出：行由 `AuditStore.dup` 用 store 分配器（进程 gpa）
+            // 分配，`ctx.allocator` 是连接 arena（free 是 no-op）→ 必须用拥有者释放。
+            defer result.free(self.svc.store.allocator);
 
             var csv = zigmodu.csv.Writer.init(ctx.allocator);
             defer csv.deinit();

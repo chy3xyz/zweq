@@ -300,7 +300,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            defer ctx.allocator.free(data);
+            defer self.svc.allocator.free(data);
             // 透传微信返回的原始 JSON。
             try ctx.text(200, data);
         }
@@ -323,7 +323,8 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            defer ctx.allocator.free(openid);
+            // `miniLogin` 用 service 分配器 dupe（进程 gpa）→ 用拥有者释放。
+            defer self.svc.allocator.free(openid);
             try ctx.okValue(.{ .openid = openid });
         }
     };

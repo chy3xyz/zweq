@@ -224,17 +224,33 @@ pub const AiService = struct {
         key: []const u8,
         model: []const u8,
     } {
-        var list = try self.store.listProviders(1, 100);
-        defer list.free(allocator);
-        var chosen: ?ProviderRow = null;
-        for (list.items) |r| {
+        // 列表整体由 store 分配器（进程 gpa）分配，必须用拥有者释放；`allocator` 是
+        // 调用方传进来的请求 arena，`free` 在 Zig 0.17 下是 no-op → 整列表静默泄漏。
+        const store_alloc = self.store.allocator;
+        const list = try self.store.listProviders(1, 100);
+        // 选中行的所有权在本函数内**转移**给调用方：它从 `list.items` 里被拷出来，
+        // 若不把它从下方释放里排除，就会与调用方的 `row.free` 构成双重释放（过去两侧
+        // 都是 arena，所以既不崩也不释放）。`transfer` 为 null 时（无可用 provider）
+        // 整列表照常释放。
+        var transfer: ?usize = null;
+        defer {
+            for (list.items, 0..) |r, i| {
+                if (transfer != null and transfer.? == i) continue;
+                r.free(store_alloc);
+            }
+            store_alloc.free(list.items);
+        }
+        var chosen: ?usize = null;
+        for (list.items, 0..) |r, i| {
             if (r.enabled) {
-                chosen = r;
+                chosen = i;
                 break;
             }
         }
-        const row = chosen orelse return null;
-        errdefer row.free(allocator);
+        const idx = chosen orelse return null;
+        transfer = idx;
+        const row = list.items[idx];
+        errdefer row.free(store_alloc);
 
         const keys_json = try self.decryptKeys(allocator, row.api_keys_encrypted);
         errdefer allocator.free(keys_json);
@@ -334,7 +350,8 @@ pub const AiService = struct {
         const refs = try refsOf(ctx);
         const kw = objString(args, "keyword") orelse return error.InvalidArgs;
         var result = try refs.user_store.listUsers(1, 20, kw, null, null, false);
-        defer result.free(ctx.allocator);
+        // 行由 store 分配器(gpa)分配，ctx.allocator 是连接 arena(free 是 no-op)→ 用拥有者释放
+        defer refs.user_store.freeList(&result);
 
         var arr = std.json.Array.init(ctx.allocator);
         for (result.items) |u| {
@@ -375,7 +392,8 @@ pub const AiService = struct {
             if (n > 0) limit = @intCast(@min(n, 50));
         }
         var result = try refs.audit_store.list(1, limit, .{ .action = action, .keyword = keyword });
-        defer result.free(ctx.allocator);
+        // 行由 store 分配器(gpa)分配，ctx.allocator 是连接 arena(free 是 no-op)→ 用拥有者释放
+        defer result.free(refs.audit_store.allocator);
 
         var arr = std.json.Array.init(ctx.allocator);
         for (result.items) |r| {
@@ -396,7 +414,8 @@ pub const AiService = struct {
         try ctx.checkDeadline();
         const refs = try refsOf(ctx);
         var result = try refs.tenant_store.list(1, 100, "", "");
-        defer result.free(ctx.allocator);
+        // 行由 store 分配器(gpa)分配，ctx.allocator 是连接 arena(free 是 no-op)→ 用拥有者释放
+        defer result.free(refs.tenant_store.allocator);
 
         var arr = std.json.Array.init(ctx.allocator);
         for (result.items) |t| {
@@ -455,13 +474,16 @@ pub const AiService = struct {
 
         var permissions: []const []const u8 = &.{};
         if (try self.refs.user_store.getUserById(user_id)) |row| {
-            defer row.free(allocator);
+            // 用户行由 user store 分配器分配，与请求 arena 不同源。
+            defer row.free(self.refs.user_store.allocator);
             if (row.admin) permissions = &.{PERM_ADMIN};
         }
 
         const resolved = (try self.resolveProvider(allocator)) orelse return error.NoAiProvider;
         defer {
-            resolved.row.free(allocator);
+            // 三者归属不同：provider 行归 store（见 resolveProvider 的转移说明），
+            // keys_json/key 由本函数用传入的 arena 分配 → 各自用拥有者释放。
+            resolved.row.free(self.store.allocator);
             allocator.free(resolved.keys_json);
             allocator.free(resolved.key);
         }
@@ -568,7 +590,8 @@ pub const AiService = struct {
     pub fn checkProvider(self: *AiService, allocator: std.mem.Allocator, id: i64) ![]const u8 {
         const row_opt = try self.store.getProvider(id);
         const row = row_opt orelse return error.ProviderNotFound;
-        defer row.free(allocator);
+        // provider 行归 store 分配器；`allocator` 是调用方的请求 arena（free 是 no-op）。
+        defer row.free(self.store.allocator);
         if (!row.enabled) return error.ProviderDisabled;
         if (row.api_keys_encrypted.len == 0) return error.EmptyApiKeys;
 
@@ -612,7 +635,8 @@ pub const AiService = struct {
     pub fn approve(self: *AiService, allocator: std.mem.Allocator, id: i64, approved_by: i64, do_approve: bool) !bool {
         const row_opt = try self.store.getApproval(id);
         const row = row_opt orelse return false;
-        defer row.free(allocator);
+        // approval 行归 store 分配器（调用方传的是请求 arena）。
+        defer row.free(self.store.allocator);
         if (!std.mem.eql(u8, row.status, "pending")) return false;
 
         const now = zigmodu.time.wallClockSeconds(self.io);
@@ -636,7 +660,8 @@ pub const AiService = struct {
             const kind = objString(parsed.value, "kind") orelse "info";
             _ = o;
             const target = (try self.refs.user_store.getUserById(uid)) orelse return error.UserNotFound;
-            defer target.free(allocator);
+            // 用户行归 user store 分配器。
+            defer target.free(self.refs.user_store.allocator);
             _ = try self.refs.notify_svc.notify(uid, title, body, kind);
         }
         return true;

@@ -437,7 +437,7 @@ pub fn MaterialApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
-            defer ctx.allocator.free(media_id);
+            defer self.svc.allocator.free(media_id);
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "material.news.upload", "material", req.account_id, "上传图文到微信", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
             try ctx.okValue(.{ .media_id = media_id });
         }
