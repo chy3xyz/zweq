@@ -51,6 +51,15 @@ pub const registry_max_keys: usize = 8192;
 /// 空闲超过这个秒数的桶由 `reapIdle` 删除（900s = 15 分钟无请求即回收）。
 pub const registry_idle_reap_seconds: i64 = 900;
 
+/// 进程级限流拒绝计数（HTTP 429）：per-IP 超限、per-openid 超限/无身份
+/// 拒绝、后端故障 fail-closed 三条路径共用。选进程级原子变量而非按规则
+/// 分维度或落 Redis：它只服务 /metrics 的总量告警，单机原子递增无锁、
+/// 无网络开销；多实例部署时各进程各计各的，聚合由 Prometheus `sum()`
+/// 完成，与 HTTP 请求计数器的口径一致。计数器归本文件所有，由
+/// metrics.zig 只读导出，本文件不反向依赖 metrics。
+/// `var` 是必须的：`fetchAdd` 要可变指针，`const` 原子取地址编不过。
+pub var rejections_total = std.atomic.Value(u64).init(0);
+
 /// 周期回收一组 registry 的空闲桶。`retain` 内部持锁，可在主循环里安全调用。
 pub fn reapIdle(registries: []const *zigmodu.RateLimiterRegistry) void {
     for (registries) |r| _ = r.retain(registry_idle_reap_seconds);
@@ -69,6 +78,7 @@ fn onInternalError(
         try next(ctx);
     } else {
         std.log.err("[rate_limit] {s}，按 fail-closed 策略拒绝: rule={s}", .{ what, rule_name });
+        _ = rejections_total.fetchAdd(1, .monotonic);
         try ctx.sendErrorResponse(429, 429, "Too Many Requests");
     }
 }
@@ -89,7 +99,9 @@ pub const PerIpLimiter = struct {
 pub fn perIpRateLimit(limiter: *PerIpLimiter) http.Middleware {
     // Process-lifetime state (server runs until exit; page_allocator mirrors
     // zigmodu's own rateLimitPerClient convention).
-    const c = std.heap.page_allocator.create(PerIpLimiter) catch unreachable;
+    // ReleaseFast 下 `unreachable` 是 UB；OOM 用带上下文的 panic 报告（zigmodu
+    // 0.15.41 把自己同类的 8 处也这么改了）。
+    const c = std.heap.page_allocator.create(PerIpLimiter) catch @panic("perIpRateLimit: page_allocator out of memory");
     c.* = limiter.*;
     return .{
         .func = struct {
@@ -113,6 +125,7 @@ pub fn perIpRateLimit(limiter: *PerIpLimiter) http.Middleware {
                     },
                 };
                 if (!allowed) {
+                    _ = rejections_total.fetchAdd(1, .monotonic);
                     try ctx.sendErrorResponse(429, 429, "Too Many Requests");
                     return;
                 }
@@ -171,7 +184,8 @@ pub const PerOpenidLimiter = struct {
 };
 
 pub fn perOpenidRateLimit(limiter: *PerOpenidLimiter) http.Middleware {
-    const c = std.heap.page_allocator.create(PerOpenidLimiter) catch unreachable;
+    // 同 perIpRateLimit：OOM 用带上下文的 panic，不用 ReleaseFast 下是 UB 的 unreachable。
+    const c = std.heap.page_allocator.create(PerOpenidLimiter) catch @panic("perOpenidRateLimit: page_allocator out of memory");
     c.* = limiter.*;
     return .{
         .func = struct {
@@ -222,6 +236,7 @@ pub fn perOpenidRateLimit(limiter: *PerOpenidLimiter) http.Middleware {
                             };
                         },
                         .reject => {
+                            _ = rejections_total.fetchAdd(1, .monotonic);
                             try ctx.sendErrorResponse(429, 429, "Too Many Requests");
                             return;
                         },
@@ -244,6 +259,7 @@ pub fn perOpenidRateLimit(limiter: *PerOpenidLimiter) http.Middleware {
                     },
                 };
                 if (!allowed) {
+                    _ = rejections_total.fetchAdd(1, .monotonic);
                     try ctx.sendErrorResponse(429, 429, "Too Many Requests");
                     return;
                 }

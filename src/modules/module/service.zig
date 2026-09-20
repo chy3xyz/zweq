@@ -49,7 +49,10 @@ pub const ModuleService = struct {
     /// Seed the compile-time built-in modules (idempotent).
     pub fn seedBuiltins(self: *ModuleService, tenant_id: i64) !void {
         for (builtin_modules) |m| {
-            _ = self.store.upsertModule(tenant_id, m, m, "1.0.0", "active", self.now()) catch {};
+            _ = self.store.upsertModule(tenant_id, m, m, "1.0.0", "active", self.now()) catch |err| {
+                // 播种是幂等的 best-effort（单个失败不阻断其余模块），但失败必须留痕。
+                std.log.err("module: 内置模块播种失败 tenant={d} module={s} err={s}", .{ tenant_id, m, @errorName(err) });
+            };
         }
     }
 

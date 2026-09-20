@@ -159,7 +159,10 @@ pub const DistributionStore = struct {
         defer upd2.deinit();
         _ = try upd2.setExprArgs("total_commission", "total_commission + ?", &.{.{ .string = amount_str }});
         _ = try upd2.Where(.{preds.idEQ(.{ .int = distributor_id })});
-        _ = upd2.Save() catch {};
+        _ = upd2.Save() catch |err| {
+            // 余额已入账但累计佣金未同步，无事务可回滚，留痕供对账。
+            std.log.err("distribution: 累计佣金更新失败 distributor_id={d} amount={d} err={s}", .{ distributor_id, amount, @errorName(err) });
+        };
         return true;
     }
 

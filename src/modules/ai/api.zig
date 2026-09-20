@@ -4,6 +4,7 @@ const std = @import("std");
 const zigmodu = @import("zigmodu");
 const http = zigmodu.http;
 const mw = @import("../../middleware/auth.zig");
+const url_guard = @import("../../http/url_guard.zig");
 const service = @import("service.zig");
 const user_svc = @import("../user/service.zig");
 
@@ -229,6 +230,11 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "Provider 名称与端点不能为空");
                 return;
             }
+            // SSRF 基线：endpoint 会被服务端主动请求，只允许 http(s) 且非字面内网地址。
+            if (!url_guard.isAcceptableOutboundUrl(req.endpoint)) {
+                try ctx.sendErrorResponse(400, 400, "endpoint 不允许（需 http(s) 且非内网地址）");
+                return;
+            }
 
             var enc_keys: []const u8 = "";
             var enc_buf: ?[]u8 = null;
@@ -298,6 +304,12 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的请求 JSON");
                 return;
             };
+
+            // SSRF 基线：与创建入口同款校验（endpoint 为必填字段，空值同样会被拒绝）。
+            if (!url_guard.isAcceptableOutboundUrl(req.endpoint)) {
+                try ctx.sendErrorResponse(400, 400, "endpoint 不允许（需 http(s) 且非内网地址）");
+                return;
+            }
 
             var enc_keys = cur.api_keys_encrypted;
             var enc_buf: ?[]u8 = null;
@@ -514,13 +526,18 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
             };
             defer outcome.free(ctx.allocator);
 
-            _ = self.svc.store.addMessage(sid, "assistant", outcome.answer, outcome.reasoning, now) catch {};
-            _ = self.svc.store.touchSession(sid, now) catch {};
+            // 应答已生成，不能因落库失败丢弃它；但历史缺失/会话时间不同步必须留痕。
+            _ = self.svc.store.addMessage(sid, "assistant", outcome.answer, outcome.reasoning, now) catch |err| {
+                std.log.err("[ai] 助手回复写入失败 session={d}: {s}", .{ sid, @errorName(err) });
+            };
+            _ = self.svc.store.touchSession(sid, now) catch |err| {
+                std.log.err("[ai] 会话时间更新失败 session={d}: {s}", .{ sid, @errorName(err) });
+            };
             try ctx.okValue(.{
-                    .answer = outcome.answer,
-                    .reasoning_content = outcome.reasoning,
-                    .budget_exhausted = outcome.budget_exhausted,
-                });
+                .answer = outcome.answer,
+                .reasoning_content = outcome.reasoning,
+                .budget_exhausted = outcome.budget_exhausted,
+            });
         }
 
         fn deleteSession(ctx: *http.Context) !void {
@@ -629,9 +646,9 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
             }
 
             try ctx.okValue(.{
-                    .status = @tagName(result.status),
-                    .steps = outs,
-                });
+                .status = @tagName(result.status),
+                .steps = outs,
+            });
         }
 
         fn metrics(ctx: *http.Context) !void {

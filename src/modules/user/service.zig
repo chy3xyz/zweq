@@ -46,14 +46,14 @@ pub const VerificationInfo = struct {
 };
 
 /// A signed-in identity: user row plus a fresh JWT.
+///
+/// 两个字段的拥有者**不同**：`row` 由 `UserStore`（进程 gpa）分配，`token` 由
+/// 安全模块（`sec.module`，签发方）分配。不要用单一 allocator 释放——今天两者
+/// 恰好是同一个 gpa 所以不崩，注入一旦分歧就是非法释放。统一走
+/// `UserService.freeSession`，它按各自拥有者释放。
 pub const Session = struct {
     row: UserRow,
     token: []const u8,
-
-    pub fn deinit(self: Session, allocator: std.mem.Allocator) void {
-        allocator.free(self.token);
-        self.row.free(allocator);
-    }
 };
 
 pub const UserService = struct {
@@ -181,6 +181,13 @@ pub const UserService = struct {
         self.store.freeList(result);
     }
 
+    /// 释放 `Session`：`row` 归 store 分配器，`token` 归安全模块（签发方），
+    /// 两者按各自拥有者释放（见 `Session` 的注释）。
+    pub fn freeSession(self: *UserService, session: *Session) void {
+        self.sec.module.allocator.free(session.token);
+        session.row.free(self.store.allocator);
+    }
+
     pub fn updateProfile(self: *UserService, id: i64, name: []const u8, email: []const u8) !void {
         if (std.mem.trim(u8, name, " \t").len == 0) return error.InvalidName;
         const allocator = self.store.allocator;
@@ -217,7 +224,9 @@ pub const UserService = struct {
         defer self.sec.module.allocator.free(hash);
         const now = zigmodu.time.wallClockSeconds(self.io);
         try self.store.setPasswordHash(id, hash, now);
-        // 改密后旧 JWT 立即失效(凭证版本递增)。
+        // 改密后旧 JWT 立即失效(凭证版本递增)。best-effort：改密已提交,失败不能
+        // 上抛(resetPassword/changePassword 会把任何失败报成 InvalidPassword,与
+        // 事实不符)；失败原因由 store 层记录。
         self.store.incrementTokenVersion(id, now) catch {};
     }
 
@@ -242,7 +251,8 @@ pub const UserService = struct {
         defer allocator.free(hash);
         const now = zigmodu.time.wallClockSeconds(self.io);
         // Housekeeping: drop this user's stale tokens before inserting a new
-        // one so the table does not grow without bound.
+        // one so the table does not grow without bound. Best-effort：清理失败
+        // 不影响本次签发,过期的行由 tokens.cleanup 定时任务兜底清理。
         self.store.deleteExpiredPasswordTokens(row.id, now, self.password_token_expiration_seconds) catch {};
         _ = try self.store.createPasswordToken(row.id, hash, now);
         return .{ .user_id = row.id, .raw = raw };
@@ -258,6 +268,8 @@ pub const UserService = struct {
         const now = zigmodu.time.wallClockSeconds(self.io);
         if (now - tok.created_at > self.password_token_expiration_seconds) {
             // The token is dead — purge it (and any older siblings) now.
+            // Best-effort：结果已由 TokenExpired 告知调用方,清理失败只留下一条
+            // 待 tokens.cleanup 兜底删除的过期行。
             self.store.deleteTokensForUser(user_id) catch {};
             return error.TokenExpired;
         }
@@ -287,7 +299,9 @@ pub const UserService = struct {
         const hash = try self.sec.module.hashPassword(raw);
         defer allocator.free(hash);
         const now = zigmodu.time.wallClockSeconds(self.io);
-        // Housekeeping: drop this user's stale tokens before inserting a new one.
+        // Housekeeping: drop this user's stale tokens before inserting a new
+        // one. Best-effort：清理失败不影响本次签发,过期的行由 tokens.cleanup
+        // 定时任务兜底清理。
         self.store.deleteExpiredEmailVerifications(user_id, now, self.verification_token_expiration_seconds) catch {};
         _ = try self.store.createEmailVerification(user_id, hash, now);
         return .{ .user_id = user_id, .raw = raw };
@@ -301,12 +315,16 @@ pub const UserService = struct {
 
         const now = zigmodu.time.wallClockSeconds(self.io);
         if (now - tok.created_at > self.verification_token_expiration_seconds) {
+            // Best-effort：结果已由 TokenExpired 告知调用方,清理失败只留下一条
+            // 待 tokens.cleanup 兜底删除的过期行。
             self.store.deleteEmailVerificationsForUser(user_id) catch {};
             return error.TokenExpired;
         }
         if (!self.sec.module.verifyPassword(raw_token, tok.token)) return error.InvalidToken;
 
         self.setVerified(user_id, true) catch return error.InvalidToken;
+        // Best-effort：邮箱已置为已验证,这里只是清理已消费的令牌；删除失败时残留
+        // 行会在过期后由 tokens.cleanup 兜底清理(再次验证成功也会重试删除)。
         self.store.deleteEmailVerificationsForUser(user_id) catch {};
     }
 

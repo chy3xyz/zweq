@@ -295,7 +295,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
-            const order_no = ctx.param("order_no") orelse {
+            const order_no = ctx.pathParam("order_no") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少订单号");
                 return;
             };

@@ -127,7 +127,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
 
         fn handle(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const token = ctx.param("token") orelse {
+            const token = ctx.pathParam("token") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 token");
                 return;
             };

@@ -11,6 +11,29 @@ pub const DriverKind = enum {
     postgres,
 };
 
+/// zent ConnPool `stats()` 的驱动无关快照（sqlite / postgres 池字段一致）。
+/// 单独定义而不直接暴露 ConnPool 的 Stats：StoreEnv 内部两个池类型是本
+/// 文件私有别名，外部（/metrics 导出）只需字段值，不应感知泛型池类型。
+pub const PoolStats = struct {
+    total: usize,
+    in_use: usize,
+    available: usize,
+    waiters: usize,
+    exhausted_total: u64,
+    closed: bool,
+};
+
+fn fromPoolStats(s: anytype) PoolStats {
+    return .{
+        .total = s.total,
+        .in_use = s.in_use,
+        .available = s.available,
+        .waiters = s.waiters,
+        .exhausted_total = s.exhausted_total,
+        .closed = s.closed,
+    };
+}
+
 /// RAII wrapper over the shared zent store: owns the driver, migrates each
 /// schema group (small comptime graphs — zent's migration generator has a
 /// per-call branch quota), and exposes one type-safe client for all tables.
@@ -53,6 +76,22 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
                 .sqlite => self.sqlite_pool.?.asDriver(),
                 .postgres => self.pg_pool.?.asDriver(),
             };
+        }
+
+        /// 连接池只读快照（供 /metrics 导出）：两种驱动都走 zent ConnPool
+        /// （sqlite 非 :memory: 时 max=8），因此 sqlite 也导出池指标；池尚
+        /// 未建立时返回 null。stats() 内部持池锁，抓取路径调用即可。
+        pub fn poolStats(self: *Self) ?PoolStats {
+            switch (self.kind) {
+                .sqlite => {
+                    const p = self.sqlite_pool orelse return null;
+                    return fromPoolStats(p.stats());
+                },
+                .postgres => {
+                    const p = self.pg_pool orelse return null;
+                    return fromPoolStats(p.stats());
+                },
+            }
         }
 
         pub fn open(allocator: std.mem.Allocator, kind: DriverKind, dsn: []const u8) !Self {
@@ -107,6 +146,9 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
                     // 竞态建表（首个实例拿到锁执行迁移，其余实例阻塞等待；
                     // 连接断开自动释放）。key = "ZEWQ" 的 32 位魔数。
                     _ = try d.exec("SELECT pg_advisory_lock(1515040593)", &.{});
+                    // 迁移失败的清理路径:此处解锁失败已无可挽回,而连接随
+                    // pool.deinit() 关闭时 PG 会自动释放会话级咨询锁,
+                    // 不会挡住后续实例启动,故吞掉。
                     errdefer _ = d.exec("SELECT pg_advisory_unlock(1515040593)", &.{}) catch {};
                     inline for (MigrateGroups) |gi| {
                         try zent.sql_schema.migrateSchema(allocator, d, gi);

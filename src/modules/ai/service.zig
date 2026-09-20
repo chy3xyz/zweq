@@ -548,7 +548,10 @@ pub const AiService = struct {
                 const f_prov = provider.metrics.toStats();
                 const fd = usageDelta(agent_stats_before, f_stats);
                 self.addAgentMetrics(fd);
-                _ = self.store.createRun(session_id, user_id, tenant_id, "chat", prompt, "", @intCast(f_prov.total_prompt_tokens), @intCast(f_prov.total_completion_tokens), @intCast(fd.steps), @intCast(fd.tool_calls), @intCast(fd.tool_errors), "error", @errorName(e), now) catch {};
+                _ = self.store.createRun(session_id, user_id, tenant_id, "chat", prompt, "", @intCast(f_prov.total_prompt_tokens), @intCast(f_prov.total_completion_tokens), @intCast(fd.steps), @intCast(fd.tool_calls), @intCast(fd.tool_errors), "error", @errorName(e), now) catch |err| {
+                    // 失败 run 的落库失败不能顶替原始错误 e（仍要返回 e），只留痕。
+                    std.log.err("ai: 失败 run 记录写入失败 session={d} user={d} err={s}", .{ session_id, user_id, @errorName(err) });
+                };
                 return e;
             },
             .success => result = run_ctx.result orelse return error.AiRunFailed,
@@ -648,7 +651,9 @@ pub const AiService = struct {
         const now_s = zigmodu.time.wallClockSeconds(self.io);
         var detail_buf: [160]u8 = undefined;
         const detail = try std.fmt.bufPrint(&detail_buf, "AI 审批 {s}: {s} #{d}", .{ if (do_approve) "批准" else "拒绝", row.skill_name, id });
-        _ = self.refs.audit_store.create(approved_by, "", "ai.approval", "ai_approval", id, detail, "", true, 0, now_s) catch {};
+        _ = self.refs.audit_store.create(approved_by, "", "ai.approval", "ai_approval", id, detail, "", true, 0, now_s) catch |err| {
+            std.log.err("[audit] write failed for action {s}: {s}", .{ "ai.approval", @errorName(err) });
+        };
 
         if (do_approve and std.mem.eql(u8, row.skill_name, "zweq.notify.send")) {
             const parsed = try std.json.parseFromSlice(std.json.Value, allocator, row.args, .{});

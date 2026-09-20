@@ -38,6 +38,8 @@ pub const CacheService = struct {
     pub fn getOrSet(self: *CacheService, key: []const u8, loader: *const fn (allocator: std.mem.Allocator) anyerror![]const u8) ![]const u8 {
         if (self.manager.get(key)) |v| return v;
         const fresh = try loader(self.allocator);
+        // best-effort 缓存写入：`set` 只可能因淘汰/分配失败而报错,失败只是这次
+        // 没缓存住,本次返回值仍然正确(调用方拿到的是 loader 的结果)。
         self.manager.set(key, fresh) catch {};
         return fresh;
     }

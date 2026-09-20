@@ -158,7 +158,7 @@ test "register binds tenant and JWT aud carries it" {
     var svc = user.service.UserService.init(&store, &sec, std.testing.io, 3600, 86400);
 
     var session = try svc.register(allocator, "Alice", "alice@example.com", "password123", false, 7);
-    defer session.deinit(allocator);
+    defer svc.freeSession(&session);
     try std.testing.expectEqual(@as(i64, 7), session.row.tenant_id);
 
     const payload = try sec.module.verifyToken(session.token);

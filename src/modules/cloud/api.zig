@@ -275,7 +275,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
-            const name = ctx.param("name") orelse {
+            const name = ctx.pathParam("name") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少包名");
                 return;
             };
@@ -383,7 +383,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const tid = tenantScope(ctx, self);
-            const table = ctx.param("table") orelse {
+            const table = ctx.pathParam("table") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少表名");
                 return;
             };
@@ -407,10 +407,10 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                 rows_2d.append(ctx.allocator, rows.cells[i * rows.column_count .. (i + 1) * rows.column_count]) catch return error.UnexpectedError;
             }
             try ctx.okValue(.{
-                    .columns = rows.columns,
-                    .rows = rows_2d.items,
-                    .total = rows.row_count,
-                });
+                .columns = rows.columns,
+                .rows = rows_2d.items,
+                .total = rows.row_count,
+            });
         }
     };
 }

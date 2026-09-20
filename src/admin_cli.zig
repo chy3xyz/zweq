@@ -131,7 +131,7 @@ fn cmdCreateAdmin(io: std.Io, allocator: std.mem.Allocator, svc: *user.service.U
     }
 
     var session = try svc.register(allocator, name, email.?, final_password, true, default_tenant_id);
-    defer session.deinit(allocator);
+    defer svc.freeSession(&session);
     try svc.setVerified(session.row.id, true);
     const line = try std.fmt.allocPrint(allocator, "admin created: {s} (id={d})\n", .{ session.row.email, session.row.id });
     defer allocator.free(line);

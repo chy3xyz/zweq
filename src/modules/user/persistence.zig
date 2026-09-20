@@ -119,7 +119,9 @@ pub const UserStore = struct {
     }
 
     pub fn incrementTokenVersion(self: *UserStore, id: i64, now: i64) !void {
-        return self.bumpTokenVersion(id, now) catch {};
+        return self.bumpTokenVersion(id, now) catch |err| {
+            std.log.err("[user] 递增 token_version 失败 id={d}(改密前签发的 JWT 未失效): {s}", .{ id, @errorName(err) });
+        };
     }
 
     pub fn getUserById(self: *UserStore, id: i64) !?UserRow {

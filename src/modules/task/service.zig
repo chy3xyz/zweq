@@ -138,6 +138,8 @@ pub const Dispatcher = struct {
     fn runLoop(self: *Dispatcher) void {
         while (self.running.load(.monotonic)) {
             self.tick();
+            // 节拍:std.Io.sleep 只可能返回 error.Canceled,睡眠失败不影响
+            // 任务处理正确性,循环是否继续只由 running 标志决定,故直接吞掉。
             std.Io.sleep(self.io, std.Io.Duration.fromMilliseconds(@intCast(self.tick_interval_ms)), .real) catch {};
         }
     }
@@ -185,7 +187,9 @@ pub const Dispatcher = struct {
         }
         const handler = found orelse {
             // Unknown handler — fail so the row does not spin forever.
-            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, "no handler registered", wallNow(self), 0) catch {};
+            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, "no handler registered", wallNow(self), 0) catch |mark_err| {
+                std.log.err("[task] {s}#{d} 无 handler 标记失败写入失败: {s}", .{ task.name, task.id, @errorName(mark_err) });
+            };
             _ = self.failed.fetchAdd(1, .monotonic);
             return;
         };
@@ -197,13 +201,17 @@ pub const Dispatcher = struct {
             // 超限标记 failed,任务不再被静默记成功而丢信。
             const elapsed_ms = @divTrunc(@import("zigmodu").time.monotonicNow() - run_start, std.time.ns_per_ms);
             std.log.err("[task] {s}#{d} 执行失败: {s} (耗时 {d}ms)", .{ task.name, task.id, @errorName(err), elapsed_ms });
-            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, @errorName(err), wallNow(self), self.retry_interval_seconds) catch {};
+            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, @errorName(err), wallNow(self), self.retry_interval_seconds) catch |mark_err| {
+                std.log.err("[task] {s}#{d} 重试/失败标记写入失败: {s}", .{ task.name, task.id, @errorName(mark_err) });
+            };
             _ = self.failed.fetchAdd(1, .monotonic);
             return;
         };
         const elapsed_ms = @divTrunc(@import("zigmodu").time.monotonicNow() - run_start, std.time.ns_per_ms);
         self.store.markDone(task.id, wallNow(self)) catch {
-            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, "store error", wallNow(self), self.retry_interval_seconds) catch {};
+            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, "store error", wallNow(self), self.retry_interval_seconds) catch |mark_err| {
+                std.log.err("[task] {s}#{d} markDone 失败后的兜底标记同样失败: {s}", .{ task.name, task.id, @errorName(mark_err) });
+            };
             _ = self.failed.fetchAdd(1, .monotonic);
             return;
         };

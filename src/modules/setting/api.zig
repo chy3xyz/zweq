@@ -103,7 +103,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
             _ = (try requireAuth(ctx)) orelse return;
             const tid = tenantScope(ctx, self);
 
-            const key = ctx.param("key") orelse {
+            const key = ctx.pathParam("key") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少配置键");
                 return;
             };
@@ -125,7 +125,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
             const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
-            const key = ctx.param("key") orelse {
+            const key = ctx.pathParam("key") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少配置键");
                 return;
             };
@@ -154,7 +154,7 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
             const admin_id = ctx.userIdInt(i64) orelse return;
             const tid = tenantScope(ctx, self);
 
-            const key = ctx.param("key") orelse {
+            const key = ctx.pathParam("key") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少配置键");
                 return;
             };

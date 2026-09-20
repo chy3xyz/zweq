@@ -161,6 +161,8 @@ pub const CloudService = struct {
         defer row.free(self.allocator);
         if (std.mem.eql(u8, row.status, "revoked")) return error.InvalidLicense;
         if (row.expires_at > 0 and self.now() > row.expires_at) {
+            // 过期状态回写失败不影响本次判定（下面仍返回 LicenseExpired），
+            // 状态会在下次校验时重试写入。
             self.store.setLicenseStatus(row.id, "expired", self.now()) catch {};
             return error.LicenseExpired;
         }

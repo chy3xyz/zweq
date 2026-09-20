@@ -307,3 +307,31 @@ test "admin-only endpoints reject missing/non-admin tokens" {
     defer anon_put.deinit(allocator);
     try std.testing.expectEqual(@as(u16, 401), anon_put.status_code);
 }
+
+test "url_guard: 出站 URL 校验（SSRF 基线）" {
+    const url_guard = @import("../http/url_guard.zig");
+    // 合法：https / http / 带端口。
+    try std.testing.expect(url_guard.isAcceptableOutboundUrl("https://api.openai.com/v1/chat"));
+    try std.testing.expect(url_guard.isAcceptableOutboundUrl("http://example.com/webhook"));
+    try std.testing.expect(url_guard.isAcceptableOutboundUrl("https://api.example.com:8443/hook"));
+    // 拒绝：非 http(s) scheme 与空 host。
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("ftp://example.com/file"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("file:///etc/passwd"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl(""));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("https:///path"));
+    // 拒绝：字面回环/内网地址。
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://localhost/hook"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://localhost:9000/hook"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://127.0.0.1/hook"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://10.1.2.3/hook"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://172.16.0.9/hook"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://172.31.255.255/hook"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://192.168.1.4/hook"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://169.254.169.254/latest/meta-data"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://[::1]/hook"));
+    try std.testing.expect(!url_guard.isAcceptableOutboundUrl("http://[::1]:8080/hook"));
+    // 边界：172.15 / 172.32 不在私网段，字面判断下放行。
+    try std.testing.expect(url_guard.isAcceptableOutboundUrl("http://172.15.0.1/hook"));
+    try std.testing.expect(url_guard.isAcceptableOutboundUrl("http://172.32.0.1/hook"));
+}

@@ -28,6 +28,8 @@ pub const Config = struct {
     /// Comma-separated CORS allow-list. "*" allows any origin (dev only);
     /// set e.g. `ZWEQ_CORS_ORIGINS=https://admin.example.com` in prod.
     cors_origins: []const u8 = "*",
+    /// True when ZWEQ_CORS_ORIGINS was explicitly set (fail-closed in prod).
+    cors_origins_explicit: bool = false,
     /// Mail transport. Empty host => console/log sink (dev). When set, SMTP
     /// is used (with STARTTLS when `smtp_starttls` is true).
     smtp_host: []const u8 = "",
@@ -85,6 +87,7 @@ pub const Config = struct {
         cfg.password_token_expiration_seconds = parseInt64(environ.get("ZWEQ_PASSWORD_TOKEN_EXPIRATION") orelse "3600", 3600);
         cfg.app_host = environ.get("ZWEQ_APP_HOST") orelse "http://localhost:3001";
         cfg.cors_origins = environ.get("ZWEQ_CORS_ORIGINS") orelse "*";
+        cfg.cors_origins_explicit = environ.get("ZWEQ_CORS_ORIGINS") != null;
         cfg.smtp_host = environ.get("ZWEQ_SMTP_HOST") orelse "";
         cfg.smtp_port = parsePort(environ.get("ZWEQ_SMTP_PORT") orelse "587");
         cfg.smtp_username = environ.get("ZWEQ_SMTP_USERNAME") orelse "";

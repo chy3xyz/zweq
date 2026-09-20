@@ -345,17 +345,23 @@ pub const CatalogStore = struct {
     /// 商品销量累计：sales += n。
     pub fn addProductSales(self: *CatalogStore, product_id: i64, n: i64) !void {
         const preds = self.client.shop_product.predicates;
-        _ = crud.increment(self.client.shop_product, "sales", n, &.{preds.idEQ(.{ .int = product_id })}) catch {};
+        _ = crud.increment(self.client.shop_product, "sales", n, &.{preds.idEQ(.{ .int = product_id })}) catch |err| {
+            std.log.err("[shop] 累计商品销量失败 product_id={d} n={d}: {s}", .{ product_id, n, @errorName(err) });
+        };
     }
 
     /// 库存返还（取消/退款）：sku.stock += n；销量回退：product.sales -= n。
     pub fn restoreSkuStock(self: *CatalogStore, sku_id: i64, n: i64) !void {
         const sp = self.client.shop_product_sku.predicates;
-        _ = crud.increment(self.client.shop_product_sku, "stock", n, &.{sp.idEQ(.{ .int = sku_id })}) catch {};
+        _ = crud.increment(self.client.shop_product_sku, "stock", n, &.{sp.idEQ(.{ .int = sku_id })}) catch |err| {
+            std.log.err("[shop] 返还 SKU 库存失败 sku_id={d} n={d}: {s}", .{ sku_id, n, @errorName(err) });
+        };
     }
 
     pub fn subtractProductSales(self: *CatalogStore, product_id: i64, n: i64) !void {
         const preds = self.client.shop_product.predicates;
-        _ = crud.increment(self.client.shop_product, "sales", -n, &.{preds.idEQ(.{ .int = product_id })}) catch {};
+        _ = crud.increment(self.client.shop_product, "sales", -n, &.{preds.idEQ(.{ .int = product_id })}) catch |err| {
+            std.log.err("[shop] 回退商品销量失败 product_id={d} n={d}: {s}", .{ product_id, n, @errorName(err) });
+        };
     }
 };

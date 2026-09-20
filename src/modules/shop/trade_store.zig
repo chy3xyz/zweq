@@ -154,7 +154,11 @@ pub const TradeStore = struct {
         });
         defer self.client.shop_address.deinitRow(&row);
         if (a.is_default == 1) {
-            self.clearDefaultAddress(tenant_id, a.openid, row.id) catch {};
+            // 新行已落库成功：清旧默认失败只破坏 "唯一默认" 这一派生不变量（用户重新置默认
+            // 即可修复），不能因此连累已成功的创建，故保留 best-effort 语义，仅留痕。
+            self.clearDefaultAddress(tenant_id, a.openid, row.id) catch |err| {
+                std.log.err("[shop] createAddress 清除旧默认地址失败 openid={s} except_id={d}: {s}", .{ a.openid, row.id, @errorName(err) });
+            };
         }
         return row.id;
     }
@@ -258,7 +262,7 @@ pub const TradeStore = struct {
         if (a.is_default == 1) {
             _ = try upd.set("is_default", .{ .int = 1 });
         }
-        _ = try upd.Where(.{ preds.idEQ(.{ .int = id }) });
+        _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
         _ = try upd.Save();
         if (a.is_default == 1) {
             try self.clearDefaultAddress(tenant_id, openid, id);
@@ -582,6 +586,8 @@ pub const TradeStore = struct {
             if (ops.len > 0) self.allocator.free(ops);
         }
         for (ops) |op| {
+            // 回滚链路 best-effort：单项返还未命中/失败不阻断其余明细，整体仍由调用方事务提交；
+            // 失败明细已由内层原语（restoreSkuStockOn / subtractProductSalesOn）各自 log.err 留痕，此处不重复记录。
             self.restoreSkuStockOn(client, op.sku_id, op.quantity) catch {};
             self.subtractProductSalesOn(client, op.product_id, op.quantity) catch {};
         }
@@ -907,7 +913,9 @@ pub const TradeStore = struct {
     // crud.increment 单行语句。表归属商品域，但为避免子域之间互相持引用而内联。
     pub fn restoreSkuStockOn(_: *TradeStore, client: anytype, sku_id: i64, n: i64) !void {
         const sp = client.shop_product_sku.predicates;
-        _ = crud.increment(client.shop_product_sku, "stock", n, &.{sp.idEQ(.{ .int = sku_id })}) catch {};
+        _ = crud.increment(client.shop_product_sku, "stock", n, &.{sp.idEQ(.{ .int = sku_id })}) catch |err| {
+            std.log.err("[shop] 返还 SKU 库存失败 sku_id={d} n={d}: {s}", .{ sku_id, n, @errorName(err) });
+        };
     }
 
     pub fn restoreSkuStock(self: *TradeStore, sku_id: i64, n: i64) !void {
@@ -916,7 +924,9 @@ pub const TradeStore = struct {
 
     pub fn subtractProductSalesOn(_: *TradeStore, client: anytype, product_id: i64, n: i64) !void {
         const p = client.shop_product.predicates;
-        _ = crud.increment(client.shop_product, "sales", -n, &.{p.idEQ(.{ .int = product_id })}) catch {};
+        _ = crud.increment(client.shop_product, "sales", -n, &.{p.idEQ(.{ .int = product_id })}) catch |err| {
+            std.log.err("[shop] 回退商品销量失败 product_id={d} n={d}: {s}", .{ product_id, n, @errorName(err) });
+        };
     }
 
     pub fn subtractProductSales(self: *TradeStore, product_id: i64, n: i64) !void {

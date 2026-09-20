@@ -158,6 +158,8 @@ pub const FileService = struct {
         try self.store.delete(id);
         const path = try self.pathFor(row.storage_key);
         defer self.allocator.free(path);
+        // 元数据已删，磁盘文件删除失败最多遗留一个孤儿文件，
+        // 不影响调用方看到的删除结果（无法回滚，也无更合适的上报通道）。
         std.Io.Dir.cwd().deleteFile(self.io, path) catch {};
     }
 

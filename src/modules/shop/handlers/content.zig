@@ -4,6 +4,7 @@ const zigmodu = @import("zigmodu");
 const http = zigmodu.http;
 const mw = @import("../../../middleware/auth.zig");
 const mw_rate = @import("../../../middleware/rate_limit.zig");
+const url_guard = @import("../../../http/url_guard.zig");
 const user_svc = @import("../../user/service.zig");
 const audit_svc = @import("../../audit/service.zig");
 const member_persist = @import("../../member/persistence.zig");
@@ -247,6 +248,11 @@ pub fn Mixin(comptime ApiT: type) type {
                 ctx.allocator.free(req.url);
                 ctx.allocator.free(req.events);
             }
+            // SSRF 基线：该 URL 会被服务端 webhook 推送主动请求，只允许 http(s) 且非字面内网地址。
+            if (!url_guard.isAcceptableOutboundUrl(req.url)) {
+                try ctx.sendErrorResponse(400, 400, "Webhook 地址不允许（需 http(s) 且非内网地址）");
+                return;
+            }
             const id = self.svc.createWebhook(tid, req.account_id, req.url, req.events) catch |err| {
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
@@ -315,7 +321,7 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(500, 500, "签发失败");
                 return;
             };
-            defer self.svc.allocator.free(token);
+            defer self.user_svc.sec.module.allocator.free(token);
             try ctx.okValue(.{ .token = token });
         }
 
@@ -327,11 +333,13 @@ pub fn Mixin(comptime ApiT: type) type {
             const token = header[7..];
             const payload = self.user_svc.sec.module.verifyToken(token) catch return null;
             defer {
-                self.svc.allocator.free(payload.sub);
-                self.svc.allocator.free(payload.iss);
-                self.svc.allocator.free(payload.aud);
-                for (payload.roles) |r| self.svc.allocator.free(r);
-                self.svc.allocator.free(payload.roles);
+                // payload 的各字段由安全模块（验签方）分配，用它自己的分配器释放。
+                const sec_alloc = self.user_svc.sec.module.allocator;
+                sec_alloc.free(payload.sub);
+                sec_alloc.free(payload.iss);
+                sec_alloc.free(payload.aud);
+                for (payload.roles) |r| sec_alloc.free(r);
+                sec_alloc.free(payload.roles);
             }
             // roles 含 fan 才是 C 端 token。
             var is_fan = false;

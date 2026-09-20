@@ -485,9 +485,9 @@ fn genNonce(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
         if (read != rand_bytes.len) return error.Unexpected;
     }
     return std.fmt.allocPrint(allocator, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{
-        rand_bytes[0], rand_bytes[1], rand_bytes[2], rand_bytes[3],
-        rand_bytes[4], rand_bytes[5], rand_bytes[6], rand_bytes[7],
-        rand_bytes[8], rand_bytes[9], rand_bytes[10], rand_bytes[11],
+        rand_bytes[0],  rand_bytes[1],  rand_bytes[2],  rand_bytes[3],
+        rand_bytes[4],  rand_bytes[5],  rand_bytes[6],  rand_bytes[7],
+        rand_bytes[8],  rand_bytes[9],  rand_bytes[10], rand_bytes[11],
         rand_bytes[12], rand_bytes[13], rand_bytes[14], rand_bytes[15],
     });
 }

@@ -196,7 +196,7 @@ pub fn AuthApi(comptime Service: type) type {
                     return;
                 },
             };
-            defer session.deinit(self.svc.store.allocator);
+            defer self.svc.freeSession(&session);
             // Email verification is a background courtesy: never block the
             // registration response on mail delivery.
             if (!session.row.verified) self.sendVerificationMail(ctx, session.row.id);
@@ -204,9 +204,9 @@ pub fn AuthApi(comptime Service: type) type {
             const det1 = try std.fmt.bufPrint(&d1, "注册账号 {s}", .{req.email});
             self.audit.log(session.row.id, session.row.name, "auth.register", "user", session.row.id, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tenant_id);
             try ctx.okValue(.{
-                    .token = session.token,
-                    .user = toDto(session.row),
-                });
+                .token = session.token,
+                .user = toDto(session.row),
+            });
         }
 
         fn login(ctx: *http.Context) !void {
@@ -227,21 +227,21 @@ pub fn AuthApi(comptime Service: type) type {
                     return;
                 },
             };
-            const session = session_opt orelse {
+            var session = session_opt orelse {
                 var d3: [160]u8 = undefined;
                 const det3 = try std.fmt.bufPrint(&d3, "登录失败: {s}", .{req.email});
                 self.audit.log(0, "", "auth.login.fail", "user", 0, det3, zigmodu.http.RequestUtil.getRealIp(ctx), false, 0);
                 try ctx.sendErrorResponse(401, 401, "邮箱或密码错误");
                 return;
             };
-            defer session.deinit(self.svc.store.allocator);
+            defer self.svc.freeSession(&session);
             var d4: [128]u8 = undefined;
             const det4 = try std.fmt.bufPrint(&d4, "登录成功: {s}", .{req.email});
             self.audit.log(session.row.id, session.row.name, "auth.login", "user", session.row.id, det4, zigmodu.http.RequestUtil.getRealIp(ctx), true, session.row.tenant_id);
             try ctx.okValue(.{
-                    .token = session.token,
-                    .user = toDto(session.row),
-                });
+                .token = session.token,
+                .user = toDto(session.row),
+            });
         }
 
         /// Stateless JWT: logout is a client-side token discard. Responds ok
@@ -311,7 +311,9 @@ pub fn AuthApi(comptime Service: type) type {
                 defer rendered.free(self.svc.store.allocator);
                 const payload = jsonPayload(ctx.allocator, req.email, rendered.subject, rendered.body) catch return;
                 defer ctx.allocator.free(payload);
-                _ = self.task_svc.enqueue("mail.send", payload, 0, self.default_tenant_id) catch {};
+                _ = self.task_svc.enqueue("mail.send", payload, 0, self.default_tenant_id) catch |err| {
+                    std.log.warn("[auth] 重置密码邮件入队失败 user_id={d}: {s}", .{ raw.user_id, @errorName(err) });
+                };
             }
             // Always respond ok to avoid user enumeration.
             try ctx.ok("null");
@@ -373,7 +375,9 @@ pub fn AuthApi(comptime Service: type) type {
                 },
             };
             try ctx.ok("null");
-            _ = self.notify_svc.notify(req.user_id, "邮箱验证成功", "你的邮箱已通过验证。", "success") catch {};
+            _ = self.notify_svc.notify(req.user_id, "邮箱验证成功", "你的邮箱已通过验证。", "success") catch |err| {
+                std.log.warn("[auth] 邮箱验证成功通知写入失败 user_id={d}: {s}", .{ req.user_id, @errorName(err) });
+            };
         }
 
         /// Self-service profile update (name / email). Delegates to the
@@ -465,7 +469,9 @@ pub fn AuthApi(comptime Service: type) type {
                 },
             };
             try ctx.ok("null");
-            _ = self.notify_svc.notify(uid, "密码已修改", "你的登录密码已更新。", "info") catch {};
+            _ = self.notify_svc.notify(uid, "密码已修改", "你的登录密码已更新。", "info") catch |err| {
+                std.log.warn("[auth] 密码已修改通知写入失败 user_id={d}: {s}", .{ uid, @errorName(err) });
+            };
         }
 
         /// Best-effort verification mail: token creation + Mailer.send are
@@ -485,8 +491,12 @@ pub fn AuthApi(comptime Service: type) type {
             defer rendered.free(self.svc.store.allocator);
             const payload = jsonPayload(ctx.allocator, row.email, rendered.subject, rendered.body) catch return;
             defer ctx.allocator.free(payload);
-            _ = self.task_svc.enqueue("mail.send", payload, 0, row.tenant_id) catch {};
-            _ = self.notify_svc.notify(user_id, "验证邮件已发送", "请查收邮件并点击验证链接。", "info") catch {};
+            _ = self.task_svc.enqueue("mail.send", payload, 0, row.tenant_id) catch |err| {
+                std.log.warn("[auth] 验证邮件入队失败 user_id={d}: {s}", .{ user_id, @errorName(err) });
+            };
+            _ = self.notify_svc.notify(user_id, "验证邮件已发送", "请查收邮件并点击验证链接。", "info") catch |err| {
+                std.log.warn("[auth] 验证邮件已发送通知写入失败 user_id={d}: {s}", .{ user_id, @errorName(err) });
+            };
         }
     };
 }

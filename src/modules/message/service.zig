@@ -439,7 +439,10 @@ pub const WechatService = struct {
     }
 
     fn log(self: *WechatService, tenant_id: i64, account_id: i64, parsed: *const ParsedMsg, reply_type: []const u8, reply_content: []const u8) !void {
-        _ = self.store.create(tenant_id, account_id, parsed.msg_id, parsed.openid, parsed.msg_type, parsed.event, parsed.content, reply_type, reply_content, self.now()) catch {};
+        _ = self.store.create(tenant_id, account_id, parsed.msg_id, parsed.openid, parsed.msg_type, parsed.event, parsed.content, reply_type, reply_content, self.now()) catch |err| {
+            // 留痕失败不能阻断回调应答（微信侧不会重投），但必须留下痕迹。
+            std.log.err("wechat: 消息记录写入失败 tenant={d} account={d} msg_id={s} err={s}", .{ tenant_id, account_id, parsed.msg_id, @errorName(err) });
+        };
     }
 
     /// Walk the account's active module bindings and ask each bound module's

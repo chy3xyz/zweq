@@ -137,10 +137,17 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
     const cfg = config_mod.Config.fromEnv(init.environ_map);
-    // 生产(PostgreSQL)必须显式设置 JWT 密钥,拒绝使用默认值。
-    if (!cfg.jwt_secret_explicit and std.mem.eql(u8, cfg.db_driver, "postgres")) {
-        std.log.err("ZWEQ_JWT_SECRET must be set explicitly in production (PostgreSQL). Refusing to start with the default dev secret.", .{});
-        return error.MissingJwtSecret;
+    // 生产(PostgreSQL)下 JWT 密钥与 CORS 白名单都必须显式配置：任一沿用
+    // 默认值(dev secret / "*")都是不可接受的开放面，fail-closed 拒绝
+    // 启动，并逐项列出缺失的环境变量。
+    if (std.mem.eql(u8, cfg.db_driver, "postgres")) {
+        const missing_jwt = !cfg.jwt_secret_explicit;
+        const missing_cors = !cfg.cors_origins_explicit;
+        if (missing_jwt or missing_cors) {
+            if (missing_jwt) std.log.err("缺少环境变量 ZWEQ_JWT_SECRET：生产环境(PostgreSQL)必须显式设置 JWT 密钥，拒绝以默认 dev 密钥启动。", .{});
+            if (missing_cors) std.log.err("缺少环境变量 ZWEQ_CORS_ORIGINS：生产环境(PostgreSQL)必须显式设置 CORS 白名单，拒绝以默认 \"*\"(任意来源)启动。", .{});
+            return error.MissingProductionConfig;
+        }
     }
     std.log.info("zweq starting (db={s}, port={d})", .{ cfg.db_driver, cfg.http_port });
 
@@ -510,13 +517,17 @@ pub fn main(init: std.process.Init) !void {
                 if (s.dist_svc) |ds| {
                     const dist_mod = @import("modules/distribution/service.zig");
                     const dsvc: *dist_mod.DistributionService = @ptrCast(@alignCast(ds));
-                    _ = dsvc.distribute(e.tenant_id, e.account_id, o.openid, pay_amount_cents) catch {};
+                    _ = dsvc.distribute(e.tenant_id, e.account_id, o.openid, pay_amount_cents) catch |err| {
+                        std.log.err("[distribution] order.paid 分佣失败 order_id={d} err={s}", .{ e.order_id, @errorName(err) });
+                    };
                 }
                 // 会员积分累计（1 元 = 1 积分）。
                 if (s.member_svc) |ms| {
                     const mc_mod = @import("modules/member_card/service.zig");
                     const msvc: *mc_mod.MemberCardService = @ptrCast(@alignCast(ms));
-                    _ = msvc.adjust(e.tenant_id, e.account_id, o.openid, @divTrunc(pay_amount_cents, 100)) catch {};
+                    _ = msvc.adjust(e.tenant_id, e.account_id, o.openid, @divTrunc(pay_amount_cents, 100)) catch |err| {
+                        std.log.err("[member_card] order.paid 积分累计失败 order_id={d} err={s}", .{ e.order_id, @errorName(err) });
+                    };
                 }
                 // Webhook 推送（事件开放出口）。
                 s.webhook_transport = &webhook_transport;
@@ -525,11 +536,13 @@ pub fn main(init: std.process.Init) !void {
         };
         OrderPaidCtx.shop_ref = &shop_svc;
         OrderPaidCtx.webhook_transport = @import("http/webhook_transport.zig").WebhookTransport.init(io);
-        order_paid_bus.subscribe(OrderPaidCtx.onPaid) catch {};
+        order_paid_bus.subscribe(OrderPaidCtx.onPaid) catch |err| {
+            std.log.err("[shop] order_paid_bus 订阅失败,支付后分佣/积分/webhook 均不会触发: {s}", .{@errorName(err)});
+        };
         shop_svc.order_paid_bus = &order_paid_bus;
         // 生命周期：bus 随主循环存活（栈变量，作用域到 main 结束）——需提升到函数级。
-        // 此处用堆分配避免悬挂。
-        const heap_bus = allocator.create(OrderPaidBus) catch unreachable;
+        // 此处用堆分配避免悬挂。ReleaseFast 下 `unreachable` 是 UB，OOM 用 panic 报告。
+        const heap_bus = allocator.create(OrderPaidBus) catch @panic("order_paid_bus: out of memory");
         heap_bus.* = order_paid_bus;
         shop_svc.order_paid_bus = heap_bus;
     }
@@ -590,6 +603,18 @@ pub fn main(init: std.process.Init) !void {
     // Dispatcher 先于本函数栈创建,其 defer deinit 晚于 server 停止,
     // HTTP 处理期内始终存活;仅借出计数器读指针,无所有权转移。
     metrics.dispatcher = &dispatcher;
+    // 数据库连接池指标:StoreEnv 是泛型类型,metrics 侧不感知其 comptime
+    // 参数,这里静态持有 store_env 指针并提供快照函数——每次 /metrics
+    // 抓取时现调 poolStats()。store_env 的 defer deinit 在 main 返回时才
+    // 执行,晚于 server 停止,抓取期内指针有效。
+    const PoolStatsSource = struct {
+        var env: @TypeOf(&store_env) = undefined;
+        fn snapshot() ?db_mod.PoolStats {
+            return env.poolStats();
+        }
+    };
+    PoolStatsSource.env = &store_env;
+    metrics.pool_stats_fn = PoolStatsSource.snapshot;
     try server.addMiddleware(real_ip_mod.realIp());
     try server.addMiddleware(request_log_mod.requestLog());
     try server.addMiddleware(metrics.middleware());
@@ -730,7 +755,10 @@ pub fn main(init: std.process.Init) !void {
                     try ctx.sendErrorResponse(503, 503, "数据库不可用");
                     return;
                 };
-                defer probe.free(ctx.allocator);
+                // 探针只为「能不能读库」，结果必须用 **store 分配器**释放：行与切片
+                // 都由 UserStore 的进程 gpa 分配，用 ctx.allocator（连接 arena，
+                // free 是 no-op）释放等于每次健康检查泄漏一整页。
+                defer Ready.user_store_ref.freeList(&probe);
                 try ctx.okValue(.{ .status = "READY" });
             }
         }.handle,

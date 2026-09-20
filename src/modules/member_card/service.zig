@@ -193,7 +193,10 @@ pub const MemberCardService = struct {
         if (self.store.levelForPoints(tenant_id, account_id, new_total) catch return error.Unexpected) |lvl| {
             defer lvl.free(self.allocator);
             if (lvl.id != acc.level_id) {
-                self.store.setLevel(acc.id, lvl.id) catch {};
+                self.store.setLevel(acc.id, lvl.id) catch |err| {
+                    // 积分已调整，等级更新失败会让等级与累计积分不一致，留痕供对账。
+                    std.log.err("member_card: 等级更新失败 account={d} level={d} err={s}", .{ acc.id, lvl.id, @errorName(err) });
+                };
             }
         }
     }

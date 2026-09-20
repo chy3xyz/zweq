@@ -189,16 +189,16 @@ pub fn UserApi(comptime Service: type) type {
                 try sendCreateError(ctx, err);
                 return;
             };
-            defer session.deinit(self.svc.store.allocator);
+            defer self.svc.freeSession(&session);
 
             var detail_buf: [160]u8 = undefined;
             const detail = try std.fmt.bufPrint(&detail_buf, "创建用户 {s} ({s})", .{ req.name, req.email });
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "user.create", "user", session.row.id, detail, zigmodu.http.RequestUtil.getRealIp(ctx), true, tenant_id);
 
             try ctx.okValue(.{
-                    .id = session.row.id,
-                    .token = session.token,
-                });
+                .id = session.row.id,
+                .token = session.token,
+            });
         }
 
         fn updateUser(ctx: *http.Context) !void {

@@ -77,7 +77,7 @@ pub const VoteStore = struct {
     /// 上游传入；无 tenant 的只读调用链先经 `getTenantId` 探测再走本方法。
     pub fn getVote(self: *VoteStore, tenant_id: i64, id: i64) !?VoteRow {
         const preds = self.client.vote.predicates;
-        var entity = (try crud.first(self.client.vote, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id })})) orelse return null;
+        var entity = (try crud.first(self.client.vote, .{ preds.tenant_idEQ(.{ .int = tenant_id }), preds.idEQ(.{ .int = id }) })) orelse return null;
         defer self.client.vote.deinitRow(&entity);
         return try self.dup(entity);
     }

@@ -141,6 +141,8 @@ pub const ShopService = struct {
     pub fn createProduct(self: *ShopService, tenant_id: i64, account_id: i64, p: ProductInput) ShopError!i64 {
         if (std.mem.trim(u8, p.name, " \t").len == 0 or p.price < 0 or p.stock < 0) return error.InvalidInput;
         const id = self.store.catalog.createProduct(tenant_id, account_id, p, self.now()) catch return error.Unexpected;
+        // 回滚清理：SKU 写入失败时删除已建商品行；清理失败无可挽回，且各失败分支
+        // 均已 return 具体错误给调用方（失败已反馈），故此处只吞错。
         errdefer _ = self.store.catalog.deleteProduct(id) catch {};
 
         // 默认 SKU：未传 skus 时按商品主数据建一行（spec_json="[]"）。
@@ -161,20 +163,22 @@ pub const ShopService = struct {
     pub fn updateProduct(self: *ShopService, tenant_id: i64, account_id: i64, id: i64, p: ProductInput) ShopError!void {
         if (std.mem.trim(u8, p.name, " \t").len == 0 or p.price < 0 or p.stock < 0) return error.InvalidInput;
         if (!(self.store.catalog.updateProduct(id, p, self.now()) catch return error.Unexpected)) return error.NotFound;
-        // 重建 SKU（幂等：删旧建新）。
-        self.store.catalog.deleteSkusByProduct(id) catch {};
+        // 重建 SKU（幂等：删旧建新）。下面三处写入失败时商品主数据已更新、本函数
+        // 仍返回成功，会让 SKU 缺失或新旧混杂，故只吞错但留痕供对账。
+        self.store.catalog.deleteSkusByProduct(id) catch |err| std.log.err("[shop] 更新商品删除旧 SKU 失败 product_id={d} err={s}", .{ id, @errorName(err) });
         if (p.skus.len == 0) {
-            _ = self.store.catalog.createSku(tenant_id, account_id, id, "[]", p.image, p.price, p.stock, self.now()) catch {};
+            _ = self.store.catalog.createSku(tenant_id, account_id, id, "[]", p.image, p.price, p.stock, self.now()) catch |err| std.log.err("[shop] 更新商品写入默认 SKU 失败 product_id={d} err={s}", .{ id, @errorName(err) });
         } else {
             for (p.skus) |s| {
-                _ = self.store.catalog.createSku(tenant_id, account_id, id, s.spec_json, s.image, s.price, s.stock, self.now()) catch {};
+                _ = self.store.catalog.createSku(tenant_id, account_id, id, s.spec_json, s.image, s.price, s.stock, self.now()) catch |err| std.log.err("[shop] 更新商品写入 SKU 失败 product_id={d} err={s}", .{ id, @errorName(err) });
             }
         }
     }
 
     pub fn deleteProduct(self: *ShopService, id: i64) ShopError!void {
         _ = self.store.catalog.deleteProduct(id) catch return error.Unexpected;
-        self.store.catalog.deleteSkusByProduct(id) catch {};
+        // 商品行已删除且本函数返回成功；残留 SKU 仍可被 listSkus/getSku 读到，留痕对账。
+        self.store.catalog.deleteSkusByProduct(id) catch |err| std.log.err("[shop] 删除商品后清理 SKU 失败 product_id={d} err={s}", .{ id, @errorName(err) });
     }
 
     /// `status` 为 -1 表示不过滤（管理端），0/1 按下架/上架筛选。
@@ -305,6 +309,8 @@ pub const ShopService = struct {
         // 提交后须立即归还池连接（连接在 deinit 时才 release），否则提交后的
         // 余额支付/订单明细查询在 max_connections=1（:memory:）下必然耗尽。
         // 错误路径先显式回滚再释放（池层 rollback 幂等），避免依赖 deinit 兜底。
+        // 本函数内所有 rollback()/deinit 失败只吞错：各失败分支均已 return 具体错误
+        // 给调用方，回滚失败无可挽回，且下面 defer 兜底会再回滚一次。
         var tx_closed = false;
         defer if (!tx_closed) {
             tx.rollback() catch {};
@@ -334,7 +340,7 @@ pub const ShopService = struct {
                 }
                 const product_price = std.fmt.parseInt(i64, product.price, 10) catch return error.Unexpected;
                 total += product_price * it.quantity;
-                _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch {};
+                _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch |err| std.log.err("[shop] 下单累计商品销量失败 product_id={d} quantity={d} err={s}", .{ it.product_id, it.quantity, @errorName(err) });
             } else {
                 const sp = tx.client.shop_product_sku.predicates;
                 const sku_opt = self.store.catalog.getSkuOn(tx.client, tenant_id, it.sku_id) catch return error.Unexpected;
@@ -355,7 +361,7 @@ pub const ShopService = struct {
                 const sku_price = std.fmt.parseInt(i64, sku.price, 10) catch return error.Unexpected;
                 total += sku_price * it.quantity;
                 const pp = tx.client.shop_product.predicates;
-                _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch {};
+                _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch |err| std.log.err("[shop] 下单累计商品销量失败 product_id={d} quantity={d} err={s}", .{ it.product_id, it.quantity, @errorName(err) });
             }
         }
 
@@ -480,11 +486,14 @@ pub const ShopService = struct {
                         // 条件取消：仅本次请求把 0→4 命中时才回滚库存，
                         // 与用户手动取消并发时不会双倍返还。
                         if (self.store.trade.cancelOrderOn(tenant_id, openid, order_id, self.now()) catch false) {
-                            self.store.trade.restoreOrderStock(order_id) catch {}; // 事务已提交，显式回滚
+                            // 事务已提交，显式回滚：订单已取消（本函数即将返回 InsufficientBalance），
+                            // 库存返还失败无可挽回，留痕供人工对账。
+                            self.store.trade.restoreOrderStock(order_id) catch |err| std.log.err("[shop] 余额支付失败回滚订单库存失败 order_id={d} err={s}", .{ order_id, @errorName(err) });
                         }
                         return error.InsufficientBalance;
                     }
-                    self.markPaid(tenant_id, account_id, order_id) catch {};
+                    // 钱包已扣款；标记支付失败会让订单停在待支付（钱已走、单未结），留痕。
+                    self.markPaid(tenant_id, account_id, order_id) catch |err| std.log.err("[shop] 余额支付成功后标记订单已支付失败 order_id={d} err={s}", .{ order_id, @errorName(err) });
                 }
             }
         }
@@ -532,7 +541,8 @@ pub const ShopService = struct {
             const pay_amount = std.fmt.parseInt(i64, o.pay_amount, 10) catch return;
             const dist_mod = @import("../distribution/service.zig");
             const dsvc: *dist_mod.DistributionService = @ptrCast(@alignCast(ds));
-            _ = dsvc.distribute(tenant_id, account_id, o.openid, pay_amount) catch {};
+            // 买家已支付成功，分佣失败只影响上级佣金，不阻断订单；留痕供对账。
+            _ = dsvc.distribute(tenant_id, account_id, o.openid, pay_amount) catch |err| std.log.err("[shop] 支付成功同步分佣失败 openid={s} amount={d} err={s}", .{ o.openid, pay_amount, @errorName(err) });
         }
         // 会员积分累计：1 元 = 1 积分。
         if (self.member_svc) |ms| {
@@ -542,7 +552,8 @@ pub const ShopService = struct {
             const pay_amount2 = std.fmt.parseInt(i64, o2.pay_amount, 10) catch return;
             const mc_mod = @import("../member_card/service.zig");
             const msvc: *mc_mod.MemberCardService = @ptrCast(@alignCast(ms));
-            _ = msvc.adjust(tenant_id, account_id, o2.openid, @divTrunc(pay_amount2, 100)) catch {};
+            // 同上：积分漏记不阻断支付流程，留痕供对账。
+            _ = msvc.adjust(tenant_id, account_id, o2.openid, @divTrunc(pay_amount2, 100)) catch |err| std.log.err("[shop] 支付成功累计会员积分失败 openid={s} err={s}", .{ o2.openid, @errorName(err) });
         }
     }
 
@@ -553,7 +564,8 @@ pub const ShopService = struct {
     /// 不存在/归属不符 → NotFound（IDOR 按不存在处理）；其他状态 → 冲突。
     pub fn cancelOrder(self: *ShopService, tenant_id: i64, openid: []const u8, order_id: i64) ShopError!void {
         if (self.store.trade.cancelOrderOn(tenant_id, openid, order_id, self.now()) catch return error.Unexpected) {
-            self.store.trade.restoreOrderStock(order_id) catch {};
+            // 订单已取消且本函数返回成功；库存返还失败只影响后续可售库存，留痕对账。
+            self.store.trade.restoreOrderStock(order_id) catch |err| std.log.err("[shop] 取消订单回滚库存失败 order_id={d} err={s}", .{ order_id, @errorName(err) });
             return;
         }
         const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
@@ -669,6 +681,8 @@ pub const ShopService = struct {
         // 均为 `client: anytype`（root Client / TxClient 均可传入）。
         var tx = zent.codegen.client.beginTxFromDriver(persist.infos, self.store.client.driver, self.allocator) catch return error.Unexpected;
         var tx_closed = false;
+        // 未提交路径由 defer 兜底回滚；回滚/释放失败只吞错：各失败分支均已 return 错误，
+        // 幂等返回分支本就无需持久化，回滚失败无可挽回。
         defer if (!tx_closed) {
             tx.rollback() catch {};
             tx.deinit();
@@ -686,7 +700,8 @@ pub const ShopService = struct {
         if (approve) {
             // 订单状态 + 库存回滚与 refund 翻转同事务提交。
             _ = self.store.trade.updateOrderStatusOn(tx.client, order_id, 4, now_secs) catch return error.Unexpected;
-            self.store.trade.restoreOrderStockOn(tx.client, order_id) catch {};
+            // 事务随后仍会提交（退款审批已生效）；库存/销量回滚失败无可挽回，留痕对账。
+            self.store.trade.restoreOrderStockOn(tx.client, order_id) catch |err| std.log.err("[shop] 退款审核通过后回滚订单库存失败 order_id={d} err={s}", .{ order_id, @errorName(err) });
         }
         tx.commit() catch return error.Unexpected;
         tx.deinit();
@@ -841,7 +856,8 @@ pub const ShopService = struct {
             // 条件取消：与用户手动取消/另一轮扫单并发时只有一个命中，
             // 库存回滚恰好一次（防双倍返还）。
             if (self.store.trade.cancelOrderOn(tenant_id, o.openid, o.id, self.now()) catch continue) {
-                self.store.trade.restoreOrderStock(o.id) catch {};
+                // 订单已取消（本函数返回成功）；库存返还失败会让可售库存偏低，留痕对账。
+                self.store.trade.restoreOrderStock(o.id) catch |err| std.log.err("[shop] 超时取消订单回滚库存失败 order_id={d} err={s}", .{ o.id, @errorName(err) });
                 count += 1;
             }
         }
@@ -959,7 +975,9 @@ pub const ShopService = struct {
                 defer self.allocator.free(payload);
                 const Transport = @import("../../http/webhook_transport.zig");
                 const t: *Transport.WebhookTransport = @ptrCast(@alignCast(wt));
-                t.post(h.url, payload) catch {};
+                // 外部推送本就 best-effort（无重试队列，失败即丢本次投递），
+                // 不影响本函数调用方（事件主流程已提交），故只记日志。
+                t.post(h.url, payload) catch |err| std.log.warn("[shop] webhook 推送失败 event={s} url={s} err={s}", .{ event, h.url, @errorName(err) });
             }
         }
     }
@@ -1012,7 +1030,8 @@ pub const ShopService = struct {
         const invited = self.store.marketing.countInvites(tenant_id, inviter_openid) catch return;
         for (gifts) |g| {
             if (g.target_count == invited) {
-                self.grantInviteReward(tenant_id, account_id, inviter_openid, g) catch {};
+                // 邀请关系已绑定（本函数返回成功）；奖励发放失败只影响邀请人收益，留痕对账。
+                self.grantInviteReward(tenant_id, account_id, inviter_openid, g) catch |err| std.log.err("[shop] 邀请达标奖励发放失败 openid={s} reward_type={s} err={s}", .{ inviter_openid, g.reward_type, @errorName(err) });
             }
         }
     }
@@ -1023,13 +1042,15 @@ pub const ShopService = struct {
             if (self.member_svc) |ms| {
                 const mc_mod = @import("../member_card/service.zig");
                 const msvc: *mc_mod.MemberCardService = @ptrCast(@alignCast(ms));
-                _ = msvc.adjust(tenant_id, account_id, openid, g.reward_value) catch {};
+                // 奖励积分入账失败则邀请人少得积分（无其它可观测渠道），留痕对账。
+                _ = msvc.adjust(tenant_id, account_id, openid, g.reward_value) catch |err| std.log.err("[shop] 邀请奖励积分入账失败 openid={s} points={d} err={s}", .{ openid, g.reward_value, @errorName(err) });
             }
         } else if (std.mem.eql(u8, g.reward_type, "coupon")) {
             if (self.coupon_svc) |cs| {
                 const c_mod = @import("../coupon/service.zig");
                 const csvc: *c_mod.CouponService = @ptrCast(@alignCast(cs));
-                _ = csvc.claimCoupon(self.allocator, tenant_id, account_id, openid, g.reward_value) catch {};
+                // 同上：发券失败则邀请人拿不到券，留痕对账。
+                _ = csvc.claimCoupon(self.allocator, tenant_id, account_id, openid, g.reward_value) catch |err| std.log.err("[shop] 邀请奖励发券失败 openid={s} coupon_id={d} err={s}", .{ openid, g.reward_value, @errorName(err) });
             }
         }
     }
@@ -1084,7 +1105,8 @@ pub const ShopService = struct {
             .price = group_price,
             .quantity = 1,
         }, now_secs) catch return error.Unexpected;
-        self.store.catalog.addProductSales(activity.product_id, 1) catch {};
+        // 销量为派生统计，累加失败不影响已建订单，但仍留痕供对账。
+        self.store.catalog.addProductSales(activity.product_id, 1) catch |err| std.log.err("[shop] 拼团下单累计商品销量失败 product_id={d} err={s}", .{ activity.product_id, @errorName(err) });
         return order_id;
     }
 
@@ -1135,7 +1157,8 @@ pub const ShopService = struct {
                 if (orders.len > 0) self.allocator.free(orders);
             }
             for (orders) |o| {
-                self.markPaid(tenant_id, account_id, o.id) catch {};
+                // 成团即代表团内订单已支付；标记失败会让订单停在待支付（且不触发分佣/积分），留痕。
+                self.markPaid(tenant_id, account_id, o.id) catch |err| std.log.err("[shop] 成团后标记订单已支付失败 order_id={d} err={s}", .{ o.id, @errorName(err) });
             }
         }
         return order_id;

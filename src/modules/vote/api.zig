@@ -94,7 +94,7 @@ pub fn VoteApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return null;
             };
-            defer row.free(self.svc.allocator);
+            defer row.free(self.user_svc.store.allocator);
             if (!row.admin) {
                 try ctx.sendErrorResponse(403, 403, "需要管理员权限");
                 return null;

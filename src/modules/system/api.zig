@@ -91,15 +91,15 @@ pub fn SystemApi(comptime CacheT: type, comptime TaskSvcT: type) type {
             const now = zigmodu.time.wallClockSeconds(self.io);
             const task_counts = self.tasks.counts() catch task_persist.StatusCounts{};
             try ctx.okValue(.{
-                    .app = "zweq",
-                    .version = "0.2.0",
-                    .uptime_seconds = now - self.started_at,
-                    .db = self.db_kind,
-                    .mail = .{ .smtp = self.smtp_enabled, .console = self.mail_console },
-                    .cache_entries = self.cache.count(),
-                    .modules = self.module_count,
-                    .tasks = task_counts,
-                });
+                .app = "zweq",
+                .version = "0.2.0",
+                .uptime_seconds = now - self.started_at,
+                .db = self.db_kind,
+                .mail = .{ .smtp = self.smtp_enabled, .console = self.mail_console },
+                .cache_entries = self.cache.count(),
+                .modules = self.module_count,
+                .tasks = task_counts,
+            });
         }
 
         fn dashboard(ctx: *http.Context) !void {
@@ -125,13 +125,13 @@ pub fn SystemApi(comptime CacheT: type, comptime TaskSvcT: type) type {
             const task_counts = self.tasks.counts() catch task_persist.StatusCounts{};
 
             try ctx.okValue(.{
-                    .users = .{ .total = total_users, .registered_last_7d = trend },
-                    .tasks = task_counts,
-                    .files = total_files,
-                    .notifications = total_notifications,
-                    .tenants = total_tenants,
-                    .cache_entries = self.cache.count(),
-                });
+                .users = .{ .total = total_users, .registered_last_7d = trend },
+                .tasks = task_counts,
+                .files = total_files,
+                .notifications = total_notifications,
+                .tenants = total_tenants,
+                .cache_entries = self.cache.count(),
+            });
         }
     };
 }

@@ -272,7 +272,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
                 return;
             };
-            const module = ctx.param("module") orelse {
+            const module = ctx.pathParam("module") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少模块名");
                 return;
             };
@@ -293,7 +293,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
                 return;
             };
-            const module = ctx.param("module") orelse {
+            const module = ctx.pathParam("module") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少模块名");
                 return;
             };
@@ -315,7 +315,7 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
                 return;
             };
-            const module = ctx.param("module") orelse {
+            const module = ctx.pathParam("module") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少模块名");
                 return;
             };

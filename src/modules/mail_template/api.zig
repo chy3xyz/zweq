@@ -71,7 +71,7 @@ pub fn MailTemplateApi(comptime TemplateServiceT: type, comptime UserService: ty
         fn upsertTemplate(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
 
-            const code = ctx.param("code") orelse {
+            const code = ctx.pathParam("code") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少模板 code");
                 return;
             };

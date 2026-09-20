@@ -382,7 +382,11 @@ pub fn Mixin(comptime ApiT: type) type {
             const openid = ctx.query.get("openid") orelse "";
             const status = ctx.queryInt(i64, "status", -1);
             if (account_id > 0 and self.order_timeout_secs > 0) {
-                _ = self.svc.autoCancelExpired(tid, account_id, self.order_timeout_secs) catch {};
+                // 超时扫单是本次读请求的旁路兜底：失败不能拖垮列表，下一次带 account_id 的
+                // 请求会重试（取消与库存回滚均幂等），故保留 best-effort 语义，仅留痕。
+                _ = self.svc.autoCancelExpired(tid, account_id, self.order_timeout_secs) catch |err| {
+                    std.log.warn("[shop] orderList 订单超时自动取消失败 tenant_id={d} account_id={d}: {s}", .{ tid, account_id, @errorName(err) });
+                };
             }
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 50 });
             var result = self.svc.listOrders(params.page, params.page_size, tid, account_id, openid, status, "") catch {
@@ -407,7 +411,10 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             }
             if (account_id > 0 and self.order_timeout_secs > 0) {
-                _ = self.svc.autoCancelExpired(tid, account_id, self.order_timeout_secs) catch {};
+                // 同 orderList：扫单失败不影响本次概览，下一次请求会重试，故仅留痕不回错。
+                _ = self.svc.autoCancelExpired(tid, account_id, self.order_timeout_secs) catch |err| {
+                    std.log.warn("[shop] orderOverview 订单超时自动取消失败 tenant_id={d} account_id={d}: {s}", .{ tid, account_id, @errorName(err) });
+                };
             }
             const overview = self.svc.fanOrderOverview(tid, account_id, openid, self.order_timeout_secs) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
