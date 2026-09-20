@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **就绪探针每次都泄漏一整页用户行**：`/api/v1/health/ready` 的探针用 `listUsers(1, 1, …)` 探库，却用 `ctx.allocator`（连接 arena，`free` 是 no-op）释放结果——行与切片实由 `UserStore` 的进程 gpa 分配，而健康检查在生产是按秒调用的，属稳态泄漏。已改为 `UserStore.freeList`。**这处是新加的分配器归属 lint 抓到的**（见 `### Added`）。
+- **77 处 `catch {}` 吞错分诊**：A 类 27 处（资源清理 / 事务回滚 / 定时兜底——语义上确实无可挽回且错误另有通道）补注释说明为何可吞；B 类 49 处（业务写入、状态变更、外部调用被静默吞掉）补 `std.log.err`/`warn` 带上下文，**控制流与 best-effort 语义不变**。钱相关的几处值得点名：余额支付成功后的 `markPaid`、支付成功后的分佣与积分入账、取消/退款/超时的库存回滚、成团后的 `markPaid`，以及分销佣金第二笔 `total_commission` 累加（同一函数第一步是 `try`、第二步却把 `Save` 吞掉——账目半成功且静默漂移）。
+- **3 处 `catch unreachable`**（`rate_limit.zig` 的两个 middleware 构造、`main.zig` 的 `OrderPaidBus` 堆分配）改为 `catch @panic("<上下文>: out of memory")`：ReleaseFast 下 `unreachable` 是 UB，OOM 至少该留一句可读的报错（zigmodu 0.15.41 对它自己同类 8 处做了同样处理）。
+- **`Session` 的混合所有权**：`session.deinit(allocator)` 用一个分配器释放两种来源（`row` 归 store、`token` 归安全模块签发方）——今天恰好同为进程 gpa 所以不崩，注入一旦分歧就是非法释放。改为 `UserService.freeSession(&session)` 按各自拥有者释放，`Session.deinit` 删除（auth ×2、admin CLI、测试共 4 处调用点同步）。同类脆弱点一并收敛：`shop/handlers/content.zig` 的 C-token 签发/验签产物改用 `sec.module.allocator`，`vote/api.zig` 的鉴权用户行改用 `user_svc.store.allocator`。
 - **分配器不匹配导致的静默泄漏（约 30 处）**：`ctx.allocator` 是**连接 fiber 的 arena**（zigmodu 源码注释原话："Zig 0.17 arena free is a no-op"），而各 store/service 的 `dup*` 用**进程 gpa** 分配行与字符串——用 arena 去释放进程 gpa 的对象，`free` 直接退化成空操作，整块内存再也不回来。这是本轮真库冒烟实测出来的：CSV 导出每次请求泄漏整页（用户 11 行、审计 121 行），每次登录泄漏一份密码哈希，一次全流程停机共 **631 条 `leaked`**。已把约 30 处释放改回**拥有者分配器**（store/service 自己的 `allocator`，或复用 `freeList` 这类既有辅助），并修掉 `AiService.resolveProvider` 的所有权结构问题——它把选中行从列表里拷出来，却让列表与调用方两侧都去释放同一行（过去两侧都是 arena，所以既不崩也完全不释放），现在选中行显式从列表释放中排除、所有权转移给调用方。修完跑同一套冒烟：**停机泄漏 631 条 → 0**。
   - 这类不匹配**单元测试抓不到**：测试里 `ctx.allocator` 与 store 分配器同为 `std.testing.allocator`，两侧同源。判断方法只能查被释放对象的**生产者**用的是哪个分配器（生产者把 allocator 当形参时 = 谁传谁拥有）。
 - **上传内容判定只信客户端声明（存储型 XSS 口子）**：`validMime` 比较的是客户端自己写的 `Content-Type`，`说明.png` + `image/png` 里装 HTML/SVG 能直接通过（同源存储型 XSS 的经典形态）。现接入 zigmodu v0.15.46 `http.UploadGuard`，按**字节**嗅探魔数并 fail-closed 拒绝 SVG/HTML 主动内容（策略导出为 `file.service.upload_policy`，生产与测试共用同一份以防漂移）。实测：伪装成 PNG 的 HTML 被 400 拒绝（新增文案「文件内容不允许（SVG/HTML 等主动内容）」），真实 PNG / PDF / docx / gzip / txt 全部正常——刻意**不**要求扩展名与内容一致（`.docx`/`.xlsx`/`.jar` 内容本就是 ZIP、`.heic`/`.rar` 无魔数，开对齐会把正常上传判死）。
@@ -20,12 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **停机泄漏**：上面那个 panic 一直掩盖着一条泄漏——`OrderPaidBus` 按进程生命周期堆分配且从未释放（debug 分配器每次停机报 2 条 `leaked`，共约 288 B）。现在在「在途请求已排空、模块停机尚未开始」的时刻 `deinit` + `destroy` 并置空引用。不能挪到服务层释放：`defer app.deinit()`（模块停机）注册得比总线创建早，晚注册的 defer 会先于模块停机执行、留下悬垂指针；且测试传的是栈上 `&bus`，无条件释放会砸掉测试。
 
 ### Added
+- **工程卫生批次（5 项）**：
+  - **`zig build lint-fmt`**（CI 同步）：`zig fmt --check src`，先一次性把 9 个不达标文件 format 干净。
+  - **CORS 生产 fail-closed**：`ZWEQ_CORS_ORIGINS` 未显式设置且驱动为 PostgreSQL（与 JWT 同一"生产"判据）→ 拒绝启动，报错逐条点名缺失的环境变量。此前默认 `"*"` 在生产同样放行任意来源。
+  - **`/metrics` 补两块**：连接池 `zweq_db_pool_total/in_use/available/waiters`（gauge）+ `zweq_db_pool_exhausted_total`（counter，zent v0.53 `ConnPool.stats()`，经 `StoreEnv.poolStats()` 快照 + 函数指针注入，SQLite 也走池故两种驱动都导出）；限流拒绝 `zweq_rate_limit_rejections_total`（counter，per-IP 超限 / per-openid 超限与无身份拒绝 / fail-closed 三条 429 路径共用一个进程级原子，多实例由 Prometheus `sum()` 聚合）。实测：25 次登录打爆 20/分限流 → 计数恰好 5。
+  - **出站 URL 治理（SSRF 基线）**：新增 `src/http/url_guard.zig`（scheme 必须 http(s)、host 非空、按字面拒绝 localhost/127./10./192.168./169.254./172.16-31./::1，并剥离 userinfo 防 `user@127.0.0.1` 绕过；注释写明局限——不做 DNS 解析，域名解析到内网防不住），接入三个管理员配置的出站地址写入口：AI provider `endpoint`（create+update）、shop webhook 创建、`zweq-cloud` 市场包 `download_url`（独立构建根，内联同款副本）。新增测试覆盖合法/拒绝/172.15-32 边界。
+  - **Dockerfile 自包含化**：旧版要求构建上下文带兄弟目录 `zig_ws`（依赖改 git pin 后单仓库构建直接失败），且 `ziglang/zig:0.17.0` 镜像并不存在。重写为：node:22-alpine（`npm ci`）→ alpine:3.21 + git + DB dev 包 + 官方 dev tarball `0.17.0-dev.1970+67f39b551`（与本地/CI 一致，TARGETARCH 映射 amd64/arm64）→ strip → alpine 运行层（musl 与链接库 ABI 匹配）。**实测构建成功，最终镜像 27.6 MB**，`/health/live` 冒烟通过；`docker-compose.yml` 对齐（context 指仓库自身、`ZWEQ_JWT_SECRET`/`ZWEQ_CORS_ORIGINS` 必填插值、健康检查），新增 `.dockerignore`（上下文 2.65 MB）。
+- **两道防回归门禁**（把上一轮手工发现的问题固化成机器检查）：
+  - **`zig build lint-alloc`**（`scripts/check_alloc_owner.py`）：静态拦「用请求 arena 释放长期分配器对象」。这类缺陷**单元测试原理上抓不到**——测试里 `ctx.allocator` 与 store 分配器同为 `std.testing.allocator`，两侧同源、不匹配不可见；判据只能是静态追被释放对象的**生产者**用哪个分配器。对上一轮修复前的代码树实测报出 **24 处**，当前树 **0 处**；门禁首次接线时又抓出就绪探针那处（见 `### Fixed`）。
+  - **CI 新增 `e2e` job**：`scripts/run_e2e.sh` 起真库 + 真服务跑管理员与 C 端两套 e2e，**停机后扫日志断言「无泄漏、无 panic」**，并断言 SIGTERM 后 20 秒内退出。这是本轮之前靠人工做的冒烟流程的固化（当时正是它发现了 631 条泄漏）。
+  - **登记豁免（必须随上游修复删除）**：该门禁目前豁免一处**已确认的 zigmodu ≤ v0.15.47 上游泄漏**——`SecurityModule.base64UrlDecode`/`base64Decode` 在 `decoder.decode` 失败时不释放已分配的缓冲（无效 token 的 header/payload 段触发；修法是每函数两行 `errdefer`，归 zigmodu 仓库）。升级到带修复的 zigmodu 发布版后，`scripts/run_e2e.sh` 里那段豁免必须删掉。
 - **安全**：fan 经济接口（领券/抽奖/兑换/秒杀/提现/开卡/签到/投票）per-openid 限流（10/5/3 次每分档）+ fail-open/closed 统一策略；`shop_invite_record` 加 `UNIQUE(tenant_id, invitee_openid)`，`bindInvite` 改 `SaveIgnore` 幂等；checkin/member_account/distributor/vote_record 补唯一索引（并发撞键映射为已签/已开卡/已加盟/已投票）；`draw_record` 加 `draw_day` 列（不落唯一索引——daily_limit 可配 >1）。
 - **可观测性**：`/metrics` 新增 `zweq_tasks_processed_total`/`zweq_tasks_failed_total`；Dispatcher tick/scheduled/单任务耗时日志。
 - **OpenAPI**：fan 公共 API + payment 共 34 路由补参数注解（45 个参数进 openapi.json），模块顶部 doc comment 承载中文契约（summary/body 结构受 zigmodu `RouteMeta` 字段限制，待库扩展）。
 - CI 前端 job（`npm run typecheck` + `vitest`）。
 
 ### Changed
+- **参数命名对齐上游约定**：11 处 `ctx.param(` → `ctx.pathParam(`（zigmodu v0.15.38 起的显式别名，上游 DO/DON'T"取参数用对名字"，消除"路径参数 vs 任意参数"误读），覆盖 payment/module/message/cloud/mail_template/setting 六个 api.zig。
+- **文件体积门禁上限 1200 → 1800 行**（`scripts/check_file_size.sh`，仍可用 `ZWEQ_MAX_FILE_LINES` 覆盖；CI step 名同步）。改动起因：上一条的吞错留痕让 `shop/service.zig` 从 1175 涨到 1198 行，直接顶住旧上限。**1800 是天花板不是目标**——`shop/service.zig` 仍建议按子域拆分（该文件当前 1198 行，且以下单/支付/退款/取消金路径为主，拆分须只搬运正文、语义零变更）。
 - 依赖升级（主站 + `zweq-cloud` 同步）：zent **v0.45.0 → v0.67.0**（22 个 minor）、zigmodu **v0.15.44 → v0.15.47**。按上游 `CHANGELOG` / zent `docs/UPGRADING.md` 逐条核对后的结论：
   - **采用**：`RateLimiterRegistry.initWithCapacity(…, max_keys)`——registry 的键来自 IP / openid（攻击者可轮换），默认 `max_keys = 0` 即无上限，是框架文档点名的内存增长向量；三个 registry（auth/shop/fan）统一上限 `registry_max_keys = 8192`，并在主循环里每 5 分钟 `retain` 回收空闲桶（正常流量下桶数远低于上界，不被 LRU 淘汰掉活跃客户端）。另接入 `http.UploadGuard`（见 `### Fixed`）。
   - **编译级 BREAKING 不适用**：zent v0.54 `CrudService.create(entity, tenant_id)` 双参（本仓库不用 `CrudService`）；v0.59/0.56 `driver.Error` 新增 `ParamCountMismatch`/`PoolWaitTimeout`（无对驱动错误集的穷尽 `switch`）；v0.67 `SaveError` 新增 `MissingLastInsertId`（同上；且本仓库 `Save` 目标均为自增主键）。

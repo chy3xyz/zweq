@@ -1,4 +1,4 @@
-# zweq + PostgreSQL 生产编排
+# zweq + PostgreSQL 生产编排（构建上下文 = 仓库自身，配合根 .dockerignore）
 services:
   db:
     image: postgres:16-alpine
@@ -16,8 +16,8 @@ services:
 
   zweq:
     build:
-      context: ../
-      dockerfile: zweq/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     depends_on:
       db:
         condition: service_healthy
@@ -25,12 +25,22 @@ services:
       ZWEQ_DB_DRIVER: postgres
       ZWEQ_PG_CONNINFO: host=db port=5432 dbname=zweq user=zweq password=zweq_secret
       ZWEQ_HTTP_PORT: "8000"
-      ZWEQ_JWT_SECRET: change-me-in-prod
-      ZWEQ_AI_KEY_SECRET: change-me-in-prod
+      # 生产（postgres 驱动）fail-closed：JWT 与 CORS 未显式设置会拒绝启动。
+      # 在 shell 环境或本目录 .env 文件提供真实值，勿提交仓库。
+      ZWEQ_JWT_SECRET: ${ZWEQ_JWT_SECRET:?compose 启动前须设置 ZWEQ_JWT_SECRET}
+      ZWEQ_CORS_ORIGINS: ${ZWEQ_CORS_ORIGINS:?compose 启动前须设置 ZWEQ_CORS_ORIGINS（如 https://admin.example.com）}
+      # 可选：不设则无法保存 AI provider 密钥
+      ZWEQ_AI_KEY_SECRET: ${ZWEQ_AI_KEY_SECRET:-}
     ports:
       - "8000:8000"
     volumes:
       - zweqdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/health/live || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
 volumes:
   pgdata:

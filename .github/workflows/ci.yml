@@ -33,8 +33,14 @@ jobs:
       - name: Build
         run: zig build
 
-      - name: File size lint (≤1200 lines)
+      - name: File size lint (≤1800 lines)
         run: zig build lint-size
+
+      - name: Allocator-owner lint (arena vs long-lived allocator)
+        run: zig build lint-alloc
+
+      - name: Format check (zig fmt)
+        run: zig build lint-fmt
 
       - name: Unit tests (SQLite)
         run: zig build test
@@ -43,6 +49,22 @@ jobs:
         env:
           ZWEQ_TEST_PG_CONNINFO: host=localhost port=5432 dbname=zweq_test user=zweq password=testpass
         run: zig build test --summary all
+
+  e2e:
+    # 起真实服务器 + 真 sqlite 文件库跑两套 e2e，停机后扫日志断言「无泄漏、无 panic」。
+    # 单测原理上覆盖不到这一层：请求 arena 与 store 分配器在测试里同源，分配器不匹配
+    # 不可见（本项目曾因此漏掉 631 条运行期泄漏），所以必须有一个真的进程级冒烟门禁。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.17.0-dev.1567+f0354179a
+
+      - name: E2E (fresh SQLite + admin/fan suites + shutdown leak gate)
+        run: ./scripts/run_e2e.sh
 
   frontend:
     runs-on: ubuntu-latest

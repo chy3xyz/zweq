@@ -81,4 +81,15 @@ pub fn build(b: *std.Build) void {
     const size_check = b.addSystemCommand(&.{ "/bin/sh", "scripts/check_file_size.sh" });
     const lint_size = b.step("lint-size", "Fail if any src/**/*.zig exceeds the line budget");
     lint_size.dependOn(&size_check.step);
+
+    // 分配器归属门禁：拦“用请求 arena 释放长期分配器对象”（arena.free 是 no-op
+    // → 静默泄漏）。单元测试抓不到这一类（两侧同为 testing allocator），只能静态查。
+    const alloc_check = b.addSystemCommand(&.{ "python3", "scripts/check_alloc_owner.py", "src" });
+    const lint_alloc = b.step("lint-alloc", "Fail if an entity is freed with an allocator that does not own it");
+    lint_alloc.dependOn(&alloc_check.step);
+
+    // 格式门禁：任一 src/**/*.zig 不符合 zig fmt 即失败（提交前先 `zig fmt src`）。
+    const fmt_check = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt", "--check", "src" });
+    const lint_fmt = b.step("lint-fmt", "Fail if any src/**/*.zig is not zig-fmt clean");
+    lint_fmt.dependOn(&fmt_check.step);
 }

@@ -1,0 +1,40 @@
+# 构建 zweq 主镜像只需：build.zig* / db_link.zig / src / scripts / web（源码）。
+# 大目录与本地状态一律排除，保持上下文小且构建可复现。
+.git
+.github
+.DS_Store
+**/.DS_Store
+.zig-cache
+.zig-cache-global
+.zig-global-cache
+**/.zig-cache
+zig-out
+**/zig-out
+zig-pkg
+**/zig-pkg
+node_modules
+**/node_modules
+__pycache__
+**/__pycache__
+web/dist
+web/.env
+mp/
+unix/
+_dev/
+_ref/
+docs/
+uploads/
+*.db
+*.db-wal
+*.db-shm
+*.db.bak*
+# zweq-cloud 是独立构建根（自带 build.zig.zon），不参与主镜像；如需构建单独传上下文
+zweq-cloud/
+.pnpm-store/
+.reasonix/
+.remember/
+.omo/
+.superpowers/
+.claude/
+.agents/
+.gstack/
