@@ -44,6 +44,39 @@ const all_infos = @import("common.zig").all_infos;
 const openMemory = @import("common.zig").openMemory;
 const openPostgres = @import("common.zig").openPostgres;
 
+/// 测试用 RSA 私钥（文件作用域，供 v3 prepay/refund 两条报文构造测试共用）。
+/// zwechat v0.4.4 起 `pay/v3/signer` 对空私钥直接返回 `error.MissingPrivateKey`，
+/// 所以"无网络构报文"的测试也必须给真密钥——否则断言的是空密钥签出来的 header。
+const test_rsa_priv =
+    \\-----BEGIN RSA PRIVATE KEY-----
+    \\MIIEogIBAAKCAQEApVoVGMSYGP5YcL5aDDZq0KPP8AC9WWsEMKZfNjAstI3RapNb
+    \\89D1m2A2PbCNVzo76GrzNzi3KIbSIxF/dkReSAufuqIBcGQWUCHHtqbrxQr0661B
+    \\wptJe9CO3ENepiRK4zQmHAHR4YVeciTDO6hU2DVHpDUdKoYqA3URT8rkyPEKOSsd
+    \\lqIz17IBd92KAvxabVUo/ewSTJI74gtGBTy1hpDbKxF9uXLLNdEKnO2dK2qnOf7H
+    \\Xmz7Je6OElWpy2TMoeNzh4BbGbdPDk8Ls48y5VpnvnFe6SokODJ7KDNXrReqpcyE
+    \\rAeuN1lfVyF9+GzgnTunVwkABAs/IzJVVpk18wIDAQABAoIBAA/SFyun/7+AcnjT
+    \\Fa2OdVjiG46km3lXPm7jND/sixJ5cTyHvegNqbpEkdwELPnYFgxOU1gIwqmLgMaf
+    \\MXlg4D53ckB6qLWWtfXTzZaB0RQo0LdN+/lBP14r3cdgYMl3tnyXrD/IwsqXpqo4
+    \\Lz/hgsCvFFw3QsOjU5jCFjZyvMIm+lo23QitIwzoLu+Z3NIwIjiE+vGZ0biAe8Qk
+    \\BUpWQEqBybpVUjotZxUToYqwG2mh1Ham/DjlFFAaodKMl4RFCdNRD+/3czUGuQ8J
+    \\oP7MEayFiKzVx57GE4kH0ci8qBfrUA6DYhiJusO0EkDYZukt8uWGBNB8Zu/IaLOd
+    \\5HSoL80CgYEA4v6fX1KL5Cmzz/4IWuVJo4F1etzj29ZYF3hLkxMXYblGcYfPEd6X
+    \\HytAMr9y+N0D78IsjbnDH3QyrnegKeYPstUQi+1b3ffbpP4LIl/fnRulJ8f0OWdo
+    \\2GRN4B0I0CKnPNzmi7k1YCn9BxDjDUs0twUYIGXKgOt/3XtvA0evBNUCgYEAunsF
+    \\mVZPHIsOgnvSL78qyay6XdyTjzmcyZxciQX3FioVzHPMEGJVjDfah4wWEAlauvWb
+    \\xK5t1dlBetaQQ3VdWAEq3+KC6ZZ10fXdEbT4yZewBB39bIWLOtb1/BW+FPWSF0gI
+    \\gcKNQXCN7gxd2GmThzWrcZxL7nEFWZyNaB9sU6cCgYBDndlXib1GD+4SLPfMK7TN
+    \\0chu+tGdMLI4+4p3mx5B6/DB7NSP3CBkFnwfIcxbuWpsxwiChy1Kd1CJi/TXxkIy
+    \\4Sj2pZPSAP0antouOSThJdUCjpt/ZgBjRS21brCrX0c16A9824S8yoUmz67yzM49
+    \\HnVbYTb7RCtojFY7QeUuqQKBgDpPr6+EEpbdULsylsYBZBLOJTSmfanCnSlZ8IGU
+    \\UPAoVsqoxv20kgWXjYjnIBsBodJmbL/yvzuohNYxc8j0USzsqIh7nu4F82+lDuyz
+    \\hzwaZ5rR+eXOWHwcrayW6+pH49fN2YMh3+O/m1H9ofbDBLO575NGCWRVCRQ9ZOZT
+    \\NR9vAoGAGtYec1yzJsKFohRiQhz2p+YmKGBQ/DxEPOBn/VH95XFd6A++AnVh3zHD
+    \\2NzVZ1iXlJf1ezHr0QuEzI08cytTX2jxi9rIY/D2xHQbaTMb3VcplmNgxIG5aVKN
+    \\8m4LVVmaGSecs6v13QZmsspJ9QfZlHu7/dXWysO1V27RzEznTiI=
+    \\-----END RSA PRIVATE KEY-----
+;
+
 test "payment: PayConfig deinit frees only dupe'd fields (partial config safe)" {
     const allocator = std.testing.allocator;
     // 模拟 readPayConfig 部分配置：只 dupe mch_id，其余保持 "" 字面量。
@@ -162,35 +195,8 @@ test "payment: v3 prepay request build + notify signature verify" {
     var payment_store = payment.persistence.PaymentStore.init(allocator, env.client);
     var payment_svc = payment.service.PaymentService.init(allocator, std.testing.io, &payment_store);
 
-    const test_priv =
-        \\-----BEGIN RSA PRIVATE KEY-----
-        \\MIIEogIBAAKCAQEApVoVGMSYGP5YcL5aDDZq0KPP8AC9WWsEMKZfNjAstI3RapNb
-        \\89D1m2A2PbCNVzo76GrzNzi3KIbSIxF/dkReSAufuqIBcGQWUCHHtqbrxQr0661B
-        \\wptJe9CO3ENepiRK4zQmHAHR4YVeciTDO6hU2DVHpDUdKoYqA3URT8rkyPEKOSsd
-        \\lqIz17IBd92KAvxabVUo/ewSTJI74gtGBTy1hpDbKxF9uXLLNdEKnO2dK2qnOf7H
-        \\Xmz7Je6OElWpy2TMoeNzh4BbGbdPDk8Ls48y5VpnvnFe6SokODJ7KDNXrReqpcyE
-        \\rAeuN1lfVyF9+GzgnTunVwkABAs/IzJVVpk18wIDAQABAoIBAA/SFyun/7+AcnjT
-        \\Fa2OdVjiG46km3lXPm7jND/sixJ5cTyHvegNqbpEkdwELPnYFgxOU1gIwqmLgMaf
-        \\MXlg4D53ckB6qLWWtfXTzZaB0RQo0LdN+/lBP14r3cdgYMl3tnyXrD/IwsqXpqo4
-        \\Lz/hgsCvFFw3QsOjU5jCFjZyvMIm+lo23QitIwzoLu+Z3NIwIjiE+vGZ0biAe8Qk
-        \\BUpWQEqBybpVUjotZxUToYqwG2mh1Ham/DjlFFAaodKMl4RFCdNRD+/3czUGuQ8J
-        \\oP7MEayFiKzVx57GE4kH0ci8qBfrUA6DYhiJusO0EkDYZukt8uWGBNB8Zu/IaLOd
-        \\5HSoL80CgYEA4v6fX1KL5Cmzz/4IWuVJo4F1etzj29ZYF3hLkxMXYblGcYfPEd6X
-        \\HytAMr9y+N0D78IsjbnDH3QyrnegKeYPstUQi+1b3ffbpP4LIl/fnRulJ8f0OWdo
-        \\2GRN4B0I0CKnPNzmi7k1YCn9BxDjDUs0twUYIGXKgOt/3XtvA0evBNUCgYEAunsF
-        \\mVZPHIsOgnvSL78qyay6XdyTjzmcyZxciQX3FioVzHPMEGJVjDfah4wWEAlauvWb
-        \\xK5t1dlBetaQQ3VdWAEq3+KC6ZZ10fXdEbT4yZewBB39bIWLOtb1/BW+FPWSF0gI
-        \\gcKNQXCN7gxd2GmThzWrcZxL7nEFWZyNaB9sU6cCgYBDndlXib1GD+4SLPfMK7TN
-        \\0chu+tGdMLI4+4p3mx5B6/DB7NSP3CBkFnwfIcxbuWpsxwiChy1Kd1CJi/TXxkIy
-        \\4Sj2pZPSAP0antouOSThJdUCjpt/ZgBjRS21brCrX0c16A9824S8yoUmz67yzM49
-        \\HnVbYTb7RCtojFY7QeUuqQKBgDpPr6+EEpbdULsylsYBZBLOJTSmfanCnSlZ8IGU
-        \\UPAoVsqoxv20kgWXjYjnIBsBodJmbL/yvzuohNYxc8j0USzsqIh7nu4F82+lDuyz
-        \\hzwaZ5rR+eXOWHwcrayW6+pH49fN2YMh3+O/m1H9ofbDBLO575NGCWRVCRQ9ZOZT
-        \\NR9vAoGAGtYec1yzJsKFohRiQhz2p+YmKGBQ/DxEPOBn/VH95XFd6A++AnVh3zHD
-        \\2NzVZ1iXlJf1ezHr0QuEzI08cytTX2jxi9rIY/D2xHQbaTMb3VcplmNgxIG5aVKN
-        \\8m4LVVmaGSecs6v13QZmsspJ9QfZlHu7/dXWysO1V27RzEznTiI=
-        \\-----END RSA PRIVATE KEY-----
-    ;
+    // 测试私钥见文件作用域的 `test_rsa_priv`（v3 refund 测试共用）。
+    const test_priv = test_rsa_priv;
     const test_pub =
         \\-----BEGIN PUBLIC KEY-----
         \\MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApVoVGMSYGP5YcL5aDDZq
@@ -242,11 +248,14 @@ test "payment: v3 refund + transfer request build (no network)" {
     var payment_store = payment.persistence.PaymentStore.init(allocator, env.client);
     var payment_svc = payment.service.PaymentService.init(allocator, std.testing.io, &payment_store);
 
+    // 必须给真私钥：zwechat v0.4.4 起 `pay/v3/signer` 对空私钥直接返回
+    // `error.MissingPrivateKey`（fail-closed）。此前传空串也能出 header，于是这条
+    // 测试曾经在"签名用的是空密钥"的前提下断言形状——现在断言的是真签名。
     const cfg = payment.service.PayConfig{
         .mch_id = "1900000109",
         .app_id = "wx_test",
         .serial_no = "1DDE5578",
-        .private_key_pem = "",
+        .private_key_pem = test_rsa_priv,
         .notify_url = "https://example.com/api/pay/v3/notify",
     };
 
@@ -260,13 +269,20 @@ test "payment: v3 refund + transfer request build (no network)" {
     try std.testing.expect(std.mem.indexOf(u8, refund.body, "\"total\":100") != null);
     try std.testing.expect(std.mem.endsWith(u8, refund.url, "/v3/refund/domestic/refunds"));
 
-    // 转账请求 build。
-    var transfer = try payment_svc.buildTransferV3Request(allocator, cfg, "o_openid", 200, "B3003", "D4004", "佣金");
-    defer transfer.deinit(allocator);
-    try std.testing.expect(std.mem.indexOf(u8, transfer.auth, "WECHATPAY2-SHA256-RSA2048") != null);
-    try std.testing.expect(std.mem.indexOf(u8, transfer.body, "\"out_batch_no\":\"B3003\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, transfer.body, "\"out_detail_no\":\"D4004\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, transfer.body, "\"total_amount\":200") != null);
-    try std.testing.expect(std.mem.indexOf(u8, transfer.body, "\"openid\":\"o_openid\"") != null);
-    try std.testing.expect(std.mem.endsWith(u8, transfer.url, "/v3/transfer/batches"));
+    // v3 商家转账：新版接口（/v3/fund-app/mch-transfer/transfer-bills）由 zwechat
+    // `pay/v3/TransferV3` 实现，报文形状不再由本仓库手写——所以这里测的是**入参校验与
+    // 错误映射**（全部发生在发请求之前，不需要网络）：
+    //  - 配置缺私钥 → InvalidPayConfig（提前拦，不发请求）
+    //  - 单号/场景/金额/备注任一不合法 → InvalidPayArg（上游 InvalidArgument 的映射）
+    try std.testing.expectError(error.InvalidPayConfig, payment_svc.transferV3(allocator, .{
+        .mch_id = "",
+        .app_id = "wx_test",
+        .serial_no = "",
+        .private_key_pem = "",
+        .notify_url = "https://example.com/api/pay/v3/notify",
+    }, "o_openid", 200, "B3003", "1000", "活动名称", "佣金", "佣金"));
+    try std.testing.expectError(error.InvalidPayArg, payment_svc.transferV3(allocator, cfg, "o_openid", 200, "B3003", "", "活动名称", "佣金", "佣金"));
+    try std.testing.expectError(error.InvalidPayArg, payment_svc.transferV3(allocator, cfg, "o_openid", 200, "", "1000", "活动名称", "佣金", "佣金"));
+    try std.testing.expectError(error.InvalidPayArg, payment_svc.transferV3(allocator, cfg, "o_openid", 0, "B3003", "1000", "活动名称", "佣金", "佣金"));
+    try std.testing.expectError(error.InvalidPayArg, payment_svc.transferV3(allocator, cfg, "o_openid", 200, "B3003", "1000", "活动名称", "佣金", ""));
 }

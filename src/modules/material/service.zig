@@ -4,6 +4,7 @@ const std = @import("std");
 const zigmodu = @import("zigmodu");
 const zwechat = @import("zwechat");
 const persist = @import("persistence.zig");
+const wechat_log = @import("../../services/wechat_log.zig");
 const account_mod = @import("../account/service.zig");
 
 pub const MaterialNewsRow = persist.MaterialNewsRow;
@@ -62,10 +63,17 @@ pub const MaterialService = struct {
         };
         var mat = zwechat.officialaccount.material.Material.init(&ctx, self.allocator);
 
-        var parsed = mat.batchGetMaterial(mtype, 0, 20) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        var parsed = mat.batchGetMaterial(mtype, 0, 20) catch {
+            wechat_log.logApiError("material.syncMaterialList");
+            return error.WechatApiError;
+        };
         defer parsed.deinit();
         const list = parsed.value;
-        if (list.errcode != 0) return error.WechatApiError;
+        if (list.errcode != 0) {
+            wechat_log.logErrcode("material.syncMaterialList", list.errcode, list.errmsg);
+            return error.WechatApiError;
+        }
         const mtype_str = @tagName(mtype);
         for (list.item) |it| {
             if (mtype == .news) {
@@ -103,10 +111,17 @@ pub const MaterialService = struct {
         };
         var mat = zwechat.officialaccount.material.Material.init(&ctx, self.allocator);
 
-        var parsed = mat.getMaterialCount() catch return error.WechatApiError;
+        wechat_log.beginCall();
+        var parsed = mat.getMaterialCount() catch {
+            wechat_log.logApiError("material.syncCount");
+            return error.WechatApiError;
+        };
         defer parsed.deinit();
         const c = parsed.value;
-        if (c.errcode != 0) return error.WechatApiError;
+        if (c.errcode != 0) {
+            wechat_log.logErrcode("material.syncCount", c.errcode, c.errmsg);
+            return error.WechatApiError;
+        }
         return .{ .voice = c.voice_count, .video = c.video_count, .image = c.image_count, .news = c.news_count };
     }
 
@@ -135,8 +150,13 @@ pub const MaterialService = struct {
             .content = content,
             .content_source_url = content_source_url,
         }};
-        const media_id = mat.addNews(&articles) catch return error.WechatApiError;
-        defer self.allocator.free(@constCast(media_id));
+        wechat_log.beginCall();
+        const media_id = mat.addNews(&articles) catch {
+            wechat_log.logApiError("material.uploadNews");
+            return error.WechatApiError;
+        };
+        // zwechat v0.4.4 起 `addNews` 返回 `![]u8`（此前是 `[]const u8`），不再需要 @constCast。
+        defer self.allocator.free(media_id);
 
         _ = self.store.upsertNews(tenant_id, account_id, media_id, title, author, digest, content, thumb_media_id, "", content_source_url, self.now()) catch return error.Unexpected;
         return self.allocator.dupe(u8, media_id) catch error.OutOfMemory;

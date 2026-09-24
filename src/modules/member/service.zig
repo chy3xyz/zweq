@@ -4,6 +4,7 @@ const std = @import("std");
 const zigmodu = @import("zigmodu");
 const zwechat = @import("zwechat");
 const persist = @import("persistence.zig");
+const wechat_log = @import("../../services/wechat_log.zig");
 const account_mod = @import("../account/service.zig");
 
 pub const FanRow = persist.FanRow;
@@ -81,7 +82,11 @@ pub const MemberService = struct {
         const cfg = cfg_opt orelse return error.NotFound;
         defer cfg.deinit(self.allocator);
         var ak = zwechat.credential.DefaultAccessToken.init(cfg.appid, cfg.secret, "zweq", tc.asCache());
-        return ak.getAccessToken(self.allocator) catch error.WechatApiError;
+        wechat_log.beginCall();
+        return ak.getAccessToken(self.allocator) catch {
+            wechat_log.logApiError("member.getAccessToken");
+            return error.WechatApiError;
+        };
     }
 
     /// 微信建标签并存本地。返回 wx_tag_id。
@@ -108,16 +113,27 @@ pub const MemberService = struct {
         defer self.allocator.free(body);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
-        const resp = client.postJSON(uri, body) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        const resp = client.postJSON(uri, body) catch {
+            wechat_log.logApiError("member.createWxTag");
+            return error.WechatApiError;
+        };
         defer self.allocator.free(resp);
 
+        wechat_log.beginCall();
         var parsed = std.json.parseFromSlice(struct {
             errcode: i64 = 0,
             errmsg: []const u8 = "",
             tag: struct { id: i64 = 0, name: []const u8 = "" } = .{},
-        }, self.allocator, resp, .{}) catch return error.WechatApiError;
+        }, self.allocator, resp, .{ .ignore_unknown_fields = true }) catch {
+            wechat_log.logApiError("member.createWxTag");
+            return error.WechatApiError;
+        };
         defer parsed.deinit();
-        if (parsed.value.errcode != 0) return error.WechatApiError;
+        if (parsed.value.errcode != 0) {
+            wechat_log.logErrcode("member.createWxTag", parsed.value.errcode, parsed.value.errmsg);
+            return error.WechatApiError;
+        }
         const wx_id = parsed.value.tag.id;
         _ = ts.upsert(tenant_id, account_id, wx_id, parsed.value.tag.name, self.now()) catch return error.Unexpected;
         return wx_id;
@@ -132,16 +148,29 @@ pub const MemberService = struct {
         const client = zwechat.util.http.getDefaultClient(self.allocator);
         const uri = try std.fmt.allocPrint(self.allocator, "{s}?access_token={s}", .{ "https://api.weixin.qq.com/cgi-bin/tags/get", token });
         defer self.allocator.free(uri);
-        const resp = client.get(uri) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        const resp = client.get(uri) catch {
+            wechat_log.logApiError("member.listWxTags");
+            return error.WechatApiError;
+        };
         defer self.allocator.free(resp);
 
+        wechat_log.beginCall();
         var parsed = std.json.parseFromSlice(struct {
             errcode: i64 = 0,
             errmsg: []const u8 = "",
-            tags: []struct { id: i64 = 0, name: []const u8 = "" } = &.{},
-        }, self.allocator, resp, .{}) catch return error.WechatApiError;
+            // 微信 tag 对象带 `count`（该标签下的用户数），宽容模式不会因它失败，
+            // 但显式声明更贴合契约。
+            tags: []struct { id: i64 = 0, name: []const u8 = "", count: i64 = 0 } = &.{},
+        }, self.allocator, resp, .{ .ignore_unknown_fields = true }) catch {
+            wechat_log.logApiError("member.listWxTags");
+            return error.WechatApiError;
+        };
         defer parsed.deinit();
-        if (parsed.value.errcode != 0) return error.WechatApiError;
+        if (parsed.value.errcode != 0) {
+            wechat_log.logErrcode("member.listWxTags", parsed.value.errcode, parsed.value.errmsg);
+            return error.WechatApiError;
+        }
         for (parsed.value.tags) |t| {
             _ = ts.upsert(tenant_id, account_id, t.id, t.name, self.now()) catch return error.Unexpected;
         }
@@ -172,10 +201,21 @@ pub const MemberService = struct {
         defer self.allocator.free(body);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
-        const resp = client.postJSON(uri, body) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        const resp = client.postJSON(uri, body) catch {
+            wechat_log.logApiError("member.tagFan");
+            return error.WechatApiError;
+        };
         defer self.allocator.free(resp);
-        var parsed = std.json.parseFromSlice(struct { errcode: i64 = 0, errmsg: []const u8 = "" }, self.allocator, resp, .{}) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        var parsed = std.json.parseFromSlice(struct { errcode: i64 = 0, errmsg: []const u8 = "" }, self.allocator, resp, .{ .ignore_unknown_fields = true }) catch {
+            wechat_log.logApiError("member.tagFan");
+            return error.WechatApiError;
+        };
         defer parsed.deinit();
-        if (parsed.value.errcode != 0) return error.WechatApiError;
+        if (parsed.value.errcode != 0) {
+            wechat_log.logErrcode("member.tagFan", parsed.value.errcode, parsed.value.errmsg);
+            return error.WechatApiError;
+        }
     }
 };

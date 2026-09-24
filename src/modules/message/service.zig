@@ -17,6 +17,7 @@ const setting_store_mod = @import("../setting/persistence.zig");
 const ai_mod = @import("../ai/service.zig");
 const module_mod = @import("../module/service.zig");
 const cache_svc = @import("../../services/cache.zig");
+const wechat_log = @import("../../services/wechat_log.zig");
 
 pub const MessageLogRow = persist.MessageLogRow;
 
@@ -505,7 +506,11 @@ pub const WechatService = struct {
         const cfg = cfg_opt orelse return error.AccountNotFound;
         defer cfg.deinit(self.allocator);
         var ak = zwechat.credential.DefaultAccessToken.init(cfg.appid, cfg.secret, "zweq", tc.asCache());
-        return ak.getAccessToken(self.allocator) catch error.WechatApiError;
+        wechat_log.beginCall();
+        return ak.getAccessToken(self.allocator) catch {
+            wechat_log.logApiError("message.getAccessToken");
+            return error.WechatApiError;
+        };
     }
 
     /// 群发文本消息（按粉丝标签；tag_id <= 0 表示全部粉丝）。
@@ -542,12 +547,26 @@ pub const WechatService = struct {
         defer self.allocator.free(body);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
-        const resp = client.postJSON(uri, body) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        const resp = client.postJSON(uri, body) catch {
+            wechat_log.logApiError("message.sendBroadcastText");
+            return error.WechatApiError;
+        };
         defer self.allocator.free(resp);
 
-        var parsed = std.json.parseFromSlice(struct { errcode: i64 = 0, msg_id: i64 = 0 }, self.allocator, resp, .{}) catch return error.WechatApiError;
+        // WeChat 的响应永远带 `errmsg`（还可能带 `msg_id` 之外的字段），而 Zig 的
+        // `std.json` 默认 `ignore_unknown_fields = false` → 严格模式对**外部响应**
+        // 等于必失败（这里此前就是：群发每次都落进解码 catch）。解析我们自己的请求体
+        // 才适合严格模式。
+        var parsed = std.json.parseFromSlice(struct { errcode: i64 = 0, msg_id: i64 = 0 }, self.allocator, resp, .{ .ignore_unknown_fields = true }) catch {
+            wechat_log.logErrcode("message.sendBroadcastText.decode", 0, resp[0..@min(resp.len, 200)]);
+            return error.WechatApiError;
+        };
         defer parsed.deinit();
-        if (parsed.value.errcode != 0) return error.WechatApiError;
+        if (parsed.value.errcode != 0) {
+            wechat_log.logErrcode("message.sendBroadcastText", parsed.value.errcode, resp[0..@min(resp.len, 200)]);
+            return error.WechatApiError;
+        }
         return parsed.value.msg_id;
     }
 
@@ -584,7 +603,11 @@ pub const WechatService = struct {
         defer self.allocator.free(body);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
-        const resp = client.postJSON(uri, body) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        const resp = client.postJSON(uri, body) catch {
+            wechat_log.logApiError("message.getDatacube");
+            return error.WechatApiError;
+        };
         defer self.allocator.free(resp);
         return self.allocator.dupe(u8, resp) catch error.OutOfMemory;
     }
@@ -611,9 +634,16 @@ pub const WechatService = struct {
         );
         const mctx = mp.getContext();
         var auth = zwechat.miniprogram.Auth.init(mctx, self.allocator);
-        var parsed = auth.code2Session(js_code) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        var parsed = auth.code2Session(js_code) catch {
+            wechat_log.logApiError("message.miniLogin");
+            return error.WechatApiError;
+        };
         defer parsed.deinit();
-        if (parsed.value.errcode != 0) return error.WechatApiError;
+        if (parsed.value.errcode != 0) {
+            wechat_log.logErrcode("message.miniLogin", parsed.value.errcode, parsed.value.errmsg);
+            return error.WechatApiError;
+        }
         if (parsed.value.openid.len == 0) return error.WechatApiError;
         return self.allocator.dupe(u8, parsed.value.openid) catch error.OutOfMemory;
     }
@@ -637,7 +667,11 @@ pub const WechatService = struct {
             .access_token_handle = ak.asHandle(),
         };
         var msg = zwechat.officialaccount.message.Message.init(&ctx, self.allocator);
-        msg.sendCustomerText(.{ .touser = openid, .content = content }) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        msg.sendCustomerText(.{ .touser = openid, .content = content }) catch {
+            wechat_log.logApiError("message.sendCustomerText");
+            return error.WechatApiError;
+        };
     }
 
     /// 发送模板消息（通知类场景）。复用 zwechat sendTemplate，返回 msgid。
@@ -664,7 +698,11 @@ pub const WechatService = struct {
             .access_token_handle = ak.asHandle(),
         };
         var msg = zwechat.officialaccount.message.Message.init(&ctx, self.allocator);
-        return msg.sendTemplate(.{ .to_user = to_user, .template_id = template_id, .data = zdata }) catch error.WechatApiError;
+        wechat_log.beginCall();
+        return msg.sendTemplate(.{ .to_user = to_user, .template_id = template_id, .data = zdata }) catch {
+            wechat_log.logApiError("message.sendTemplate");
+            return error.WechatApiError;
+        };
     }
 
     /// Admin view: list callback logs for an account.

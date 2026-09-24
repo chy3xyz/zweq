@@ -10,6 +10,7 @@ const std = @import("std");
 const zigmodu = @import("zigmodu");
 const zwechat = @import("zwechat");
 const persist = @import("persistence.zig");
+const wechat_log = @import("../../services/wechat_log.zig");
 const account_mod = @import("../account/service.zig");
 
 pub const MenuRow = persist.MenuRow;
@@ -36,7 +37,8 @@ const ButtonDto = struct {
     sub_button: []ButtonDto = &.{},
 };
 
-/// 递归把 DTO 转成 zwechat `Button`（`type` → `type_`；sub_button 递归）。
+/// 递归把 DTO 转成 zwechat `Button`（zwechat v0.4.4 起字段名为 `@"type"`；
+/// 改名后 std.json 反而能正确解析 JSON 的 `"type"` 键——见 `fetchMenu` 的说明）。
 /// 所有字符串字段深拷贝，不依赖 DTO/parse 结果的生命周期。
 fn toButton(allocator: std.mem.Allocator, dto: ButtonDto) !zwechat.officialaccount.menu.Button {
     const type_ = try allocator.dupe(u8, dto.type);
@@ -55,7 +57,7 @@ fn toButton(allocator: std.mem.Allocator, dto: ButtonDto) !zwechat.officialaccou
     errdefer allocator.free(pagepath);
 
     var b = zwechat.officialaccount.menu.Button{
-        .type_ = type_,
+        .type = type_,
         .name = name,
         .key = key,
         .url = url,
@@ -149,7 +151,11 @@ pub const MenuService = struct {
             .access_token_handle = ak.asHandle(),
         };
         var menu = zwechat.officialaccount.menu.Menu.init(&ctx, self.allocator);
-        menu.setMenu(buttons) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        menu.setMenu(buttons) catch {
+            wechat_log.logApiError("menu.publish");
+            return error.WechatApiError;
+        };
     }
 
     /// Delete the WeChat menu (`menu/delete`).
@@ -168,7 +174,11 @@ pub const MenuService = struct {
             .access_token_handle = ak.asHandle(),
         };
         var menu = zwechat.officialaccount.menu.Menu.init(&ctx, self.allocator);
-        menu.deleteMenu() catch return error.WechatApiError;
+        wechat_log.beginCall();
+        menu.deleteMenu() catch {
+            wechat_log.logApiError("menu.deleteRemote");
+            return error.WechatApiError;
+        };
     }
 
     /// 获取 access_token（复用 zwechat credential + 进程级缓存）。
@@ -176,12 +186,18 @@ pub const MenuService = struct {
         var cfg = try self.wechatConfig(account_id);
         defer cfg.deinit(self.allocator);
         var ak = zwechat.credential.DefaultAccessToken.init(cfg.appid, cfg.secret, "zweq", self.token_cache.asCache());
-        return ak.getAccessToken(self.allocator) catch error.WechatApiError;
+        wechat_log.beginCall();
+        return ak.getAccessToken(self.allocator) catch {
+            wechat_log.logApiError("menu.getAccessToken");
+            return error.WechatApiError;
+        };
     }
 
-    /// 从微信拉取当前菜单，**透传原始 JSON**（前端直接渲染）。
-    /// 绕开 zwechat `getMenu` 的 `Button.type_` 反射丢失 bug（type 字段
-    /// 无法从 JSON `"type"` 解析），返回 caller-owned 原始响应。
+    /// 从微信拉取当前菜单，**透传原始 JSON**（前端直接渲染微信原生结构）。
+    /// 注：这里透传是刻意的，不再是"绕 bug"——zwechat v0.4.4 起 `Button` 的
+    /// 字段名改为 `@"type"` 且解析开了 `ignore_unknown_fields`，`getMenu` 已能
+    /// 正确解析 `type`；若将来要改用 typed API，取 `ResMenu.buttons` 即可。
+    /// 返回 caller-owned 原始响应。
     pub fn fetchMenu(self: *MenuService, account_id: i64) MenuError![]u8 {
         const token = try self.getAccessToken(account_id);
         defer self.allocator.free(token);
@@ -189,7 +205,11 @@ pub const MenuService = struct {
         defer self.allocator.free(uri);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
-        const resp = client.get(uri) catch return error.WechatApiError;
+        wechat_log.beginCall();
+        const resp = client.get(uri) catch {
+            wechat_log.logApiError("menu.fetchMenu");
+            return error.WechatApiError;
+        };
         defer self.allocator.free(resp);
         return self.allocator.dupe(u8, resp) catch error.Unexpected;
     }

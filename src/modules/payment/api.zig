@@ -436,8 +436,15 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
         const TransferV3Req = struct {
             openid: []const u8,
             amount: i64,
-            out_batch_no: []const u8,
-            out_detail_no: []const u8,
+            /// 商户单号（新版商家转账的 `out_bill_no`）。旧字段名 `out_batch_no` 仍被接受
+            /// （老接口是批量转账，升级到新版后一笔一单）——两者都空则 400。
+            out_bill_no: []const u8 = "",
+            out_batch_no: []const u8 = "",
+            /// 转账场景 ID（新版必填，如 1000 现金营销 / 1006 企业报销）。
+            transfer_scene_id: []const u8 = "",
+            /// 场景报备信息（新版必填）。默认按"现金营销"场景以 `remark` 作为活动名称报备。
+            scene_info_type: []const u8 = "活动名称",
+            scene_info_content: []const u8 = "",
             remark: []const u8 = "转账",
         };
 
@@ -560,21 +567,41 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             };
             defer {
                 ctx.allocator.free(req.openid);
-                ctx.allocator.free(req.out_batch_no);
-                ctx.allocator.free(req.out_detail_no);
+                if (req.out_bill_no.len > 0) ctx.allocator.free(req.out_bill_no);
+                if (req.out_batch_no.len > 0) ctx.allocator.free(req.out_batch_no);
+                if (req.transfer_scene_id.len > 0) ctx.allocator.free(req.transfer_scene_id);
+                if (req.scene_info_type.len > 0) ctx.allocator.free(req.scene_info_type);
+                if (req.scene_info_content.len > 0) ctx.allocator.free(req.scene_info_content);
                 if (req.remark.len > 0) ctx.allocator.free(req.remark);
             }
-            self.svc.transferV3(ctx.allocator, cfg, req.openid, req.amount, req.out_batch_no, req.out_detail_no, req.remark) catch |err| {
+            // 新版商家转账：商户单号、转账场景、金额为正、备注非空都是微信侧必填，
+            // 与其让微信返回一个笼统的 ApiError，不如在这里明确 400。
+            const out_bill_no = if (req.out_bill_no.len > 0) req.out_bill_no else req.out_batch_no;
+            if (out_bill_no.len == 0 or req.transfer_scene_id.len == 0 or req.amount <= 0) {
+                try ctx.sendErrorResponse(400, 400, "缺少商户单号/转账场景(transfer_scene_id)/金额必须为正");
+                return;
+            }
+            const scene_content = if (req.scene_info_content.len > 0) req.scene_info_content else req.remark;
+            var result = self.svc.transferV3(ctx.allocator, cfg, req.openid, req.amount, out_bill_no, req.transfer_scene_id, req.scene_info_type, scene_content, req.remark) catch |err| {
                 const msg = switch (err) {
                     error.InvalidPayConfig => "支付配置不完整",
+                    error.InvalidPayArg => "转账参数不合法（单号/场景/金额/备注）",
                     error.PrepayFailed => "微信 v3 转账失败",
                     else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
                 return;
             };
+            defer result.deinit(ctx.allocator);
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "payment.transfer.v3", "payment", 0, "v3 商家转账", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.ok("null");
+            // HTTP 200 只代表受理：把单据状态回给调用方。WAIT_USER_CONFIRM 时收款人需在
+            // 微信确认，package_info 供小程序拉起收款页；SUCCESS/FAIL 等状态同样直出。
+            try ctx.okValue(.{
+                .out_bill_no = result.out_bill_no,
+                .transfer_bill_no = result.transfer_bill_no,
+                .state = result.state,
+                .package_info = result.package_info,
+            });
         }
     };
 }

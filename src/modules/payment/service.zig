@@ -20,6 +20,8 @@ pub const PaymentError = error{
     OrderNotFound,
     WithdrawInsufficient,
     InvalidPayConfig,
+    /// 转账入参不合法（新版商家转账要求商户单号、转账场景、金额为正、备注非空）。
+    InvalidPayArg,
     PrepayFailed,
     RefundFailed,
     TransferFailed,
@@ -70,8 +72,6 @@ const JSAPI_ORDER_URL = "https://api.mch.weixin.qq.com/v3/pay/transactions/jsapi
 const JSAPI_ORDER_PATH = "/v3/pay/transactions/jsapi";
 const REFUND_URL = "https://api.mch.weixin.qq.com/v3/refund/domestic/refunds";
 const REFUND_PATH = "/v3/refund/domestic/refunds";
-const TRANSFER_URL = "https://api.mch.weixin.qq.com/v3/transfer/batches";
-const TRANSFER_PATH = "/v3/transfer/batches";
 
 /// A prepared JSAPI unified-order request (caller frees).
 pub const PrepayRequest = struct {
@@ -345,46 +345,85 @@ pub const PaymentService = struct {
         if (!resp.isSuccess()) return error.PrepayFailed;
     }
 
-    /// 构造 v3 商家转账请求（transfer/batches，无网络）。可单测。
-    pub fn buildTransferV3Request(self: *PaymentService, allocator: std.mem.Allocator, cfg: PayConfig, openid: []const u8, amount: i64, out_batch_no: []const u8, out_detail_no: []const u8, remark: []const u8) PaymentError!PrepayRequest {
+    /// v3 商家转账（**新版**：`POST /v3/fund-app/mch-transfer/transfer-bills`）。
+    ///
+    /// 为什么不再自己拼报文：本仓库此前手写的是**老接口** `/v3/transfer/batches`
+    /// （"商家转账到零钱"），该接口对新商户已不再开放，等于这个管理端点指向了停用
+    /// 的 API；zwechat v0.4.5 提供 `pay/v3/transfer.zig` 走新版端点，这里改为直接
+    /// 调用它。
+    ///
+    /// 新版语义要注意：HTTP 200 **只代表受理**，须看 `state`——`WAIT_USER_CONFIRM`
+    /// 时收款人要在微信里确认（`package_info` 供小程序拉起收款页），所以结果回给
+    /// 调用方而不是吞掉。`transfer_scene_id` 与场景报备信息是必填（微信按场景做风控），
+    /// 本仓库把 `remark` 作为"活动名称"报备内容，调用方可用 `scene_info_*` 覆盖。
+    pub fn transferV3(
+        self: *PaymentService,
+        allocator: std.mem.Allocator,
+        cfg: PayConfig,
+        openid: []const u8,
+        amount: i64,
+        out_bill_no: []const u8,
+        transfer_scene_id: []const u8,
+        scene_info_type: []const u8,
+        scene_info_content: []const u8,
+        remark: []const u8,
+    ) PaymentError!TransferV3Result {
+        if (cfg.mch_id.len == 0 or cfg.serial_no.len == 0 or cfg.private_key_pem.len == 0) return error.InvalidPayConfig;
+        if (openid.len == 0 or out_bill_no.len == 0 or transfer_scene_id.len == 0 or amount <= 0) return error.InvalidPayArg;
+        if (remark.len == 0) return error.InvalidPayArg;
         _ = self;
-        const body = std.fmt.allocPrint(
-            allocator,
-            "{{\"appid\":\"{s}\",\"out_batch_no\":\"{s}\",\"batch_name\":\"zweq transfer\",\"batch_remark\":\"{s}\",\"total_amount\":{d},\"total_num\":1,\"transfer_detail_list\":[{{\"out_detail_no\":\"{s}\",\"transfer_amount\":{d},\"transfer_remark\":\"{s}\",\"openid\":\"{s}\"}}]}}",
-            .{ cfg.app_id, out_batch_no, remark, amount, out_detail_no, amount, remark, openid },
-        ) catch return error.PrepayFailed;
-        errdefer allocator.free(body);
-        const v3cfg = zwechat.pay.v3.Config{
+
+        var t = zwechat.pay.v3.TransferV3.init(.{
             .app_id = cfg.app_id,
             .mch_id = cfg.mch_id,
             .serial_no = cfg.serial_no,
             .private_key_pem = cfg.private_key_pem,
             .notify_url = cfg.notify_url,
+        });
+        var parsed = t.transfer(allocator, .{
+            .out_bill_no = out_bill_no,
+            .transfer_scene_id = transfer_scene_id,
+            .openid = openid,
+            .transfer_amount = amount,
+            .transfer_remark = remark,
+            .transfer_scene_report_infos = &.{.{ .info_type = scene_info_type, .info_content = scene_info_content }},
+        }) catch |err| switch (err) {
+            // 上游把"参数不合法"与"接口报错"分开：前者是我们的入参问题，别报成"转账失败"。
+            error.InvalidArgument => return error.InvalidPayArg,
+            error.ApiError => return error.PrepayFailed,
+            else => return error.PrepayFailed,
         };
-        var sig = zwechat.pay.v3.signer.buildAuthorizationHeader(allocator, v3cfg, "POST", TRANSFER_PATH, body) catch return error.PrepayFailed;
-        defer sig.deinit(allocator);
-        const auth = allocator.dupe(u8, sig.authorization) catch return error.PrepayFailed;
-        errdefer allocator.free(auth);
-        const url = allocator.dupe(u8, TRANSFER_URL) catch return error.PrepayFailed;
-        return .{ .url = url, .body = body, .auth = auth };
+        defer parsed.deinit();
+        const r = parsed.value;
+
+        return .{
+            .out_bill_no = try dupOrEmpty(allocator, r.out_bill_no),
+            .transfer_bill_no = try dupOrEmpty(allocator, r.transfer_bill_no),
+            .state = try dupOrEmpty(allocator, r.state),
+            .package_info = try dupOrEmpty(allocator, r.package_info),
+        };
     }
 
-    /// v3 商家转账到零钱（transfer/batches）。需商户证书配置。
-    pub fn transferV3(self: *PaymentService, allocator: std.mem.Allocator, cfg: PayConfig, openid: []const u8, amount: i64, out_batch_no: []const u8, out_detail_no: []const u8, remark: []const u8) PaymentError!void {
-        if (cfg.mch_id.len == 0 or cfg.serial_no.len == 0 or cfg.private_key_pem.len == 0) return error.InvalidPayConfig;
-        var req_data = self.buildTransferV3Request(allocator, cfg, openid, amount, out_batch_no, out_detail_no, remark) catch return error.PrepayFailed;
-        defer req_data.deinit(allocator);
+    /// v3 商家转账的应答（caller 用 `deinit` 释放）。
+    pub const TransferV3Result = struct {
+        out_bill_no: []u8,
+        transfer_bill_no: []u8,
+        /// `ACCEPTED` / `PROCESSING` / `WAIT_USER_CONFIRM` / `TRANSFERING` /
+        /// `SUCCESS` / `FAIL` / `CANCELING` / `CANCELLED`
+        state: []u8,
+        /// 仅 `WAIT_USER_CONFIRM` 返回：小程序拉起收款页所需。
+        package_info: []u8,
 
-        var client = zigmodu.http.HttpClient.init(allocator, self.io, 4, 10_000);
-        defer client.deinit();
-        var req = zigmodu.http.HttpClient.HttpRequest.init(allocator, "POST", req_data.url);
-        defer req.deinit();
-        req.setHeader("Authorization", req_data.auth) catch return error.PrepayFailed;
-        req.setHeader("Content-Type", "application/json") catch return error.PrepayFailed;
-        req.setBody(req_data.body) catch return error.PrepayFailed;
-        var resp = client.request(req) catch return error.PrepayFailed;
-        defer resp.deinit();
-        if (!resp.isSuccess()) return error.PrepayFailed;
+        pub fn deinit(self: TransferV3Result, allocator: std.mem.Allocator) void {
+            allocator.free(self.out_bill_no);
+            allocator.free(self.transfer_bill_no);
+            allocator.free(self.state);
+            allocator.free(self.package_info);
+        }
+    };
+
+    fn dupOrEmpty(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+        return allocator.dupe(u8, s) catch error.PrepayFailed;
     }
 
     /// V2 退款（secapi/pay/refund，需证书双向认证）。复用 zwechat pay.refund

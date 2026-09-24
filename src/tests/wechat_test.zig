@@ -511,10 +511,10 @@ test "menu: save/get + parseButtons JSON→Button conversion" {
     const json = "[{\"type\":\"click\",\"name\":\"按钮1\",\"key\":\"K1\"},{\"name\":\"菜单\",\"sub_button\":[{\"type\":\"view\",\"name\":\"子1\",\"url\":\"http://x\"}]}]";
     const buttons = try menu.service.parseButtons(arena.allocator(), json);
     try std.testing.expectEqual(@as(usize, 2), buttons.len);
-    try std.testing.expectEqualStrings("click", buttons[0].type_);
+    try std.testing.expectEqualStrings("click", buttons[0].type);
     try std.testing.expectEqualStrings("K1", buttons[0].key);
     try std.testing.expectEqual(@as(usize, 1), buttons[1].sub_button.len);
-    try std.testing.expectEqualStrings("view", buttons[1].sub_button[0].type_);
+    try std.testing.expectEqualStrings("view", buttons[1].sub_button[0].type);
     try std.testing.expectEqualStrings("http://x", buttons[1].sub_button[0].url);
 
     // 非法 JSON 拒绝。
