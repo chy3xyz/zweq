@@ -5,20 +5,35 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Link SQLite + Postgres + MySQL drivers (drivers discovered by db_link/dependency build).
-    const features = db_link.Features.all;
+    // 按需链接 SQL 驱动：本仓库驱动面 = SQLite（开发/测试/默认运行时）+ PostgreSQL（生产），
+    // MySQL 从不使用，默认不再链接（少一个部署依赖、少一份攻击面）。需要全量可 -Ddb=all。
+    const db_opt = b.option([]const u8, "db", "SQL drivers to link: all|sqlite|postgres|mysql (comma-list)") orelse "sqlite,postgres";
+    const features = db_link.parseDb(db_opt) catch {
+        @panic("invalid -Ddb= value; use all|sqlite|postgres|mysql (comma-list ok)");
+    };
 
     const zigmodu_dep = b.dependency("zigmodu", .{
         .target = target,
         .optimize = optimize,
+        // 同步收窄 zigmodu 自身的驱动链接（它默认 all）。
+        .db = db_opt,
     });
     const zent_dep = b.dependency("zent", .{
         .target = target,
         .optimize = optimize,
+        // zent 0.76+ 按构建选项收窄 translate-c 驱动绑定（默认"头文件在就翻译"）：
+        // 与本仓库 -Ddb 驱动面保持一致，不为不链接的驱动付 ~30s/~590MB 的翻译成本。
+        .sqlite = features.sqlite,
+        .pg = features.postgres,
+        .mysql = features.mysql,
     });
     const zwechat_dep = b.dependency("zwechat", .{
         .target = target,
         .optimize = optimize,
+        // v0.5.0 起 mTLS 改为 -Dmtls 可选（默认关，zhttp 依赖已移除）。我们仍提供
+        // 支付 v2 退款/转账端点（配置了 cert_p12 时走 mTLS），故保持启用——
+        // 实现是运行时 dlopen OpenSSL，构建期不链 C 库、不需要头文件，成本仅 link_libc。
+        .mtls = true,
     });
 
     const exe_mod = b.createModule(.{

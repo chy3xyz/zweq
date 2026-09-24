@@ -16,13 +16,13 @@ COPY web/ ./
 RUN npm run build
 
 # ── 后端：Zig 0.17.0-dev.1970+67f39b551 ──────────────────────────
-# alpine 与运行阶段同基底（musl ABI 一致）；dev 包提供 pq/mysqlclient/sqlite3
-# 的头文件与链接库（alpine 的 libmysqlclient.so 是 libmariadb 的兼容软链）。
+# alpine 与运行阶段同基底（musl ABI 一致）；dev 包提供 pq/sqlite3 的头文件
+# 与链接库（驱动按需链接：默认 sqlite+postgres，不含 mysql）。
 FROM alpine:3.21 AS backend
 # TARGETARCH 由 BuildKit 注入（amd64/arm64），映射到 zig 官方 tarball 的命名
 ARG TARGETARCH
 ARG ZIG_VERSION=0.17.0-dev.1970+67f39b551
-RUN apk add --no-cache git postgresql-dev mariadb-connector-c-dev sqlite-dev tar xz \
+RUN apk add --no-cache git postgresql-dev sqlite-dev tar xz \
  && case "${TARGETARCH}" in \
       amd64) ZIG_TUPLE=x86_64-linux ;; \
       arm64) ZIG_TUPLE=aarch64-linux ;; \
@@ -32,10 +32,6 @@ RUN apk add --no-cache git postgresql-dev mariadb-connector-c-dev sqlite-dev tar
  && tar -xJf "zig-${ZIG_TUPLE}-${ZIG_VERSION}.tar.xz" -C /opt \
  && mv "/opt/zig-${ZIG_TUPLE}-${ZIG_VERSION}" /opt/zig \
  && ln -s /opt/zig/zig /usr/local/bin/zig
-# zent 的 mysql_include.h 固定 include <mariadb/mysql.h>（homebrew 布局）；alpine 的
-# mariadb-connector-c-dev 头文件在 /usr/include/mysql 下，做目录软链适配，
-# 不改动 hash 锁定的依赖源码。
-RUN ln -sfn /usr/include/mysql /usr/include/mariadb
 WORKDIR /src
 COPY build.zig build.zig.zon db_link.zig ./
 COPY src ./src
@@ -50,7 +46,7 @@ RUN apk add --no-cache binutils \
 
 # ── 运行镜像（与构建阶段同 alpine 版本，动态库版本匹配）──────────
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates libpq mariadb-connector-c sqlite-libs
+RUN apk add --no-cache ca-certificates libpq sqlite-libs
 WORKDIR /app
 COPY --from=backend /src/zig-out/bin/zweq /usr/local/bin/zweq
 COPY --from=backend /src/zig-out/bin/zweq-admin /usr/local/bin/zweq-admin

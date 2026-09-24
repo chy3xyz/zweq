@@ -92,7 +92,10 @@ fn detectPqPaths(b: *std.Build) CLibPaths {
         };
         for (candidates) |c| {
             if (dirExists(b, c)) {
-                return .{ .include = c, .lib = lib_dir };
+                // lib 目录按发行版布局探测（debian multiarch vs 其他发行版 /usr/lib），
+                // 不存在就不传——避免 alpine 等发行版上的 "unable to open library directory" 告警。
+                const lib = if (dirExists(b, lib_dir)) lib_dir else null;
+                return .{ .include = c, .lib = lib };
             }
         }
     }

@@ -5,11 +5,24 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const features = db_link.Features.sqlite_only;
+    // 驱动面 = SQLite + PostgreSQL（同主站；postgres 是 zweq-cloud 的运行选项），不含 mysql。
+    const features: db_link.Features = .{ .sqlite = true, .postgres = true };
 
-    const zigmodu_dep = b.dependency("zigmodu", .{ .target = target, .optimize = optimize });
-    const zent_dep = b.dependency("zent", .{ .target = target, .optimize = optimize });
-    const zwechat_dep = b.dependency("zwechat", .{ .target = target, .optimize = optimize });
+    const zigmodu_dep = b.dependency("zigmodu", .{ .target = target, .optimize = optimize, .db = "sqlite,postgres" });
+    const zent_dep = b.dependency("zent", .{
+        .target = target,
+        .optimize = optimize,
+        // 与主站一致：zent 0.76+ 按选项收窄 translate-c 驱动绑定（postgres 选项名是 pg）。
+        .sqlite = true,
+        .pg = true,
+        .mysql = false,
+    });
+    const zwechat_dep = b.dependency("zwechat", .{
+        .target = target,
+        .optimize = optimize,
+        // 同主站：支付 v2 mTLS 端点仍提供，启用运行时 dlopen 实现（构建期零 C 依赖成本）。
+        .mtls = true,
+    });
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
