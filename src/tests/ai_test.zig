@@ -164,6 +164,21 @@ test "ai: run quota counts within rolling window + health workflow" {
     _ = try ai_store.createRun(0, 8, 1, "chat", "hi", "", 0, 0, 0, 0, 0, "ok", "", 300);
     try std.testing.expectEqual(@as(i64, 2), try ai_store.runCountForUser(7, 50));
 
+    // token 额度口径：窗口内**零行**必须答 0 而不是报错（Sum 对空集会报
+    // EmptyAggregate——zent 0.73 起这个"没有数据"有了自己的错误名），有行时才累加。
+    const empty = try ai_store.quotaForUser(999, 0);
+    try std.testing.expectEqual(@as(i64, 0), empty.tokens_in);
+    try std.testing.expectEqual(@as(i64, 0), empty.tokens_out);
+    _ = try ai_store.createRun(0, 7, 1, "chat", "hi", "m", 30, 12, 0, 0, 0, "ok", "", 400);
+    _ = try ai_store.createRun(0, 7, 1, "chat", "hi", "m", 5, 3, 0, 0, 0, "ok", "", 500);
+    // 窗口下界 450 只覆盖第二条 → 5 / 3（同时验证按 created_at 过滤）。
+    const windowed = try ai_store.quotaForUser(7, 450);
+    try std.testing.expectEqual(@as(i64, 5), windowed.tokens_in);
+    try std.testing.expectEqual(@as(i64, 3), windowed.tokens_out);
+    const all = try ai_store.quotaForUser(7, 0);
+    try std.testing.expectEqual(@as(i64, 35), all.tokens_in);
+    try std.testing.expectEqual(@as(i64, 15), all.tokens_out);
+
     // 无 LLM 的健康工作流:两个只读技能按序执行。
     var result = try svc.runHealthWorkflow(allocator, 1, 1);
     defer result.deinit();

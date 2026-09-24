@@ -562,6 +562,14 @@ pub const AiStore = struct {
     }
 
     /// Sum of tokens consumed by `user_id` since `since` (daily quota).
+    /// 滚动窗口内的 token 消耗合计（供 token 额度检查；目前只接了 run 计数额度，
+    /// 这个按 token 的口径尚未接线）。
+    ///
+    /// 用 `SumOrZero` 而不是 `Sum`：窗口内**零行**时 SQL 的 `SUM()` 返回 NULL，
+    /// `Sum` 对 NULL 报错——zent 0.72 报 `TypeMismatch`，0.73 起改名为
+    /// `error.EmptyAggregate`（两个名字都表示"没有数据"，但对"这个用户今天还没
+    /// 跑过"这种最常见情况来说，正确答案是 0 而不是失败）。`Sum` 留给"空集属于
+    /// 异常"的场景。
     pub fn quotaForUser(self: *AiStore, user_id: i64, since: i64) !QuotaAgg {
         const preds = self.client.ai_run.predicates;
         var q = self.client.ai_run.Query();
@@ -569,8 +577,8 @@ pub const AiStore = struct {
         _ = try q.Where(.{preds.user_idEQ(.{ .int = user_id })});
         _ = try q.Where(.{preds.created_atGTE(.{ .int = since })});
         return .{
-            .tokens_in = @intFromFloat(try q.Sum("tokens_in")),
-            .tokens_out = @intFromFloat(try q.Sum("tokens_out")),
+            .tokens_in = @intFromFloat(try q.SumOrZero("tokens_in")),
+            .tokens_out = @intFromFloat(try q.SumOrZero("tokens_out")),
         };
     }
 };

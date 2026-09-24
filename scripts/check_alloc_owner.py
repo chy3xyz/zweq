@@ -42,6 +42,10 @@ ARENA_HINTS = (
     'Stringify', 'allocPrint(ctx', 'dupe(ctx',
 )
 
+# 生产者行里出现这些 → 是 owned copy（归调用方 allocator），不能交给 deinitRow。
+# zent 0.73.0 把 `CrudService.get` 更名为 `getOwned` 并给出 `deinitRowWith`。
+OWNED_COPY_HINTS = ('getOwned', 'ownedCopy', 'copyOwned')
+
 # 生产者行里出现这些 → 来自长期分配器（store/service/安全模块）。
 OWNER_HINTS = (
     'self.store.', 'self.svc.', 'refs.', '_store.', '_svc.',
@@ -116,13 +120,44 @@ def check_file(path):
     return findings
 
 
+def check_owned_copy_deinit(path):
+    """镜像规则：`deinitRow/deinitRows` 只能释放**驱动扫描出的**实体。
+
+    `CrudService.getOwned(allocator, …)` / `crud_helpers.ownedCopy(allocator, …)`
+    返回的是**调用方 allocator 拥有**的拷贝（zent 0.73.0 起 `getOwned` 用名字
+    点明归属，并给出 `EntityClient.deinitRowWith(allocator, &e)` 作为正确释放），
+    交给 `deinitRow`（用 client 分配器）就是非法释放——zigmodu 的官方示例正是
+    这样把整个服务器打死的（`free of invalid memory`）。
+    """
+    findings = []
+    lines = open(path, encoding='utf-8').read().split('\n')
+    call = re.compile(r'\.(?:deinitRow|deinitRows)\(&(\w+)\)')
+    for i, line in enumerate(lines):
+        if line.strip().startswith('//'):
+            continue
+        m = call.search(line)
+        if not m:
+            continue
+        var = m.group(1)
+        ln, txt, _ = find_origin(lines, i, var)
+        if ln is None:
+            continue
+        if any(h in txt for h in OWNED_COPY_HINTS):
+            findings.append((path, i + 1, var, ln + 1, txt))
+    return findings
+
+
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else 'src'
     all_findings = []
+    owned_findings = []
     for dirpath, _dirnames, filenames in os.walk(root):
         for fn in filenames:
             if fn.endswith('.zig'):
-                all_findings.extend(check_file(os.path.join(dirpath, fn)))
+                p = os.path.join(dirpath, fn)
+                all_findings.extend(check_file(p))
+                owned_findings.extend(check_owned_copy_deinit(p))
+    rc = 0
     if all_findings:
         print("分配器归属 lint 失败：以下释放点用的是请求 arena，但对象由长期分配器生产")
         print("（arena.free 是 no-op → 静默泄漏；请改用拥有者分配器）\n")
@@ -130,9 +165,18 @@ def main():
             print(f"  {path}:{line}  free(ctx.allocator) 的对象 `{var}` 生产于 {path}:{pline}")
             print(f"      {txt}")
         print(f"\n共 {len(all_findings)} 处")
-        return 1
-    print("✓ 分配器归属 lint 通过（无“arena 释放长期分配器对象”的释放点）")
-    return 0
+        rc = 1
+    if owned_findings:
+        print("\n分配器归属 lint 失败：`deinitRow` 用在了 owned copy 上")
+        print("（owned copy 归调用方 allocator；用 `deinitRowWith(allocator, &e)` 释放）\n")
+        for path, line, var, pline, txt in owned_findings:
+            print(f"  {path}:{line}  deinitRow(&{var})，而 `{var}` 生产于 {path}:{pline}")
+            print(f"      {txt}")
+        print(f"\n共 {len(owned_findings)} 处")
+        rc = 1
+    if rc == 0:
+        print("✓ 分配器归属 lint 通过（无“arena 释放长期分配器对象”，无“deinitRow 释放 owned copy”）")
+    return rc
 
 
 if __name__ == '__main__':
