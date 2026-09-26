@@ -9,8 +9,8 @@
             .hash = "zent-0.78.0-oiur-60NIwCJVa685Nmr31bwW2foZoA6SMA7IvATdrgG",
         },
         .zigmodu = .{
-            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.33.2#597356def3f39d62efdb31bfacfd5acf090190af",
-            .hash = "zigmodu-0.33.2-U40vsx2VbQB3JVcifa4rkuURlZem4v918YmsEBnd6cEm",
+            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.35.0#a7510246947ecfcf5228d3045e124f5ac1bb6d53",
+            .hash = "zigmodu-0.35.0-U40vs__mhgBjAjaHRPbAGuLxVqQLrUXRrzpDLwGqnhsQ",
         },
         .zwechat = .{
             .url = "git+https://github.com/chy3xyz/zwechat?ref=v0.5.1#464c5bf28d58d125443059d073b17d131e454f7f",

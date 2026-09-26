@@ -143,10 +143,21 @@ test "changePassword verifies the current password" {
     var store = user.persistence.UserStore.init(allocator, env.client);
     var sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = "test-secret" });
     var svc = user.service.UserService.init(&store, &sec, std.testing.io, 3600, 86400);
-    const id = try store.createUser("Alice", "alice@example.com", "hash", false, false, 1, 100);
+    // zigmodu 0.33.4 起存储哈希必须可解码：verifyPassword 对畸形哈希报 MalformedStoredHash
+    // （我们这侧出错 → 500），不再折成"口令不匹配"。所以这里必须存真实哈希，
+    // "旧口令不对"的场景要由合法哈希 + 错误口令来覆盖。
+    const real_hash = try sec.module.hashPassword("oldpassword123");
+    defer sec.module.allocator.free(real_hash);
+    const id = try store.createUser("Alice", "alice@example.com", real_hash, false, false, 1, 100);
 
+    // 旧口令不对（存储哈希合法，verifyPassword 返回 false）→ InvalidCredentials
     try std.testing.expectError(error.InvalidCredentials, svc.changePassword(id, "wrong", "newpassword123"));
-    try std.testing.expectError(error.InvalidPassword, svc.changePassword(id, "hash", "short"));
+    // 新口令太短在校验旧口令之前拦截 → InvalidPassword
+    try std.testing.expectError(error.InvalidPassword, svc.changePassword(id, "oldpassword123", "short"));
+    // 正确旧口令 → 修改成功，新口令可登录
+    try svc.changePassword(id, "oldpassword123", "newpassword123");
+    var session = (try svc.login(allocator, "alice@example.com", "newpassword123")) orelse return error.InvalidCredentials;
+    defer svc.freeSession(&session);
 }
 
 test "register binds tenant and JWT aud carries it" {

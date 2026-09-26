@@ -226,6 +226,11 @@ pub fn AuthApi(comptime Service: type) type {
                     try ctx.sendErrorResponse(401, 401, "邮箱或密码错误");
                     return;
                 },
+                // 我们这侧失败（OOM / 存储哈希损坏，zigmodu 0.33.4 口令校验口径）→ 500
+                error.OutOfMemory, error.MalformedStoredHash => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
+                    return;
+                },
             };
             var session = session_opt orelse {
                 var d3: [160]u8 = undefined;
@@ -341,6 +346,11 @@ pub fn AuthApi(comptime Service: type) type {
                     try ctx.sendErrorResponse(400, 400, "重置链接已过期");
                     return;
                 },
+                // 我们这侧失败（OOM / 存储哈希损坏）→ 500
+                error.OutOfMemory, error.MalformedStoredHash => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
+                    return;
+                },
             };
             try ctx.ok("null");
         }
@@ -371,6 +381,11 @@ pub fn AuthApi(comptime Service: type) type {
                 },
                 error.TokenExpired => {
                     try ctx.sendErrorResponse(400, 400, "验证链接已过期，请重新发送");
+                    return;
+                },
+                // 我们这侧失败（OOM / 存储哈希损坏）→ 500
+                error.OutOfMemory, error.MalformedStoredHash => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
                     return;
                 },
             };
@@ -465,6 +480,11 @@ pub fn AuthApi(comptime Service: type) type {
                 },
                 error.InvalidPassword => {
                     try ctx.sendErrorResponse(400, 400, "新密码至少 8 位");
+                    return;
+                },
+                // 我们这侧失败（OOM / 存储哈希损坏）→ 500
+                error.OutOfMemory, error.MalformedStoredHash => {
+                    try ctx.sendErrorResponse(500, 500, "服务器错误");
                     return;
                 },
             };

@@ -15,22 +15,50 @@ pub const CreateError = error{
     Unexpected,
 };
 
-pub const LoginError = error{InvalidCredentials};
+/// zigmodu 0.33.4 起 `verifyPassword` 返回错误联合：`OutOfMemory` 与
+/// `MalformedStoredHash` 都是"我们这侧出错"，必须上抛让 API 层答 500，不能
+/// 折成"口令不匹配"（401）——那会让失败登录计数说谎（上游的 Breaking 口径）。
+/// 返回 false 才是"口令确实不对"，由调用点映射成本地 invalid 错误。
+fn verifyPasswordChecked(
+    sec: *zigmodu.security.AppSecurity,
+    input: []const u8,
+    stored: []const u8,
+) error{ OutOfMemory, MalformedStoredHash }!bool {
+    return sec.module.verifyPassword(input, stored) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.MalformedStoredHash => {
+            std.log.err("[user] stored password/token hash not decodable (data corruption)", .{});
+            return error.MalformedStoredHash;
+        },
+    };
+}
+
+pub const LoginError = error{
+    InvalidCredentials,
+    OutOfMemory,
+    MalformedStoredHash,
+};
 
 pub const ResetTokenError = error{
     InvalidToken,
     TokenExpired,
     InvalidPassword,
+    OutOfMemory,
+    MalformedStoredHash,
 };
 
 pub const VerificationError = error{
     InvalidToken,
     TokenExpired,
+    OutOfMemory,
+    MalformedStoredHash,
 };
 
 pub const ChangePasswordError = error{
     InvalidCredentials,
     InvalidPassword,
+    OutOfMemory,
+    MalformedStoredHash,
 };
 
 /// Raw reset token plus the owning user id (for the reset link).
@@ -144,7 +172,7 @@ pub const UserService = struct {
         // （free 是 no-op）→ 必须用拥有者释放，否则每次登录泄漏一份哈希。
         defer self.store.allocator.free(hash);
 
-        if (!self.sec.module.verifyPassword(password, hash)) return null;
+        if (!try verifyPasswordChecked(self.sec, password, hash)) return null;
         return self.issueSession(allocator, row.email, row.admin, row.tenant_id) catch return error.InvalidCredentials;
     }
 
@@ -273,7 +301,7 @@ pub const UserService = struct {
             self.store.deleteTokensForUser(user_id) catch {};
             return error.TokenExpired;
         }
-        if (!self.sec.module.verifyPassword(raw_token, tok.token)) return error.InvalidToken;
+        if (!try verifyPasswordChecked(self.sec, raw_token, tok.token)) return error.InvalidToken;
     }
 
     /// Reset a user's password after a valid token; clears all their tokens.
@@ -320,7 +348,7 @@ pub const UserService = struct {
             self.store.deleteEmailVerificationsForUser(user_id) catch {};
             return error.TokenExpired;
         }
-        if (!self.sec.module.verifyPassword(raw_token, tok.token)) return error.InvalidToken;
+        if (!try verifyPasswordChecked(self.sec, raw_token, tok.token)) return error.InvalidToken;
 
         self.setVerified(user_id, true) catch return error.InvalidToken;
         // Best-effort：邮箱已置为已验证,这里只是清理已消费的令牌；删除失败时残留
@@ -335,7 +363,7 @@ pub const UserService = struct {
         const hash_opt = self.store.getPasswordHashById(id) catch return error.InvalidCredentials;
         const hash = hash_opt orelse return error.InvalidCredentials;
         defer self.sec.module.allocator.free(hash);
-        if (!self.sec.module.verifyPassword(old_password, hash)) return error.InvalidCredentials;
+        if (!try verifyPasswordChecked(self.sec, old_password, hash)) return error.InvalidCredentials;
         self.setPassword(id, new_password) catch return error.InvalidPassword;
     }
 };
