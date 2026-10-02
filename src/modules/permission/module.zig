@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "permission",
     .description = "RBAC: roles, permission grants, user-role bindings",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "user" },
     .is_internal = false,
 };
 

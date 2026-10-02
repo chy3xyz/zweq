@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "ai",
     .description = "agentic assistant: providers, skills, chat, approvals, workflow",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "notify", "task", "tenant", "user" },
     .is_internal = false,
 };
 

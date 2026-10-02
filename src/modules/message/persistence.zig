@@ -4,6 +4,7 @@ const std = @import("std");
 const zent = @import("zent");
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
+const db_mod = @import("../../db.zig");
 
 const graph = zent.codegen.graph.buildGraph(&.{model.MessageLog});
 pub const infos = graph.types;
@@ -102,8 +103,14 @@ pub const MessageStore = struct {
     }
 
     pub fn list(self: *MessageStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !MessageLogListResult {
+        return self.listBudget(page, page_size, tenant_id, account_id, null);
+    }
+
+    /// list 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）。
+    pub fn listBudget(self: *MessageStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, budget_ms: ?i64) !MessageLogListResult {
         var q = self.client.message_log.Query();
         defer q.deinit();
+        db_mod.applyDeadline(&q, budget_ms);
         const preds = self.client.message_log.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});

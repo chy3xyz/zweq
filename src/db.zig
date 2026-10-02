@@ -23,6 +23,8 @@ pub const PoolStats = struct {
     closed: bool,
 };
 
+/// Accepted form: **a value** of either zent ConnPool's `Stats` struct
+/// （`pool.stats()`，sqlite / postgres 池字段一致），按字段名投影。
 fn fromPoolStats(s: anytype) PoolStats {
     return .{
         .total = s.total,
@@ -32,6 +34,37 @@ fn fromPoolStats(s: anytype) PoolStats {
         .exhausted_total = s.exhausted_total,
         .closed = s.closed,
     };
+}
+
+// ── 请求预算 → 存储层桥 ─────────────────────────────────────────
+// zigmodu 每个请求由 connFiber 按 request_timeout_ms 在 ctx.deadline_ms
+// 上武装绝对 deadline（CLOCK_MONOTONIC 毫秒）；zent 的 ExecutionContext
+// 消费同一时钟的纳秒 deadline（sqlite busy_timeout + progress handler /
+// postgres statement_timeout / 池等待 borrowCtx）。两边都读 POSIX
+// CLOCK_MONOTONIC，毫秒 ×1e6 即纳秒 deadline。ctx = null 时 zent 行为
+// 与改动前完全一致（beginTxCtx(ctx=null) 在 vtable 层就等价 beginTx）。
+//
+// 覆盖方式是 opt-in 的：只有显式把 ctx.deadline_ms 传下来的入口
+//（事务入口 Budget 变体、列表查询）才带预算，其余调用零变化。
+
+/// zigmodu 请求预算（deadline_ms，CLOCK_MONOTONIC）→ zent 执行上下文。
+/// 预算为 null（request_timeout_ms=0 或未武装）时返回无界上下文。
+pub fn execContext(deadline_ms: ?i64) zent.sql_driver.ExecutionContext {
+    return .{ .deadline_ns = if (deadline_ms) |ms| ms * std.time.ns_per_ms else null };
+}
+
+/// 预算是否已耗尽（null 预算 = 无界，永不耗尽）。
+pub fn budgetSpent(deadline_ms: ?i64) bool {
+    const d = deadline_ms orelse return false;
+    return zent.sql_driver.monotonicNs() >= d * std.time.ns_per_ms;
+}
+
+/// 给 zent Query/Create/Update/Delete builder 盖上请求 deadline。
+/// builder 的 execution_context 是公开字段；timeout_ms 未设置时
+/// ensureDeadline 不会覆盖这里写入的绝对 deadline。预算为 null 时不触碰。
+pub fn applyDeadline(builder: anytype, deadline_ms: ?i64) void {
+    const d = deadline_ms orelse return;
+    builder.execution_context.deadline_ns = d * std.time.ns_per_ms;
 }
 
 /// RAII wrapper over the shared zent store: owns the driver, migrates each
@@ -113,6 +146,13 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
                         .min_connections = 1,
                         .max_connections = max_conns,
                         .health_check_on_borrow = false,
+                        // 请求预算接线的前提：max_wait_ms>0 时 borrowCtx 才走
+                        // 「按 deadline 上限阻塞在 condvar（归还即唤醒）」路径；
+                        // 为 0 时退回 retry/backoff 老路、deadline 不参与等待。
+                        // 无 deadline 的调用行为也从轮询退避变为有界公平等待
+                        //（饱和时最多 3s 后 PoolWaitTimeout，原先 ~600ms 退避后
+                        // PoolExhausted——量级相当，见 zent sql/pool.zig borrowWithBudget）。
+                        .max_wait_ms = 3000,
                         .connect_ctx = ctx,
                         .connectCtx = connectSqlite,
                     });
@@ -137,6 +177,8 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
                         .min_connections = 2,
                         .max_connections = 8,
                         .health_check_on_borrow = false,
+                        // 同 sqlite 池：见上方 max_wait_ms 注释。
+                        .max_wait_ms = 3000,
                         .connect_ctx = ctx,
                         .connectCtx = connectPg,
                     });

@@ -39,18 +39,21 @@ COPY scripts ./scripts
 # BuildKit cache mount 复用依赖 fetch 与编译缓存（.zig-cache 本地 / ~/.cache/zig 全局）
 RUN --mount=type=cache,target=/src/.zig-cache \
     --mount=type=cache,target=/root/.cache/zig \
-    zig build -Doptimize=ReleaseFast --summary all
+    zig build -Doptimize=ReleaseSafe --summary all
 # 运行镜像不需要调试符号：strip 掉 DWARF/符号表，二进制约 100MB → 30MB 级
 RUN apk add --no-cache binutils \
  && strip /src/zig-out/bin/zweq /src/zig-out/bin/zweq-admin
 
 # ── 运行镜像（与构建阶段同 alpine 版本，动态库版本匹配）──────────
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates libpq sqlite-libs
+RUN apk add --no-cache ca-certificates libpq sqlite-libs \
+ && addgroup -S zweq && adduser -S -G zweq zweq
 WORKDIR /app
 COPY --from=backend /src/zig-out/bin/zweq /usr/local/bin/zweq
 COPY --from=backend /src/zig-out/bin/zweq-admin /usr/local/bin/zweq-admin
 COPY --from=frontend /app/dist /app/web/dist
+# 数据目录（sqlite/上传）归非 root 用户；/app 静态资源只读即可
+RUN mkdir -p /data && chown -R zweq:zweq /data
 ENV ZWEQ_DB_DRIVER=sqlite \
     ZWEQ_SQLITE_PATH=/data/zweq.db \
     ZWEQ_UPLOAD_DIR=/data/uploads \
@@ -58,4 +61,8 @@ ENV ZWEQ_DB_DRIVER=sqlite \
     ZWEQ_HTTP_PORT=8000
 VOLUME ["/data"]
 EXPOSE 8000
+# 非 root 运行：被攻破的进程拿不到容器 root
+USER zweq
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8000/health/live || exit 1
 CMD ["/usr/local/bin/zweq"]

@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "notify",
     .description = "per-user notifications (flash messages, task events)",
-    .dependencies = &.{},
+    .dependencies = &.{"user"},
     .is_internal = false,
 };
 

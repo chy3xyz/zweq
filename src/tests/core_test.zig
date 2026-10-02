@@ -40,6 +40,7 @@ const points = @import("common.zig").points;
 const cache_svc = @import("common.zig").cache_svc;
 const mail = @import("common.zig").mail;
 const mw_rate = @import("common.zig").mw_rate;
+const mw_auth = @import("common.zig").mw_auth;
 const all_infos = @import("common.zig").all_infos;
 const openMemory = @import("common.zig").openMemory;
 const openPostgres = @import("common.zig").openPostgres;
@@ -84,6 +85,147 @@ test "AppSecurity signs and verifies a token" {
     try std.testing.expect(zigmodu.security.SecurityModule.hasRole(payload, "admin"));
 }
 
+fn b64urlDecode(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+    const dec = std.base64.url_safe_no_pad.Decoder;
+    const n = try dec.calcSizeForSlice(s);
+    const out = try allocator.alloc(u8, n);
+    errdefer allocator.free(out);
+    try dec.decode(out, s);
+    return out;
+}
+
+fn b64urlEncode(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+    const enc = std.base64.url_safe_no_pad.Encoder;
+    const out = try allocator.alloc(u8, enc.calcSize(s.len));
+    errdefer allocator.free(out);
+    _ = enc.encode(out, s);
+    return out;
+}
+
+test "jwt kid: kidForSecret 确定性且互不相同" {
+    const k1 = mw_auth.kidForSecret("kid-secret-a-0123456789abcdef");
+    const k2 = mw_auth.kidForSecret("kid-secret-a-0123456789abcdef");
+    const k3 = mw_auth.kidForSecret("kid-secret-b-0123456789abcdef");
+    try std.testing.expectEqual(k1, k2);
+    try std.testing.expect(!std.mem.eql(u8, &k1, &k3));
+    // 12 个 lowercase hex 字符。
+    for (k1) |c| try std.testing.expect(std.mem.indexOfScalar(u8, "0123456789abcdef", c) != null);
+}
+
+test "jwt kid: buildJwtKeyring 解析 PREVIOUS csv（去空白/跳过空段/跳过与主密钥重复）" {
+    const allocator = std.testing.allocator;
+    const cur = "ring-current-secret-0123456789abcdef";
+    const old_a = "ring-old-secret-a-0123456789abcdef";
+    const old_b = "ring-old-secret-b-0123456789abcdef";
+    var ring = try mw_auth.buildJwtKeyring(allocator, cur, "  ring-old-secret-a-0123456789abcdef , , ring-old-secret-b-0123456789abcdef,ring-current-secret-0123456789abcdef ,");
+    defer ring.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), ring.count());
+    try std.testing.expectEqualStrings(&mw_auth.kidForSecret(cur), ring.getPrimaryKey().?.kid);
+    try std.testing.expect(ring.getKey(&mw_auth.kidForSecret(old_a)) != null);
+    try std.testing.expect(ring.getKey(&mw_auth.kidForSecret(old_b)) != null);
+}
+
+test "jwt kid: 无 kid 旧 token 挂环后仍验过（回退主密钥）" {
+    const allocator = std.testing.allocator;
+    const v1 = "rotate-old-secret-0123456789abcdef";
+    // 旧行为签发：未挂 keyring，token 无 kid。
+    var legacy_sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = v1 });
+    const old_token = try legacy_sec.module.generateTokenWithTenant("42", &.{"user"}, "1");
+    defer allocator.free(old_token);
+
+    // 部署 keyring（同主密钥、无 PREVIOUS）后旧 token 必须仍验过。
+    var ring = try mw_auth.buildJwtKeyring(allocator, v1, "");
+    defer ring.deinit();
+    var sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = v1 });
+    sec.module.setKeyring(&ring);
+    const payload = try sec.module.verifyToken(old_token);
+    defer sec.module.freePayload(payload);
+    try std.testing.expectEqualStrings("42", payload.sub);
+}
+
+test "jwt kid: 新 token 带主密钥 kid 签发并按 kid 验签" {
+    const allocator = std.testing.allocator;
+    const v1 = "signing-secret-v1-0123456789abcdef";
+    var ring = try mw_auth.buildJwtKeyring(allocator, v1, "");
+    defer ring.deinit();
+    var sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = v1 });
+    sec.module.setKeyring(&ring);
+
+    const token = try sec.module.generateTokenWithTenantAndVersion("7", &.{"admin"}, "1", 3);
+    defer allocator.free(token);
+
+    // header 带主密钥的 kid（无状态派生，重启后不变）。
+    try std.testing.expectEqualStrings(&mw_auth.kidForSecret(v1), sec.module.signingKid().?);
+    var parts = std.mem.splitScalar(u8, token, '.');
+    const header_json = try b64urlDecode(allocator, parts.next().?);
+    defer allocator.free(header_json);
+    const kid_pat = try std.fmt.allocPrint(allocator, "\"kid\":\"{s}\"", .{&mw_auth.kidForSecret(v1)});
+    defer allocator.free(kid_pat);
+    try std.testing.expect(std.mem.indexOf(u8, header_json, kid_pat) != null);
+
+    const payload = try sec.module.verifyToken(token);
+    defer sec.module.freePayload(payload);
+    try std.testing.expectEqualStrings("7", payload.sub);
+    try std.testing.expectEqual(@as(i64, 3), payload.ver);
+}
+
+test "jwt kid: 轮换窗口双 key 都验过（旧 token 不掉线、新 token 正常）" {
+    const allocator = std.testing.allocator;
+    const v1 = "rotate-old-secret-0123456789abcdef";
+    const v2 = "rotate-new-secret-0123456789abcdef";
+
+    // 轮换前：v1 为主签发键。
+    var ring_v1 = try mw_auth.buildJwtKeyring(allocator, v1, "");
+    defer ring_v1.deinit();
+    var sec_v1 = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = v1 });
+    sec_v1.module.setKeyring(&ring_v1);
+    const t_old = try sec_v1.module.generateTokenWithTenant("u-old", &.{"user"}, "1");
+    defer allocator.free(t_old);
+
+    // 轮换：v2 顶上为主签发键，v1 挪进 PREVIOUS 只验不签。
+    var ring_v2 = try mw_auth.buildJwtKeyring(allocator, v2, v1);
+    defer ring_v2.deinit();
+    var sec_v2 = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = v2 });
+    sec_v2.module.setKeyring(&ring_v2);
+
+    // 旧 token（kid=v1）在轮换窗口内仍验过 —— 不再全员强制重登。
+    const p_old = try sec_v2.module.verifyToken(t_old);
+    defer sec_v2.module.freePayload(p_old);
+    try std.testing.expectEqualStrings("u-old", p_old.sub);
+
+    // 新 token 由 v2 签发（kid=v2）并验过。
+    const t_new = try sec_v2.module.generateTokenWithTenant("u-new", &.{"user"}, "1");
+    defer allocator.free(t_new);
+    const p_new = try sec_v2.module.verifyToken(t_new);
+    defer sec_v2.module.freePayload(p_new);
+    try std.testing.expectEqualStrings("u-new", p_new.sub);
+    try std.testing.expectEqualStrings(&mw_auth.kidForSecret(v2), sec_v2.module.signingKid().?);
+}
+
+test "jwt kid: 环内不存在的 kid 拒绝（UnknownKeyId，不回退主密钥）" {
+    const allocator = std.testing.allocator;
+    const v1 = "kid-forge-secret-0123456789abcdef";
+    var ring = try mw_auth.buildJwtKeyring(allocator, v1, "");
+    defer ring.deinit();
+    var sec = zigmodu.security.AppSecurity.init(allocator, std.testing.io, .{ .jwt_secret = v1 });
+    sec.module.setKeyring(&ring);
+    const token = try sec.module.generateTokenWithTenant("u", &.{"user"}, "1");
+    defer allocator.free(token);
+
+    // 篡改 header kid 为环内不存在的值，payload/signature 不动：
+    // 即使签名本身是主密钥算的，带未知 kid 也必须拒，而不是静默回退。
+    var parts = std.mem.splitScalar(u8, token, '.');
+    _ = parts.next();
+    const payload_b64 = parts.next().?;
+    const sig = parts.next().?;
+    const forged_header = try b64urlEncode(allocator, "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"no-such-key\"}");
+    defer allocator.free(forged_header);
+    const forged = try std.fmt.allocPrint(allocator, "{s}.{s}.{s}", .{ forged_header, payload_b64, sig });
+    defer allocator.free(forged);
+    try std.testing.expectError(error.UnknownKeyId, sec.module.verifyToken(forged));
+}
+
 test "sqlite store query prepares and runs standalone" {
     const allocator = std.testing.allocator;
     var env = try db_mod.StoreEnv(schema.infos, .{
@@ -117,12 +259,23 @@ test "sqlite store keyword search finds user" {
 
 test "cache service set/get/remove" {
     const allocator = std.testing.allocator;
-    var cache = cache_svc.CacheService.init(allocator, 16, 60);
+    var cache = cache_svc.CacheService.init(allocator, std.testing.io, 16, 60);
     defer cache.deinit();
     try cache.set("user:1", "{\"name\":\"Alice\"}");
     try std.testing.expectEqualStrings("{\"name\":\"Alice\"}", cache.get("user:1").?);
     try std.testing.expect(cache.remove("user:1"));
     try std.testing.expect(cache.get("user:1") == null);
+}
+
+test "cache service setIfAbsent is atomic first-write wins" {
+    const allocator = std.testing.allocator;
+    var cache = cache_svc.CacheService.init(allocator, std.testing.io, 16, 60);
+    defer cache.deinit();
+    try std.testing.expect(try cache.setIfAbsent("nonce:a", "1"));
+    try std.testing.expect(!(try cache.setIfAbsent("nonce:a", "1")));
+    try std.testing.expectEqualStrings("1", cache.get("nonce:a").?);
+    try std.testing.expect(cache.remove("nonce:a"));
+    try std.testing.expect(try cache.setIfAbsent("nonce:a", "2"));
 }
 
 test "mailer console sink never fails" {

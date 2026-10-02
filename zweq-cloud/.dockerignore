@@ -1,0 +1,19 @@
+# 构建 zweq-cloud 镜像只需：build.zig* / db_link.zig / src（依赖在容器内按
+# build.zig.zon 的 git 引用 fetch，不走本地 zig-pkg 缓存）。
+# 缓存目录与本地状态一律排除，保持上下文小且构建可复现。
+.git
+.github
+.DS_Store
+**/.DS_Store
+.zig-cache
+**/.zig-cache
+.zig-cache-global
+.zig-global-cache
+zig-out
+**/zig-out
+zig-pkg
+**/zig-pkg
+*.db
+*.db-wal
+*.db-shm
+*.db.bak*

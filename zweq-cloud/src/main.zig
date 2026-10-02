@@ -12,6 +12,74 @@ const storage_mod = @import("storage.zig");
 const license = @import("modules/license/root.zig");
 const market = @import("modules/market/root.zig");
 
+// ── 请求上下文感知的 panic 钩子 ─────────────────────────────────────
+// 语义同 zigmodu api/PanicHook.zig（panic 前把当事请求 METHOD /path 打到
+// stderr 再交回默认 panic）。不直接用 zmodu.panicHook：上游 writeStderr
+// 引用了 0.17.0-dev 已移除的 std.posix.write（lazy analysis 漏网），
+// 应用根一接线即编译错。zweq-cloud 是独立包（不能 import 主站
+// src/middleware/panic_hook.zig），故在此内联同一份实现，改动需双份同步。
+const PanicHook = struct {
+    const BUF_SIZE = 512;
+    threadlocal var request_buf: [BUF_SIZE]u8 = undefined;
+    threadlocal var request_len: usize = 0;
+
+    fn setRequestContext(method: []const u8, path: []const u8) void {
+        var len: usize = 0;
+        const m = method[0..@min(method.len, 16)];
+        @memcpy(request_buf[len..][0..m.len], m);
+        len += m.len;
+        request_buf[len] = ' ';
+        len += 1;
+        const room = BUF_SIZE - len;
+        const p = path[0..@min(path.len, room)];
+        @memcpy(request_buf[len..][0..p.len], p);
+        len += p.len;
+        request_len = len;
+    }
+
+    fn clearRequestContext() void {
+        request_len = 0;
+    }
+
+    fn withRequestContext(msg: []const u8, first_trace_addr: ?usize) noreturn {
+        @branchHint(.cold);
+        if (request_len > 0) {
+            const prefix = "panic while handling request: ";
+            var out: [prefix.len + BUF_SIZE + 1]u8 = undefined;
+            @memcpy(out[0..prefix.len], prefix);
+            @memcpy(out[prefix.len..][0..request_len], request_buf[0..request_len]);
+            out[prefix.len + request_len] = '\n';
+            writeStderr(out[0 .. prefix.len + request_len + 1]);
+        }
+        std.debug.defaultPanic(msg, first_trace_addr);
+    }
+
+    fn writeStderr(bytes: []const u8) void {
+        var rest = bytes;
+        while (rest.len > 0) {
+            const n = std.posix.system.write(std.posix.STDERR_FILENO, rest.ptr, rest.len);
+            if (n <= 0) return;
+            rest = rest[@intCast(n)..];
+        }
+    }
+
+    pub const hook = std.debug.FullPanic(withRequestContext);
+
+    fn recordRequestContext() zigmodu.http.Middleware {
+        return .{
+            .func = struct {
+                fn handle(ctx: *zigmodu.http.Context, next: zigmodu.http.HandlerFn, _: ?*anyopaque) anyerror!void {
+                    setRequestContext(ctx.method.toString(), ctx.path);
+                    defer clearRequestContext();
+                    try next(ctx);
+                }
+            }.handle,
+        };
+    }
+};
+
+pub const panic = PanicHook.hook;
+
 const ShutdownFlag = struct {
     var requested = std.atomic.Value(bool).init(false);
 };
@@ -69,6 +137,7 @@ pub fn main(init: std.process.Init) !void {
         .max_body_size = 16 * 1024 * 1024,
     });
     defer server.deinit();
+    try server.addMiddleware(PanicHook.recordRequestContext());
 
     var v1 = server.group("/api/v1");
     var license_api = license.api.LicenseApi(@TypeOf(license_svc)).init(&license_svc, cfg.admin_token);

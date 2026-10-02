@@ -263,6 +263,33 @@ pub const RoleStore = struct {
         return out;
     }
 
+    /// All roles for the given ids in one `id IN (...)` query.
+    pub fn listRolesByIds(self: *RoleStore, ids: []const i64) ![]RoleRow {
+        if (ids.len == 0) return try self.allocator.alloc(RoleRow, 0);
+        const vals = try self.idValues(ids);
+        defer self.allocator.free(vals);
+
+        var q = self.client.role.Query();
+        defer q.deinit();
+        const preds = self.client.role.predicates;
+        _ = try q.Where(.{preds.idIn(vals)});
+        _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("id")});
+        var rows = try q.All();
+        defer self.client.role.deinitRows(&rows);
+
+        var out = try self.allocator.alloc(RoleRow, rows.items.len);
+        var n: usize = 0;
+        errdefer {
+            for (out[0..n]) |r| r.free(self.allocator);
+            self.allocator.free(out);
+        }
+        for (rows.items) |e| {
+            out[n] = try self.dupRole(e);
+            n += 1;
+        }
+        return out;
+    }
+
     pub fn removeAllRolesForUser(self: *RoleStore, user_id: i64) !void {
         const preds = self.client.user_role.predicates;
         var d = self.client.user_role.Delete();
@@ -298,21 +325,45 @@ pub const RoleStore = struct {
         _ = try crud.delete(self.client.role_permission, .{ preds.role_idEQ(.{ .int = role_id }), preds.permission_idEQ(.{ .int = permission_id }) });
     }
 
-    pub fn listPermissionsForRole(self: *RoleStore, role_id: i64) ![]PermissionRow {
-        var rp_q = self.client.role_permission.Query();
-        defer rp_q.deinit();
-        const rp_preds = self.client.role_permission.predicates;
-        _ = try rp_q.Where(.{rp_preds.role_idEQ(.{ .int = role_id })});
-        var rp_rows = try rp_q.All();
-        defer self.client.role_permission.deinitRows(&rp_rows);
+    /// Borrowed `id IN (...)` values for a batch lookup (caller frees).
+    fn idValues(self: *RoleStore, ids: []const i64) ![]zent.sql.Value {
+        const vals = try self.allocator.alloc(zent.sql.Value, ids.len);
+        for (ids, 0..) |id, i| vals[i] = .{ .int = id };
+        return vals;
+    }
 
-        var out = try self.allocator.alloc(PermissionRow, 0);
-        errdefer self.allocator.free(out);
-        for (rp_rows.items) |rp| {
-            const perm_opt = try self.getPermissionById(rp.permission_id) orelse continue;
-            const new_len = out.len + 1;
-            out = try self.allocator.realloc(out, new_len);
-            out[new_len - 1] = perm_opt;
+    pub fn listPermissionsForRole(self: *RoleStore, role_id: i64) ![]PermissionRow {
+        const rp_preds = self.client.role_permission.predicates;
+        return self.queryPermissionsByRolePreds(&.{rp_preds.role_idEQ(.{ .int = role_id })});
+    }
+
+    /// Permissions bound to any of the given roles — one query, no per-row lookups.
+    pub fn listPermissionsForRoles(self: *RoleStore, role_ids: []const i64) ![]PermissionRow {
+        if (role_ids.len == 0) return try self.allocator.alloc(PermissionRow, 0);
+        const vals = try self.idValues(role_ids);
+        defer self.allocator.free(vals);
+        const rp_preds = self.client.role_permission.predicates;
+        return self.queryPermissionsByRolePreds(&.{rp_preds.role_idIn(vals)});
+    }
+
+    /// `SELECT * FROM permission WHERE id IN (SELECT permission_id FROM role_permission WHERE <role_preds>)`.
+    fn queryPermissionsByRolePreds(self: *RoleStore, role_preds: []const zent.sql.Predicate) ![]PermissionRow {
+        var q = self.client.permission.Query();
+        defer q.deinit();
+        _ = try q.Where(.{zent.sql.InSelect("id", "role_permission", "permission_id", role_preds)});
+        _ = try q.OrderBy(&[_]zent.sql.Order{zent.sql.OrderAsc("id")});
+        var rows = try q.All();
+        defer self.client.permission.deinitRows(&rows);
+
+        var out = try self.allocator.alloc(PermissionRow, rows.items.len);
+        var n: usize = 0;
+        errdefer {
+            for (out[0..n]) |r| r.free(self.allocator);
+            self.allocator.free(out);
+        }
+        for (rows.items) |e| {
+            out[n] = try self.dupPermission(e);
+            n += 1;
         }
         return out;
     }
@@ -354,28 +405,51 @@ pub const RoleStore = struct {
         const user_roles = try self.listRolesForUser(user_id);
         defer self.allocator.free(user_roles);
 
+        // Distinct role ids: the per-role lookups below are batched into one
+        // query each (this loader runs per request on the RBAC hot path, and
+        // used to issue 1 + N SQL per role).
+        var role_ids = std.ArrayList(i64).empty;
+        defer role_ids.deinit(self.allocator);
+        var seen_role = std.AutoHashMap(i64, void).init(self.allocator);
+        defer seen_role.deinit();
         for (user_roles) |ur| {
-            const role = try self.getRoleById(ur.role_id) orelse continue;
-            defer role.free(self.allocator);
+            const gop = try seen_role.getOrPut(ur.role_id);
+            if (gop.found_existing) continue;
+            try role_ids.append(self.allocator, ur.role_id);
+        }
+
+        const roles = try self.listRolesByIds(role_ids.items);
+        defer {
+            for (roles) |r| r.free(self.allocator);
+            self.allocator.free(roles);
+        }
+        const role_perms = try self.listPermissionsForRoles(role_ids.items);
+        defer {
+            for (role_perms) |p| p.free(self.allocator);
+            self.allocator.free(role_perms);
+        }
+
+        var role_map = std.AutoHashMap(i64, usize).init(self.allocator);
+        defer role_map.deinit();
+        for (roles, 0..) |r, i| try role_map.put(r.id, i);
+
+        for (user_roles) |ur| {
+            const idx = role_map.get(ur.role_id) orelse continue;
+            const role = roles[idx];
             try appendUniqueCode(&codes, allocator, role.code);
             if (std.mem.eql(u8, role.code, "founder") or std.mem.eql(u8, role.code, "admin")) {
                 superuser = true;
             }
+        }
 
-            const role_perms = try self.listPermissionsForRole(ur.role_id);
-            defer {
-                for (role_perms) |p| p.free(self.allocator);
-                self.allocator.free(role_perms);
-            }
-            for (role_perms) |perm| {
-                var buf: [128]u8 = undefined;
-                const ma = try std.fmt.bufPrint(&buf, "{s}:{s}", .{ perm.module, perm.action });
-                try appendUniqueCode(&codes, allocator, ma);
-                if (std.mem.eql(u8, perm.action, "write")) {
-                    var rb: [128]u8 = undefined;
-                    const read_code = try std.fmt.bufPrint(&rb, "{s}:read", .{perm.module});
-                    try appendUniqueCode(&codes, allocator, read_code);
-                }
+        for (role_perms) |perm| {
+            var buf: [128]u8 = undefined;
+            const ma = try std.fmt.bufPrint(&buf, "{s}:{s}", .{ perm.module, perm.action });
+            try appendUniqueCode(&codes, allocator, ma);
+            if (std.mem.eql(u8, perm.action, "write")) {
+                var rb: [128]u8 = undefined;
+                const read_code = try std.fmt.bufPrint(&rb, "{s}:read", .{perm.module});
+                try appendUniqueCode(&codes, allocator, read_code);
             }
         }
 

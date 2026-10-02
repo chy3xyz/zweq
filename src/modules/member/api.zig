@@ -60,7 +60,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
-            return mw.authTenantId(ctx) orelse self.default_tenant_id;
+            return mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
@@ -123,7 +123,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
         fn listTags(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const account_id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
                 return;
@@ -151,7 +151,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const account_id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的账号 ID");
                 return;
@@ -181,7 +181,7 @@ pub fn MemberApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const req = ctx.bindJson(struct { account_id: i64, openid: []const u8, tag_id: i64 }) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;

@@ -205,6 +205,8 @@ pub const MenuService = struct {
         defer self.allocator.free(uri);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
+        // 低频管理面可接受：拉取菜单是管理员手动触发的低频操作；zwechat
+        // client 为同步阻塞实现且不支持 per-request 超时配置，不为其造线程池。
         wechat_log.beginCall();
         const resp = client.get(uri) catch {
             wechat_log.logApiError("menu.fetchMenu");

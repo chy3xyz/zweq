@@ -95,7 +95,7 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
-            return mw.authTenantId(ctx) orelse self.default_tenant_id;
+            return mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
         }
 
         fn listProducts(ctx: *http.Context) !void {
@@ -113,7 +113,11 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
             const keyword = ctx.queryStr("keyword", "");
             const status = ctx.queryInt(i64, "status", -1);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listProducts(params.page, params.page_size, tid, account_id, keyword, status) catch {
+            var result = self.svc.listProductsBudget(params.page, params.page_size, tid, account_id, keyword, status, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -274,7 +278,11 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const openid = ctx.queryParam("openid");
-            const rows = self.svc.listOrders(tid, account_id, openid) catch {
+            const rows = self.svc.listOrdersBudget(tid, account_id, openid, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };

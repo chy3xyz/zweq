@@ -23,6 +23,8 @@ pub const CouponError = error{
     NotStarted,
     Expired,
     AlreadyUsed,
+    /// 请求预算耗尽（zent PoolWaitTimeout/QueryTimeout，见 request_budget 闸门）。
+    RequestTimeout,
     Unexpected,
 };
 
@@ -48,7 +50,16 @@ pub const CouponService = struct {
 
     /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
     pub fn listCoupons(self: *CouponService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) CouponError!CouponListResult {
-        return self.store.listCoupons(page, page_size, tenant_id, account_id, keyword, status) catch error.Unexpected;
+        return self.listCouponsBudget(page, page_size, tenant_id, account_id, keyword, status, null);
+    }
+
+    /// listCoupons 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
+    /// 查询超预算 → zent QueryTimeout/PoolWaitTimeout → RequestTimeout。
+    pub fn listCouponsBudget(self: *CouponService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64, budget_ms: ?i64) CouponError!CouponListResult {
+        return self.store.listCouponsBudget(page, page_size, tenant_id, account_id, keyword, status, budget_ms) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => error.RequestTimeout,
+            else => error.Unexpected,
+        };
     }
 
     /// 上下架：1 上架 / 0 下架。
@@ -101,6 +112,26 @@ pub const CouponService = struct {
         if (std.mem.eql(u8, u.status, "used")) return error.AlreadyUsed;
         if (std.mem.eql(u8, u.status, "expired")) return error.Expired;
         self.store.setStatus(u.id, "used", self.now()) catch return error.Unexpected;
+    }
+
+    /// 下单核销窄出口（shop createOrder 专用）：校验券码归属/未用/门槛后标记
+    /// used，返回减免金额。全部读写走调用方事务的 `client`——核销标记必须与
+    /// 订单同事务提交/回滚（订单回滚时券不得被扣），故无法走本 service 的
+    /// 非事务方法；语义与原先 shop 内联直读 CouponStore 完全一致。
+    pub fn redeemOnOrder(self: *CouponService, client: anytype, code: []const u8, openid: []const u8, total: i64) CouponError!i64 {
+        const u_opt = self.store.getByCodeOn(client, code) catch return error.Unexpected;
+        const u = u_opt orelse return error.InvalidInput;
+        defer u.free(self.allocator);
+        if (!std.mem.eql(u8, u.openid, openid)) return error.InvalidInput;
+        if (!std.mem.eql(u8, u.status, "unused")) return error.InvalidInput;
+        const c_opt = self.store.getCouponOn(client, u.coupon_id) catch return error.Unexpected;
+        const c = c_opt orelse return error.InvalidInput;
+        defer c.free(self.allocator);
+        const coupon_min = std.fmt.parseInt(i64, c.min_amount, 10) catch return error.Unexpected;
+        const coupon_amount = std.fmt.parseInt(i64, c.amount, 10) catch return error.Unexpected;
+        if (coupon_min > 0 and total < coupon_min) return error.InvalidInput;
+        self.store.setStatusOn(client, u.id, "used", self.now()) catch return error.Unexpected;
+        return @min(coupon_amount, total);
     }
 
     pub fn listUserCoupons(self: *CouponService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: ?[]const u8, keyword: []const u8, status: []const u8) CouponError!CouponUserListResult {

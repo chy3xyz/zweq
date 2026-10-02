@@ -6,8 +6,10 @@
 //! description 硬编码为 public/jwt，request_body 无注入通道。因此各端点的
 //! 中文 summary 与 body 结构以本注释为权威契约，openapi.json 中可见的是
 //! 经 openapi_params 注入的 query/path 参数注解。
-//! 统一约定：粉丝 JWT 鉴权（Authorization: Bearer，handler 内 requireFanOpenid
-//! 校验，catalog 标记 public 仅为跳过平台 JWT 中间件）；分页响应统一为
+//! 统一约定：声明式鉴权——需身份/经济接口路由 meta `.auth = .jwt`（无/无效
+//! token 中间件 401，openid 从框架注入的 ctx 属性读，见 middleware/fan_auth.zig
+//! 薄壳）；投票/秒杀活动浏览为 `.auth = .optional`（公开列表但可个性化，
+//! 无 token 匿名放行）。分页响应统一为
 //! `{code:0, msg:"ok", data:{list, total, page, pageSize}}`（ruoyi 信封）。
 //!
 //!  1. POST /api/v1/app/checkin —— 执行每日签到
@@ -111,20 +113,24 @@ pub fn FanSceneApi(
         pub const nest: []const []const u8 = &.{};
         pub const State = Self;
 
+        // 声明式鉴权（zigmodu 0.36 `RouteMeta.auth`）：
+        // - `.jwt`：需身份/经济接口，无/无效 token 由中间件 401；
+        // - `.optional`：公开列表但可个性化（投票/秒杀活动浏览），token
+        //   合法时框架注入身份，无/无效 token 按匿名放行，永不 401。
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .POST, .path = "app/checkin", .handler = http.wrapHandler(Self, doCheckin), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/checkin/records", .handler = http.wrapHandler(Self, checkinRecords), .meta = .{ .auth = .public, .openapi_params = &q_acct_page100 } },
-            .{ .method = .GET, .path = "app/votes", .handler = http.wrapHandler(Self, listVotes), .meta = .{ .auth = .public, .openapi_params = &q_acct_page50 } },
-            .{ .method = .GET, .path = "app/votes/{id}", .handler = http.wrapHandler(Self, voteDetail), .meta = .{ .auth = .public } },
-            .{ .method = .POST, .path = "app/votes/{id}/ballot", .handler = http.wrapHandler(Self, voteBallot), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/seckill/activities", .handler = http.wrapHandler(Self, listSeckill), .meta = .{ .auth = .public, .openapi_params = &q_acct_page50 } },
-            .{ .method = .GET, .path = "app/seckill/orders", .handler = http.wrapHandler(Self, listSeckillOrders), .meta = .{ .auth = .public, .openapi_params = &q_acct_page50 } },
-            .{ .method = .POST, .path = "app/seckill/activities/{id}/rush", .handler = http.wrapHandler(Self, seckillRush), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/member-card", .handler = http.wrapHandler(Self, memberCardView), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
-            .{ .method = .POST, .path = "app/member-card/open", .handler = http.wrapHandler(Self, memberCardOpen), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/distribution", .handler = http.wrapHandler(Self, distributionView), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
-            .{ .method = .POST, .path = "app/distribution/join", .handler = http.wrapHandler(Self, distributionJoin), .meta = .{ .auth = .public } },
-            .{ .method = .POST, .path = "app/distribution/withdraw", .handler = http.wrapHandler(Self, distributionWithdraw), .meta = .{ .auth = .public } },
+            .{ .method = .POST, .path = "app/checkin", .handler = http.wrapHandler(Self, doCheckin), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "app/checkin/records", .handler = http.wrapHandler(Self, checkinRecords), .meta = .{ .auth = .jwt, .openapi_params = &q_acct_page100 } },
+            .{ .method = .GET, .path = "app/votes", .handler = http.wrapHandler(Self, listVotes), .meta = .{ .auth = .optional, .openapi_params = &q_acct_page50 } },
+            .{ .method = .GET, .path = "app/votes/{id}", .handler = http.wrapHandler(Self, voteDetail), .meta = .{ .auth = .optional } },
+            .{ .method = .POST, .path = "app/votes/{id}/ballot", .handler = http.wrapHandler(Self, voteBallot), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "app/seckill/activities", .handler = http.wrapHandler(Self, listSeckill), .meta = .{ .auth = .optional, .openapi_params = &q_acct_page50 } },
+            .{ .method = .GET, .path = "app/seckill/orders", .handler = http.wrapHandler(Self, listSeckillOrders), .meta = .{ .auth = .jwt, .openapi_params = &q_acct_page50 } },
+            .{ .method = .POST, .path = "app/seckill/activities/{id}/rush", .handler = http.wrapHandler(Self, seckillRush), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "app/member-card", .handler = http.wrapHandler(Self, memberCardView), .meta = .{ .auth = .jwt, .openapi_params = &q_acct } },
+            .{ .method = .POST, .path = "app/member-card/open", .handler = http.wrapHandler(Self, memberCardOpen), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "app/distribution", .handler = http.wrapHandler(Self, distributionView), .meta = .{ .auth = .jwt, .openapi_params = &q_acct } },
+            .{ .method = .POST, .path = "app/distribution/join", .handler = http.wrapHandler(Self, distributionJoin), .meta = .{ .auth = .jwt } },
+            .{ .method = .POST, .path = "app/distribution/withdraw", .handler = http.wrapHandler(Self, distributionWithdraw), .meta = .{ .auth = .jwt } },
         };
 
         pub fn init(
@@ -156,11 +162,10 @@ pub fn FanSceneApi(
 
         fn doCheckin(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(AccountReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -179,11 +184,10 @@ pub fn FanSceneApi(
 
         fn checkinRecords(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -209,10 +213,6 @@ pub fn FanSceneApi(
 
         fn listVotes(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 50 });
@@ -226,10 +226,6 @@ pub fn FanSceneApi(
 
         fn voteDetail(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效 ID");
                 return;
@@ -259,11 +255,10 @@ pub fn FanSceneApi(
 
         fn voteBallot(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效 ID");
@@ -288,10 +283,6 @@ pub fn FanSceneApi(
 
         fn listSeckill(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 50 });
@@ -306,11 +297,10 @@ pub fn FanSceneApi(
 
         fn listSeckillOrders(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 50 });
@@ -324,11 +314,10 @@ pub fn FanSceneApi(
 
         fn seckillRush(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效 ID");
@@ -347,11 +336,10 @@ pub fn FanSceneApi(
 
         fn memberCardView(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const view_opt = self.member_card_svc.view(tid, account_id, openid) catch {
@@ -375,11 +363,10 @@ pub fn FanSceneApi(
 
         fn memberCardOpen(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(AccountReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -394,11 +381,10 @@ pub fn FanSceneApi(
 
         fn distributionView(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const row_opt = self.distribution_svc.getDistributor(tid, account_id, openid) catch {
@@ -420,11 +406,10 @@ pub fn FanSceneApi(
 
         fn distributionJoin(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(JoinReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -445,11 +430,10 @@ pub fn FanSceneApi(
 
         fn distributionWithdraw(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid);
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(WithdrawReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");

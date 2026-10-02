@@ -100,7 +100,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             const filename = ctx.header("X-File-Name") orelse "upload.bin";
             const mime = ctx.header("Content-Type") orelse "application/octet-stream";
 
-            const tenant_id = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tenant_id = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const group_id = blk: {
                 const raw = ctx.header("X-Group-Id") orelse "0";
                 break :blk std.fmt.parseInt(i64, raw, 10) catch 0;
@@ -134,7 +134,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             const actor = (try authUser(ctx, self)) orelse return;
 
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            const current_tenant = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const current_tenant = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const owner: ?i64 = if (actor.admin) null else actor.id;
             const tenant_filter: ?i64 = if (actor.admin) blk: {
                 const tid = ctx.queryInt(i64, "tenant_id", 0);
@@ -177,7 +177,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
             };
             defer loaded.free(self.svc.allocator);
 
-            const current_tenant = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const current_tenant = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             if (!actor.admin and (loaded.row.uploader_id != actor.id or loaded.row.tenant_id != current_tenant)) {
                 try ctx.sendErrorResponse(403, 403, "无权访问该文件");
                 return;
@@ -208,7 +208,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             defer row.free(self.svc.allocator);
-            const current_tenant = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const current_tenant = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             if (!actor.admin and (row.uploader_id != actor.id or row.tenant_id != current_tenant)) {
                 try ctx.sendErrorResponse(403, 403, "无权删除该文件");
                 return;
@@ -245,7 +245,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
                 return;
             }
             const sort = if (parsed.value.sort) |s| @as(i64, @intFromFloat(s)) else 0;
-            const tenant_id = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tenant_id = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const id = self.svc.createGroup(name, "image", sort, tenant_id) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
@@ -256,7 +256,7 @@ pub fn FileApi(comptime Service: type, comptime UserService: type) type {
         fn listGroups(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             _ = try authUser(ctx, self) orelse return;
-            const tenant_id = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tenant_id = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const rows = self.svc.listGroups(tenant_id) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;

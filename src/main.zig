@@ -28,6 +28,7 @@ const mw_rate = @import("middleware/rate_limit.zig");
 const mw = @import("middleware/auth.zig");
 const catalog_permissions = @import("middleware/catalog_permissions.zig");
 const envelope_mw = @import("middleware/envelope.zig");
+const request_budget = @import("middleware/request_budget.zig");
 const permission_seed = @import("modules/permission/seed.zig");
 const mail = @import("services/mail.zig");
 const cache_svc = @import("services/cache.zig");
@@ -65,6 +66,13 @@ const distribution = @import("modules/distribution/root.zig");
 const shop = @import("modules/shop/root.zig");
 const menu = @import("modules/menu/root.zig");
 const points = @import("modules/points/root.zig");
+const panic_hook = @import("middleware/panic_hook.zig");
+
+/// 请求上下文感知的 panic 钩子：panic 前先把当事请求(METHOD /path)打到
+/// stderr，再交回默认 panic。语义同 zigmodu api/PanicHook.zig，因上游该
+/// 文件引用了已移除的 std.posix.write（lazy analysis 漏网）而本地复刻，
+/// 见 src/middleware/panic_hook.zig。
+pub const panic = panic_hook.hook;
 
 /// C 端(fan)经济接口的 per-openid 限流阈值表（挂载点见下方 fan_limited scope）。
 /// 微信出口 IP 集中，per-IP 维度不适用，故按 fan JWT 的 openid(sub) 计数。
@@ -137,16 +145,24 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
     const cfg = config_mod.Config.fromEnv(init.environ_map);
-    // 生产(PostgreSQL)下 JWT 密钥与 CORS 白名单都必须显式配置：任一沿用
-    // 默认值(dev secret / "*")都是不可接受的开放面，fail-closed 拒绝
-    // 启动，并逐项列出缺失的环境变量。
-    if (std.mem.eql(u8, cfg.db_driver, "postgres")) {
-        const missing_jwt = !cfg.jwt_secret_explicit;
-        const missing_cors = !cfg.cors_origins_explicit;
-        if (missing_jwt or missing_cors) {
-            if (missing_jwt) std.log.err("缺少环境变量 ZWEQ_JWT_SECRET：生产环境(PostgreSQL)必须显式设置 JWT 密钥，拒绝以默认 dev 密钥启动。", .{});
-            if (missing_cors) std.log.err("缺少环境变量 ZWEQ_CORS_ORIGINS：生产环境(PostgreSQL)必须显式设置 CORS 白名单，拒绝以默认 \"*\"(任意来源)启动。", .{});
-            return error.MissingProductionConfig;
+    // 生产（PostgreSQL 或 ZWEQ_ENV=production）fail-closed：JWT 密钥与
+    // CORS 白名单都必须显式配置，且密钥不能仍是默认占位值或过短(<16)——
+    // 可猜测的签名密钥等于认证旁路。任一不满足即拒绝启动；逐项诊断走
+    // zigmodu Preflight（报告见日志）。
+    const prod_like = std.mem.eql(u8, cfg.db_driver, "postgres") or
+        std.mem.eql(u8, cfg.zweq_env, "production");
+    if (prod_like) {
+        var env_ctx = zigmodu.Preflight.EnvCheck.fromMap(init.environ_map, &.{ "ZWEQ_JWT_SECRET", "ZWEQ_CORS_ORIGINS" });
+        var secret_ctx = zigmodu.Preflight.SecretCheck{ .secret = cfg.jwt_secret, .min_len = 16 };
+        var report = zigmodu.Preflight.run(allocator, &.{
+            zigmodu.Preflight.envCheck(&env_ctx),
+            zigmodu.Preflight.secretCheck(&secret_ctx),
+        });
+        defer report.deinit();
+        report.log();
+        if (!report.ok()) {
+            std.log.err("生产环境配置校验失败：ZWEQ_JWT_SECRET / ZWEQ_CORS_ORIGINS 未显式设置，或 JWT 密钥为默认占位值/长度不足 16，拒绝启动。", .{});
+            return error.PreflightFailed;
         }
     }
     std.log.info("zweq starting (db={s}, port={d})", .{ cfg.db_driver, cfg.http_port });
@@ -197,6 +213,15 @@ pub fn main(init: std.process.Init) !void {
         .jwt_secret = cfg.jwt_secret,
         .token_expiry_seconds = cfg.token_expiry_seconds,
     });
+    // JWT kid 轮换（ZWEQ_JWT_SECRET_PREVIOUS）：主密钥进环做签发键，旧密钥
+    // 只验不签；无 kid 的旧 token 由模块回退 jwt_secret 验证，保持可用。
+    var jwt_ring = try mw.buildJwtKeyring(allocator, cfg.jwt_secret, cfg.jwt_secret_previous);
+    defer jwt_ring.deinit();
+    sec.module.setKeyring(&jwt_ring);
+    std.log.info("[jwt] keyring ready: {d} key(s), signing kid={s}", .{
+        jwt_ring.count(),
+        sec.module.signingKid() orelse "-",
+    });
     var mailer = mail.Mailer.init(
         allocator,
         io,
@@ -209,7 +234,7 @@ pub fn main(init: std.process.Init) !void {
         cfg.mail_console,
     );
     defer mailer.deinit();
-    var cache = cache_svc.CacheService.init(allocator, cfg.cache_max_entries, cfg.cache_ttl_seconds);
+    var cache = cache_svc.CacheService.init(allocator, io, cfg.cache_max_entries, cfg.cache_ttl_seconds);
     defer cache.deinit();
 
     var user_svc = user.service.UserService.init(
@@ -220,6 +245,7 @@ pub fn main(init: std.process.Init) !void {
         cfg.verification_token_expiration_seconds,
     );
     var task_store = task.persistence.TaskStore.init(allocator, store_env.client);
+    var cron_lock_store = task.persistence.CronLockStore.init(allocator, store_env.client);
     var task_svc = task.service.TaskService.init(&task_store, io, cfg.task_max_attempts);
     var notify_store = notify.persistence.NotificationStore.init(allocator, store_env.client);
     var notify_svc = notify.service.NotificationService.init(allocator, io, &notify_store);
@@ -415,9 +441,14 @@ pub fn main(init: std.process.Init) !void {
             .ctx = &cleanup_ctx,
         },
     };
-    var scheduled_runner = scheduled.ScheduledRunner{ .jobs = &scheduled_jobs };
+    var scheduled_runner = scheduled.ScheduledRunner{
+        .jobs = &scheduled_jobs,
+        // 多副本互斥:cron job 走 cron_locks 表锁（可续租约），未注入时单进程直跑。
+        .lock_store = &cron_lock_store,
+    };
 
-    const handler_registry = jobs.handlers(&mailer);
+    var job_webhook_transport: @import("http/webhook_transport.zig").WebhookTransport = .init(io);
+    const handler_registry = jobs.handlers(&mailer, &job_webhook_transport);
     var dispatcher = task.service.Dispatcher.init(
         allocator,
         io,
@@ -495,18 +526,19 @@ pub fn main(init: std.process.Init) !void {
     var shop_store = shop.persistence.ShopStore.init(allocator, store_env.client);
     var shop_svc = shop.service.ShopService.init(allocator, io, &shop_store);
     shop_svc.dist_svc = &distribution_svc; // 订单支付 → 分销三级分佣
-    shop_svc.coupon_store = &coupon_store; // 下单优惠券校验/核销
     shop_svc.member_svc = &member_card_svc; // 支付 → 会员积分累计
-    shop_svc.coupon_svc = &coupon_svc; // 邀请达标发券
+    // 下单优惠券核销走 coupon_svc.redeemOnOrder（service 事务内窄出口，见
+    // docs/ARCHITECTURE.md「模块依赖与边界」）；邀请达标发券：
+    shop_svc.coupon_svc = &coupon_svc;
     shop_svc.payment_svc = &payment_svc; // 余额支付扣钱包
     shop_svc.fan_store = &fan_store; // openid → fan_id
+    shop_svc.task_svc = &task_svc; // webhook 投递经持久任务队列(webhook.deliver)
     // 事件驱动：订单支付 → 分销分佣 + 会员积分（解耦消费，替代同步钩子）。
     {
         const OrderPaidBus = shop.service.OrderPaidBus;
         var order_paid_bus = OrderPaidBus.init(allocator);
         const OrderPaidCtx = struct {
             var shop_ref: *shop.service.ShopService = undefined;
-            var webhook_transport: @import("http/webhook_transport.zig").WebhookTransport = undefined;
             fn onPaid(e: shop.service.OrderPaidEvent) void {
                 const s = shop_ref;
                 const o_opt = s.getOrder(e.order_id) catch return;
@@ -529,13 +561,11 @@ pub fn main(init: std.process.Init) !void {
                         std.log.err("[member_card] order.paid 积分累计失败 order_id={d} err={s}", .{ e.order_id, @errorName(err) });
                     };
                 }
-                // Webhook 推送（事件开放出口）。
-                s.webhook_transport = &webhook_transport;
+                // Webhook 推送（事件开放出口；经 task_svc 入队 webhook.deliver）。
                 s.dispatchWebhooks("order.paid", e.tenant_id, e.account_id, e.order_id);
             }
         };
         OrderPaidCtx.shop_ref = &shop_svc;
-        OrderPaidCtx.webhook_transport = @import("http/webhook_transport.zig").WebhookTransport.init(io);
         order_paid_bus.subscribe(OrderPaidCtx.onPaid) catch |err| {
             std.log.err("[shop] order_paid_bus 订阅失败,支付后分佣/积分/webhook 均不会触发: {s}", .{@errorName(err)});
         };
@@ -591,8 +621,16 @@ pub fn main(init: std.process.Init) !void {
         .port = cfg.http_port,
         .name = "zweq",
         .max_body_size = cfg.upload_max_bytes + 64 * 1024,
+        // 连接背压：超限连接立即 503（.unavailable），防 accept 洪泛。
+        .max_connections = cfg.http_max_connections,
+        .over_limit_response = .unavailable,
+        // 单请求总预算：connFiber 据此武装 ctx.deadline_ms（0 = 无界），
+        // 经 request_budget 闸门 + db.zig 的桥（opt-in）传进 zent 存储层。
+        .request_timeout_ms = cfg.http_request_timeout_ms,
     });
     defer server.deinit();
+    // 传输层错误（400/408/413/431/503，路由前由框架写回）统一成 ruoyi 信封。
+    zigmodu.http.setTransportErrorRenderer(envelope_mw.ruoyiTransportError);
 
     const origins = try parseCorsOrigins(allocator, cfg.cors_origins);
     defer allocator.free(origins);
@@ -615,11 +653,13 @@ pub fn main(init: std.process.Init) !void {
     };
     PoolStatsSource.env = &store_env;
     metrics.pool_stats_fn = PoolStatsSource.snapshot;
+    try server.addMiddleware(panic_hook.recordRequestContext());
     try server.addMiddleware(real_ip_mod.realIp());
     try server.addMiddleware(request_log_mod.requestLog());
     try server.addMiddleware(metrics.middleware());
     try server.addMiddleware(sec_headers.securityHeaders());
     try server.addMiddleware(envelope_mw.ruoyiEnvelope());
+    try server.addMiddleware(request_budget.budgetGate(cfg.request_budget_enabled));
     try server.addMiddleware(access_log.middleware());
     try server.addMiddleware(zigmodu.http.http_middleware.cors(.{ .allow_origins = origins }));
     try server.addMiddleware(license_mw.licenseGate(&cloud_svc));

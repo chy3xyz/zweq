@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "payment",
     .description = "recharge orders, member wallet, withdraws",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "setting", "user" },
     .is_internal = false,
 };
 

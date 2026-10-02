@@ -5,6 +5,7 @@ const zent = @import("zent");
 const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
+const db_mod = @import("../../db.zig");
 
 const graph = zent.codegen.graph.buildGraph(&.{ model.MemberCardLevel, model.MemberAccount });
 pub const infos = graph.types;
@@ -282,8 +283,14 @@ pub const MemberCardStore = struct {
     }
 
     pub fn listAccounts(self: *MemberCardStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8) !MemberAccountListResult {
+        return self.listAccountsBudget(page, page_size, tenant_id, account_id, keyword, null);
+    }
+
+    /// listAccounts 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）。
+    pub fn listAccountsBudget(self: *MemberCardStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, budget_ms: ?i64) !MemberAccountListResult {
         var q = self.client.member_account.Query();
         defer q.deinit();
+        db_mod.applyDeadline(&q, budget_ms);
         const preds = self.client.member_account.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});

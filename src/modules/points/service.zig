@@ -18,6 +18,8 @@ pub const PointsError = error{
     FanNotFound,
     InsufficientPoints,
     NotFound,
+    /// 请求预算耗尽（zent PoolWaitTimeout/QueryTimeout，见 request_budget 闸门）。
+    RequestTimeout,
     Unexpected,
 };
 
@@ -50,7 +52,16 @@ pub const PointsService = struct {
 
     /// `status` 为 -1 表示不过滤；0 下架 / 1 上架（C 端固定传 1）。
     pub fn listProducts(self: *PointsService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64) PointsError!ProductListResult {
-        return self.store.listProducts(page, page_size, tenant_id, account_id, keyword, status) catch error.Unexpected;
+        return self.listProductsBudget(page, page_size, tenant_id, account_id, keyword, status, null);
+    }
+
+    /// listProducts 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
+    /// 查询超预算 → zent QueryTimeout/PoolWaitTimeout → RequestTimeout。
+    pub fn listProductsBudget(self: *PointsService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, status: i64, budget_ms: ?i64) PointsError!ProductListResult {
+        return self.store.listProductsBudget(page, page_size, tenant_id, account_id, keyword, status, budget_ms) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => error.RequestTimeout,
+            else => error.Unexpected,
+        };
     }
 
     pub fn updateProduct(self: *PointsService, id: i64, name: []const u8, points: i64, stock: i64, status: i64, image: []const u8, detail: []const u8) PointsError!void {
@@ -125,6 +136,14 @@ pub const PointsService = struct {
 
     /// 查询兑换记录（openid 可空 = 全部）。
     pub fn listOrders(self: *PointsService, tenant_id: i64, account_id: i64, openid: ?[]const u8) PointsError![]PointsOrderRow {
-        return self.store.listOrders(tenant_id, account_id, openid) catch error.Unexpected;
+        return self.listOrdersBudget(tenant_id, account_id, openid, null);
+    }
+
+    /// listOrders 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）。
+    pub fn listOrdersBudget(self: *PointsService, tenant_id: i64, account_id: i64, openid: ?[]const u8, budget_ms: ?i64) PointsError![]PointsOrderRow {
+        return self.store.listOrdersBudget(tenant_id, account_id, openid, budget_ms) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => error.RequestTimeout,
+            else => error.Unexpected,
+        };
     }
 };

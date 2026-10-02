@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "account",
     .description = "site account management (wechat/wxapp/app) and WeChat credentials",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "user" },
     .is_internal = false,
 };
 

@@ -42,6 +42,93 @@ zent's comptime branch quota), then merged into one `Client` — a single type-s
 query client shared by every store. `src/db.zig` owns the driver (SQLite /
 Postgres) and runs automatic migrations at startup.
 
+## Module dependencies & boundaries (模块依赖与边界)
+
+**Dependency declarations are real and enforced.** Each `module.zig`'s
+`.dependencies` must equal the static cross-module `@import` graph, in both
+directions — importing a sibling module without declaring it, or declaring one
+without any import backing it, fails `zig build lint-deps`
+(`scripts/check_module_deps.py`, mirrored in CI's lint job). This matters
+because zigmodu's startup validation (missing-dependency / cycle detection)
+only sees the declared graph: while 28 of 31 modules declared `&.{}` the
+validator was toothless and a real dependency cycle would have booted fine.
+
+**Real graph** (2026-09, 31 modules / 107 edges, source of truth = the lint
+script):
+
+```
+audit        → (leaf, everyone else imports it for the admin trail)
+user         → audit
+message      → account ai audit member module rule setting user   # callback engine hub
+scene apps   → message module user audit                          # checkin / coupon / vote /
+                                                                  # seckill / member_card /
+                                                                  # lucky_draw / distribution
+material / member / menu → account user audit
+payment      → setting user audit
+points       → member user audit
+ai           → task tenant notify user audit
+auth         → task notify mail_template user audit
+cloud        → module user audit
+system       → task file notify tenant user
+shop         → coupon distribution member member_card payment setting task user audit
+app_bff      → account checkin coupon distribution lucky_draw member member_card
+               module payment points seckill user vote            # BFF fan-out, no own tables
+```
+
+`user` + `audit` are the cross-cutting pair injected into nearly every API
+layer (permission checks + audit trail); the interesting edges are at the
+service layer.
+
+**Boundary rule: 不互扒 persistence.** A business module must not read or
+write a sibling module's persistence directly — go through the sibling's
+`service.zig` public methods. The only exception is **transaction
+consistency**: when a write must commit/rollback with the caller's
+transaction, it goes through a narrow service method that accepts the
+caller's tx client and performs the store calls inside the sibling module
+(exemplar: `CouponService.redeemOnOrder`, used by shop's `createOrder` — the
+coupon's `used` mark must die with the order if the order tx rolls back).
+Even then the caller holds a *service* handle, never the sibling's bare
+Store type.
+
+Known legacy exceptions (kept, documented, not to be extended):
+
+- `shop` service holds `member.persistence.FanStore` (openid → fan_id before
+  balance pay / balance recharge). The assembly contract in `main.zig`
+  injects the store pointer, not `MemberService`, and the two lookups are
+  read-only single queries — converting them requires touching `main.zig`,
+  so they stay direct with the dependency declared.
+- `shop` API layer (`api.zig` / `handlers/`) takes `FanStore` /
+  `SettingStore` in its constructor signature — **still kept** (re-verified
+  2026-09-28): the `main.zig` assembly injects the raw store pointers
+  (`&fan_store` / `&setting_store`), not `MemberService` / `SettingService`,
+  and converging means changing that assembly signature (`main.zig` out of
+  scope for the cleanup round). Actual direct reads are only three sites:
+  `handlers/content.zig` `cLogin` (`fan_store.getByOpenid` + login-time
+  `upsert`) and `handlers/trade.zig` `orderPayParams` (`settings.get` for
+  the wechat-pay config keys). Not to be extended in the meantime.
+
+New cross-module reads/writes must go through the sibling service API (or a
+tx-client narrow method on it); new bare-store injections are not allowed.
+
+**Decision record: 执行平面维持自研 (task queue / scheduler stay
+self-hosted, not zigmodu's runtime mailbox).** Background execution uses the
+durable `Task`-table queue (`src/modules/task` + `src/scheduled.zig`), not
+zigmodu's in-process mailbox/actor delivery:
+
+1. **Delivery semantics are opposite.** Our workload is a DB-persisted
+   at-least-once queue with backoff retries and claim fencing
+   (`claim_owner` / `claimed_until`, `requeueStale` only recovers expired
+   leases) — built for crash recovery and multi-replica safety. zigmodu's
+   mailbox is in-memory at-most-once delivery; adopting it would trade
+   durability for latency we don't need at this layer.
+2. **SQLite is single-connection.** zent's SQLite driver serializes on one
+   connection, so all background DB work must stay on ONE thread — the task
+   dispatcher's loop, which is where `ScheduledRunner` lives (this rationale
+   was born as the header comment of `src/scheduled.zig` and is promoted to
+   this document). A zigmodu-runtime execution plane would scatter DB work
+   across worker pools by design. CPU-only housekeeping may use
+   `zigmodu.cron.Scheduler`; anything touching the DB may not.
+
 ## Multi-tenancy
 
 - **Tenant = site**, identified by a physical `app_id` column on every tenant-scoped

@@ -10,6 +10,8 @@ const std = @import("std");
 const zigmodu = @import("zigmodu");
 const http = zigmodu.http;
 
+/// Accepted form: **a pointer** to anything with `isLicensed() bool` —
+/// in practice `*cloud.service.CloudService`（main.zig 传 `&cloud_svc`）。
 pub fn licenseGuard(cloud_svc: anytype) http.Middleware {
     const S = struct {
         var stored_svc: @TypeOf(cloud_svc) = undefined;
@@ -27,6 +29,7 @@ pub fn licenseGuard(cloud_svc: anytype) http.Middleware {
 }
 
 /// Server-level gate：仅锁「消费能力」路径前缀。
+/// Accepted form: 同 `licenseGuard` —— `*CloudService`（带 `isLicensed() bool` 的指针）。
 pub fn licenseGate(cloud_svc: anytype) http.Middleware {
     const S = struct {
         var stored_svc: @TypeOf(cloud_svc) = undefined;

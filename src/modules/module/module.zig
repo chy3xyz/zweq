@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "module",
     .description = "built-in module registry and per-account bindings",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "user" },
     .is_internal = false,
 };
 

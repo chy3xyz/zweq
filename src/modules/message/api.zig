@@ -157,7 +157,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
         fn listLogs(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
 
             const account_raw = ctx.queryParam("account_id") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");
@@ -168,7 +168,11 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listLogs(params.page, params.page_size, tid, account_id) catch {
+            var result = self.svc.listLogsBudget(params.page, params.page_size, tid, account_id, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -182,7 +186,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
 
             const req = ctx.bindJson(CustomerTextReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -209,7 +213,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
 
             const req = ctx.bindJson(SendTemplateReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -253,7 +257,7 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
 
             const req = ctx.bindJson(BroadcastTextReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");

@@ -1,6 +1,12 @@
 //! 出站 URL 白名单校验（OWASP API4 SSRF 基线）。
-//! 服务端会主动请求管理员配置的 URL（AI provider endpoint / shop webhook 推送地址 /
-//! zweq-cloud 市场包 download_url），写入前统一经本模块拦截非 http(s) 与字面内网地址。
+//! 服务端会主动请求管理员配置的 URL，写入口与服务端拉取前统一经本模块拦截
+//! 非 http(s) 与字面内网地址。当前接入点：
+//! - AI provider endpoint（ai/api.zig 创建/更新 provider）；
+//! - shop webhook 推送地址（shop/handlers/content.zig 创建 webhook）；
+//! - 云端市场包 download_url（cloud/service.zig publishPackage 写入 +
+//!   installPackage 服务端拉取）。
+//! 注：cloud syncMarketRemote 的 download_url 由管理员配置的远端 base url 派生
+//! （内网部署合法），不经本模块。
 
 const std = @import("std");
 

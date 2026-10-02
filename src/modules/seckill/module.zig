@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "seckill",
     .description = "秒杀（限时低价 + 限量抢购）",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "message", "user" },
     .is_internal = false,
 };
 

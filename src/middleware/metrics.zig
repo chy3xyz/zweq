@@ -1,5 +1,6 @@
-//! Prometheus HTTP metrics — request counter, status buckets, latency and
-//! uptime, collected by zigmodu's HttpMetricsCollector middleware, plus
+//! Prometheus HTTP metrics — request counter, status buckets, latency
+//! (avg/max gauge + duration histogram) and uptime, collected by our
+//! middleware on top of zigmodu's HttpMetricsCollector, plus
 //! dispatcher / rate-limit / DB-pool counters bound from main.
 
 const std = @import("std");
@@ -9,8 +10,97 @@ const task_service = @import("../modules/task/service.zig");
 const db_mod = @import("../db.zig");
 const rate_limit = @import("rate_limit.zig");
 
+/// 请求耗时直方图桶边界（秒，Prometheus 惯例）。le 标签用 comptime 字符串
+/// 常量导出，保证格式稳定（`0.1` 而非 `0.100000`）。
+const duration_bucket_bounds = [_]f64{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 };
+const duration_bucket_labels = [_][]const u8{ "0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2.5", "5", "10" };
+
+/// 仅含算术运算的微小临界区互斥锁（镜像 zigmodu core/SpinLock 的形制）：
+/// 自旋短暂后让出时间片，不烧核。observe/snapshot 只累加计数，临界区
+/// 不会阻塞，无需 futex 版的 std.Io.Mutex（其 lock/unlock 要传 Io，这里
+/// 拿不到）。
+const HistLock = struct {
+    state: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn lock(self: *HistLock) void {
+        var spins: u32 = 0;
+        while (self.state.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+            spins += 1;
+            if (spins < 32) {
+                std.atomic.spinLoopHint();
+            } else {
+                std.Thread.yield() catch {};
+            }
+        }
+    }
+
+    fn unlock(self: *HistLock) void {
+        self.state.store(false, .release);
+    }
+};
+
+/// 进程内请求耗时直方图。zigmodu 的 HttpMetricsCollector 只保留
+/// total/min/max，拿不到分桶所需的历史样本，所以由我们自己的
+/// middleware 同点双写（见 metricsMiddleware）；导出时照 Prometheus
+/// 惯例输出 `_bucket{le=...}` / `_sum` / `_count`，与上方 avg/max
+/// gauge 互补。
+pub const DurationHistogram = struct {
+    /// counts[i] = 耗时 <= duration_bucket_bounds[i] 的请求数（累积）。
+    counts: [duration_bucket_bounds.len]u64 = @splat(0),
+    sum_seconds: f64 = 0,
+    count: u64 = 0,
+    mutex: HistLock = .{},
+
+    pub fn observe(self: *DurationHistogram, duration_seconds: f64) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.count += 1;
+        self.sum_seconds += duration_seconds;
+        for (&self.counts, duration_bucket_bounds) |*c, bound| {
+            if (duration_seconds <= bound) c.* += 1;
+        }
+    }
+
+    pub const Snapshot = struct {
+        counts: [duration_bucket_bounds.len]u64,
+        sum_seconds: f64,
+        count: u64,
+    };
+
+    pub fn snapshot(self: *DurationHistogram) Snapshot {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return .{ .counts = self.counts, .sum_seconds = self.sum_seconds, .count = self.count };
+    }
+};
+
+/// 与 zigmodu httpMetricsMiddleware 同构，但耗时同时双写直方图。不用
+/// zigmodu 版中间件的原因是它的 elapsed 是整秒截断的（i64 秒差），
+/// 亚秒桶全挤进 le=0.005 一档；这里用 monotonicNow() 纳秒自己算，
+/// begin/end 仍写 HttpMetricsCollector（avg/max gauge、状态分布不变）。
+fn metricsMiddleware(ctx: *http.Context, next: http.HandlerFn, user_data: ?*anyopaque) anyerror!void {
+    const self: *Metrics = @ptrCast(@alignCast(user_data orelse return error.InternalError));
+    const start_ns = zigmodu.time.monotonicNow();
+    self.collector.beginRequest();
+    next(ctx) catch |err| {
+        const elapsed = elapsedSeconds(start_ns);
+        self.collector.endRequest(500, elapsed);
+        self.hist.observe(elapsed);
+        return err;
+    };
+    const status: u16 = if (ctx.responded) ctx.status_code else 200;
+    const elapsed = elapsedSeconds(start_ns);
+    self.collector.endRequest(status, elapsed);
+    self.hist.observe(elapsed);
+}
+
+fn elapsedSeconds(start_ns: i64) f64 {
+    return @as(f64, @floatFromInt(zigmodu.time.monotonicNow() - start_ns)) / std.time.ns_per_s;
+}
+
 pub const Metrics = struct {
     collector: http.HttpMetricsCollector,
+    hist: DurationHistogram = .{},
     started_at: i64,
     /// Dispatcher 计数器来源(可选,main 里绑定);不持有所有权。
     dispatcher: ?*task_service.Dispatcher = null,
@@ -29,8 +119,8 @@ pub const Metrics = struct {
 
     pub fn middleware(self: *Metrics) http.Middleware {
         return .{
-            .func = http.httpMetricsMiddleware(&self.collector),
-            .user_data = &self.collector,
+            .func = metricsMiddleware,
+            .user_data = self,
         };
     }
 
@@ -59,6 +149,16 @@ pub const Metrics = struct {
         try buf.print(allocator, "# TYPE zweq_http_request_duration_seconds gauge\n", .{});
         try buf.print(allocator, "zweq_http_request_duration_seconds_avg {d:.6}\n", .{c.avgDuration()});
         try buf.print(allocator, "zweq_http_request_duration_seconds_max {d:.6}\n", .{if (snap.max_duration_seconds == std.math.floatMax(f64)) 0 else snap.max_duration_seconds});
+        // 请求耗时直方图（counter 语义：进程内单调累积的样本计数）。
+        const hs = self.hist.snapshot();
+        try buf.print(allocator, "# HELP zweq_http_request_duration_seconds Request latency histogram.\n", .{});
+        try buf.print(allocator, "# TYPE zweq_http_request_duration_seconds histogram\n", .{});
+        inline for (duration_bucket_labels, 0..) |le, i| {
+            try buf.print(allocator, "zweq_http_request_duration_seconds_bucket{{le=\"{s}\"}} {d}\n", .{ le, hs.counts[i] });
+        }
+        try buf.print(allocator, "zweq_http_request_duration_seconds_bucket{{le=\"+Inf\"}} {d}\n", .{hs.count});
+        try buf.print(allocator, "zweq_http_request_duration_seconds_sum {d:.6}\n", .{hs.sum_seconds});
+        try buf.print(allocator, "zweq_http_request_duration_seconds_count {d}\n", .{hs.count});
         try buf.print(allocator, "# HELP zweq_uptime_seconds Process uptime.\n", .{});
         try buf.print(allocator, "# TYPE zweq_uptime_seconds gauge\n", .{});
         try buf.print(allocator, "zweq_uptime_seconds {d}\n", .{now - self.started_at});
@@ -101,3 +201,25 @@ pub const Metrics = struct {
         return buf.toOwnedSlice(allocator);
     }
 };
+
+// ─────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────
+
+test "DurationHistogram buckets are cumulative" {
+    var h = DurationHistogram{};
+    h.observe(0.003); // le=0.005
+    h.observe(0.02); // le=0.025
+    h.observe(0.4); // le=0.5
+    h.observe(30); // 超出最大桶,只计入 +Inf(count)
+
+    const snap = h.snapshot();
+    try std.testing.expectEqual(@as(u64, 4), snap.count);
+    try std.testing.expect(snap.sum_seconds > 30.4 and snap.sum_seconds < 30.5);
+    try std.testing.expectEqual(@as(u64, 1), snap.counts[0]); // le=0.005
+    try std.testing.expectEqual(@as(u64, 1), snap.counts[1]); // le=0.01
+    try std.testing.expectEqual(@as(u64, 2), snap.counts[2]); // le=0.025
+    try std.testing.expectEqual(@as(u64, 2), snap.counts[5]); // le=0.25
+    try std.testing.expectEqual(@as(u64, 3), snap.counts[6]); // le=0.5
+    try std.testing.expectEqual(@as(u64, 3), snap.counts[10]); // le=10
+}

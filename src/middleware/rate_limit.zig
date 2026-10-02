@@ -175,8 +175,10 @@ pub const OpenidRule = struct {
 
 pub const PerOpenidLimiter = struct {
     backend: Backend,
-    /// 与 fan_auth.zig 同一个验签模块（AppSecurity.module.verifyToken），
-    /// 用于在中间件层把 Bearer token 解析为可信 openid（sub）。
+    /// 保留字段：main.zig 装配仍传入 AppSecurity 指针；本限流器已不再用它
+    /// 本地验签——openid 直接读框架 JWT 中间件验签后注入的 ctx 身份属性
+    /// （server 级 `jwtAuthFromCatalogWithPermissions` 先于本 scope 限流执行，
+    /// `.jwt` 路由必有 `user_id` = fan token 的 sub = openid）。
     sec: *zigmodu.security.AppSecurity,
     /// 端点阈值表：按 method + path 匹配，命中才限流；表外路由原样放行，
     /// 不影响同模块下的其他 fan 端点。
@@ -198,26 +200,20 @@ pub fn perOpenidRateLimit(limiter: *PerOpenidLimiter) http.Middleware {
                     return;
                 };
 
-                // 2) 解析 openid 身份。
-                // 先读上游写入 ctx 属性的 openid（若未来有中间件/处理器提前设置）。
-                // 取舍说明：当前 fan_auth.zig 是在"处理器内部"校验 JWT 并返回
-                // owned openid，并不写任何 ctx 属性；且中间件先于处理器执行，
-                // 属性里通常没有 openid。这里退化为本地验签——与 fan_auth.zig
-                // 同一条 verifyToken 路径，多一次 HMAC 验签的 CPU 开销，可接受。
-                // 伪造/过期 token 一律视为"取不到身份"；只取 sub 做计数维度，
-                // fan 角色校验仍归处理器，限流器不越权做鉴权。
+                // 2) 解析 openid 身份——只读框架注入的属性，不本地验签。
+                // server 级 `jwtAuthFromCatalogWithPermissions` 先于本 scope
+                // 限流执行：`.jwt` 路由验签通过才走到这里（`user_id` =
+                // fan token 的 sub = openid），`.optional` 路由带合法
+                // token 时同样注入。原实现在此处对 Bearer token 做第三次
+                // 本地 HMAC 验签（注释自认"退化为本地验签"），已随声明式
+                // 鉴权迁移删除。属性缺失（如挂载顺序变化/表外路由）按规则
+                // 降级；限流器不越权做鉴权。
                 var openid: ?[]const u8 = null;
                 defer if (openid) |s| ctx.allocator.free(s);
                 if (ctx.getAttr("openid")) |attr_openid| {
                     openid = try ctx.allocator.dupe(u8, attr_openid);
-                } else if (ctx.headers.get("authorization")) |header| {
-                    if (header.len > 7 and std.mem.startsWith(u8, header, "Bearer ")) {
-                        const token = header[7..];
-                        if (self.sec.module.verifyToken(token)) |payload| {
-                            defer self.sec.module.freePayload(payload);
-                            openid = try ctx.allocator.dupe(u8, payload.sub);
-                        } else |_| {}
-                    }
+                } else if (ctx.userId()) |uid| {
+                    openid = try ctx.allocator.dupe(u8, uid);
                 }
 
                 // 3) 组装限流 key（按规则命名空间隔离端点与身份维度）；

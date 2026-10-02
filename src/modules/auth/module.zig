@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "auth",
     .description = "authentication BFF (register/login/logout/password reset)",
-    .dependencies = &.{"user"},
+    .dependencies = &.{ "audit", "mail_template", "notify", "task", "user" },
     .is_internal = false,
 };
 

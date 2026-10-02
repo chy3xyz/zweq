@@ -103,6 +103,12 @@ pub fn build(b: *std.Build) void {
     const lint_alloc = b.step("lint-alloc", "Fail if an entity is freed with an allocator that does not own it");
     lint_alloc.dependOn(&alloc_check.step);
 
+    // 模块依赖声明门禁：module.zig 的 .dependencies 必须与真实 @import 图双向一致
+    // （补声明才能恢复 zigmodu 启动校验对 missing/cycle 的检测力）。
+    const deps_check = b.addSystemCommand(&.{ "python3", "scripts/check_module_deps.py", "src" });
+    const lint_deps = b.step("lint-deps", "Fail if a module.zig dependencies field does not match real cross-module imports");
+    lint_deps.dependOn(&deps_check.step);
+
     // 格式门禁：任一 src/**/*.zig 不符合 zig fmt 即失败（提交前先 `zig fmt src`）。
     const fmt_check = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt", "--check", "src" });
     const lint_fmt = b.step("lint-fmt", "Fail if any src/**/*.zig is not zig-fmt clean");

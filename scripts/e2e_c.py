@@ -105,7 +105,12 @@ check("C-login issues fan token", ok(h, p) and fan, f"{h} {p}")
 if not fan:
     sys.exit("cannot continue without a fan token")
 
+# .optional 列表对无效 token 按匿名放行（公开列表语义，不 401）。
 h, p = call("GET", f"/app/coupons?{Q}", token="garbage.token.here")
+check("C public list ignores an invalid token", ok(h, p), f"{h} {p}")
+
+# 无效 token 在 .jwt 路由上仍被拒（探针用需身份的 wallet）。
+h, p = call("GET", f"/app/wallet?{Q}", token="garbage.token.here")
 check("C routes reject an invalid token", not ok(h, p), f"{h} {p}")
 
 # ── visibility ────────────────────────────────────────────────────

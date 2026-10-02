@@ -5,6 +5,20 @@ const std = @import("std");
 
 pub const Config = struct {
     http_port: u16 = 8000,
+    /// 并发连接上限（HTTP_MAX_CONNECTIONS；0 = 不限）。超限连接立即回 503，
+    /// 防 accept 洪泛耗尽 fd/内存。默认 1024 是宽裕值。
+    http_max_connections: usize = 1024,
+    /// 单请求总预算毫秒（ZWEQ_REQUEST_TIMEOUT_MS，框架 request_timeout_ms）。
+    /// connFiber 每个请求据此武装 ctx.deadline_ms；0 = 不武装（无界）。
+    /// 该预算经 db.zig 的桥 opt-in 传入 zent 事务/查询入口。
+    http_request_timeout_ms: u32 = 30_000,
+    /// 请求预算闸门（ZWEQ_REQUEST_BUDGET_ENABLED，默认开）。关掉后
+    /// budgetGate 中间件直通：不再预算耗尽即 408，也不再在下游错误且
+    /// 预算耗尽时把 500 改判成 408（zent 入口仍携带 deadline，属无副作用）。
+    request_budget_enabled: bool = true,
+    /// 部署环境（ZWEQ_ENV）。设为 "production" 时即使 sqlite 也启用生产
+    /// fail-closed（JWT/CORS 强制显式配置 + 密钥强度检查）。
+    zweq_env: []const u8 = "development",
     /// "sqlite" | "postgres" — which driver to open for the data store.
     db_driver: []const u8 = "sqlite",
     sqlite_path: []const u8 = "zweq.db",
@@ -13,6 +27,9 @@ pub const Config = struct {
     jwt_secret: []const u8 = "dev-secret-change-me",
     /// True when ZWEQ_JWT_SECRET was explicitly set (fail-closed in prod).
     jwt_secret_explicit: bool = false,
+    /// 轮换窗口内的旧 JWT 密钥（ZWEQ_JWT_SECRET_PREVIOUS），逗号分隔，
+    /// 只验不签。轮换操作：旧密钥挪到这里，新密钥写入 ZWEQ_JWT_SECRET。
+    jwt_secret_previous: []const u8 = "",
     /// Comma-separated IP allow-list for /metrics (empty = all; use in prod).
     metrics_allow_ips: []const u8 = "",
     /// Audit log retention in days (scheduled prune).
@@ -75,11 +92,16 @@ pub const Config = struct {
     pub fn fromEnv(environ: *const std.process.Environ.Map) Config {
         var cfg: Config = .{};
         cfg.http_port = parsePort(environ.get("ZWEQ_HTTP_PORT") orelse "8000");
+        cfg.http_max_connections = parseIntUsize(environ.get("HTTP_MAX_CONNECTIONS") orelse "1024", 1024);
+        cfg.http_request_timeout_ms = @intCast(parseInt64(environ.get("ZWEQ_REQUEST_TIMEOUT_MS") orelse "30000", 30000));
+        cfg.request_budget_enabled = parseBool(environ.get("ZWEQ_REQUEST_BUDGET_ENABLED") orelse "true", true);
+        cfg.zweq_env = environ.get("ZWEQ_ENV") orelse "development";
         cfg.db_driver = environ.get("ZWEQ_DB_DRIVER") orelse "sqlite";
         cfg.sqlite_path = environ.get("ZWEQ_SQLITE_PATH") orelse "zweq.db";
         cfg.pg_conninfo = environ.get("ZWEQ_PG_CONNINFO") orelse cfg.pg_conninfo;
         cfg.jwt_secret = environ.get("ZWEQ_JWT_SECRET") orelse "dev-secret-change-me";
         cfg.jwt_secret_explicit = environ.get("ZWEQ_JWT_SECRET") != null;
+        cfg.jwt_secret_previous = environ.get("ZWEQ_JWT_SECRET_PREVIOUS") orelse "";
         cfg.metrics_allow_ips = environ.get("ZWEQ_METRICS_ALLOW_IPS") orelse "";
         cfg.shop_order_timeout = std.fmt.parseInt(i64, environ.get("ZWEQ_SHOP_ORDER_TIMEOUT") orelse "1800", 10) catch 1800;
         cfg.audit_retention_days = parseInt64(environ.get("ZWEQ_AUDIT_RETENTION_DAYS") orelse "180", 180);

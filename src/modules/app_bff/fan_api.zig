@@ -6,9 +6,11 @@
 //! description 硬编码为 public/jwt，request_body 无注入通道。因此各端点的
 //! 中文 summary 与 body 结构以本注释为权威契约，openapi.json 中可见的是
 //! 经 openapi_params 注入的 query/path 参数注解。
-//! 统一约定：粉丝 JWT 鉴权（Authorization: Bearer，handler 内 requireFanOpenid
-//! 校验，catalog 标记 public 仅为跳过平台 JWT 中间件）；分页响应统一为
-//! `{list, total, page, pageSize}`；金额/积分单位均为分。
+//! 统一约定：声明式鉴权——需身份/经济接口路由 meta `.auth = .jwt`（无/无效
+//! token 中间件 401，openid 从框架注入的 ctx 属性读，见 middleware/fan_auth.zig
+//! 薄壳）；公开列表但可个性化接口 `.auth = .optional`（无 token 公开放行，
+//! 带合法粉丝 token 时框架注入身份供个性化，handler 当前匿名处理）。
+//! 分页响应统一为 `{list, total, page, pageSize}`；金额/积分单位均为分。
 //!
 //!  1. GET  /api/v1/app/fan/profile —— 查询粉丝资料
 //!     query: account_id?: i64（默认 0，默认账号）
@@ -175,18 +177,23 @@ pub fn FanAppApi(
         pub const nest: []const []const u8 = &.{};
         pub const State = Self;
 
+        // 声明式鉴权（zigmodu 0.36 `RouteMeta.auth`）：
+        // - `.jwt`：需身份/经济接口，无/无效 token 由中间件 401；
+        // - `.optional`：公开列表但可个性化，token 合法时框架注入身份
+        //   （`fan_auth.optionalFanOpenid` 可读 openid），无/无效 token
+        //   按匿名放行，永不 401。
         pub const routes: []const http.RouteSpec(Self) = &.{
-            .{ .method = .GET, .path = "app/fan/profile", .handler = http.wrapHandler(Self, fanProfile), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
-            .{ .method = .GET, .path = "app/points/products", .handler = http.wrapHandler(Self, listPointsProducts), .meta = .{ .auth = .public, .openapi_params = &q_acct_page } },
-            .{ .method = .POST, .path = "app/points/redeem", .handler = http.wrapHandler(Self, redeemPoints), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/points/orders", .handler = http.wrapHandler(Self, listPointsOrders), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
-            .{ .method = .GET, .path = "app/coupons", .handler = http.wrapHandler(Self, listCoupons), .meta = .{ .auth = .public, .openapi_params = &q_acct_page } },
-            .{ .method = .POST, .path = "app/coupons/{id}/claim", .handler = http.wrapHandler(Self, claimCoupon), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/my-coupons", .handler = http.wrapHandler(Self, myCoupons), .meta = .{ .auth = .public, .openapi_params = &q_acct_page } },
-            .{ .method = .GET, .path = "app/lucky-draw/records", .handler = http.wrapHandler(Self, listDrawRecords), .meta = .{ .auth = .public, .openapi_params = &q_acct_page } },
-            .{ .method = .GET, .path = "app/lucky-draw/config", .handler = http.wrapHandler(Self, luckyDrawConfig), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
-            .{ .method = .POST, .path = "app/lucky-draw/draw", .handler = http.wrapHandler(Self, draw), .meta = .{ .auth = .public } },
-            .{ .method = .GET, .path = "app/wallet", .handler = http.wrapHandler(Self, walletBalance), .meta = .{ .auth = .public, .openapi_params = &q_acct } },
+            .{ .method = .GET, .path = "app/fan/profile", .handler = http.wrapHandler(Self, fanProfile), .meta = .{ .auth = .jwt, .openapi_params = &q_acct } },
+            .{ .method = .GET, .path = "app/points/products", .handler = http.wrapHandler(Self, listPointsProducts), .meta = .{ .auth = .optional, .openapi_params = &q_acct_page } },
+            .{ .method = .POST, .path = "app/points/redeem", .handler = http.wrapHandler(Self, redeemPoints), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "app/points/orders", .handler = http.wrapHandler(Self, listPointsOrders), .meta = .{ .auth = .jwt, .openapi_params = &q_acct } },
+            .{ .method = .GET, .path = "app/coupons", .handler = http.wrapHandler(Self, listCoupons), .meta = .{ .auth = .optional, .openapi_params = &q_acct_page } },
+            .{ .method = .POST, .path = "app/coupons/{id}/claim", .handler = http.wrapHandler(Self, claimCoupon), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "app/my-coupons", .handler = http.wrapHandler(Self, myCoupons), .meta = .{ .auth = .jwt, .openapi_params = &q_acct_page } },
+            .{ .method = .GET, .path = "app/lucky-draw/records", .handler = http.wrapHandler(Self, listDrawRecords), .meta = .{ .auth = .jwt, .openapi_params = &q_acct_page } },
+            .{ .method = .GET, .path = "app/lucky-draw/config", .handler = http.wrapHandler(Self, luckyDrawConfig), .meta = .{ .auth = .optional, .openapi_params = &q_acct } },
+            .{ .method = .POST, .path = "app/lucky-draw/draw", .handler = http.wrapHandler(Self, draw), .meta = .{ .auth = .jwt } },
+            .{ .method = .GET, .path = "app/wallet", .handler = http.wrapHandler(Self, walletBalance), .meta = .{ .auth = .jwt, .openapi_params = &q_acct } },
         };
 
         pub fn init(
@@ -231,14 +238,13 @@ pub fn FanAppApi(
 
         fn fanProfile(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid_owned = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid_owned);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
-            const fan_opt = self.fan_store.getByOpenid(tid, account_id, openid_owned) catch {
+            const fan_opt = self.fan_store.getByOpenid(tid, account_id, openid) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -257,15 +263,15 @@ pub fn FanAppApi(
 
         fn listPointsProducts(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             // C 端只暴露上架商品。
-            var result = self.points_svc.listProducts(params.page, params.page_size, tid, account_id, "", 1) catch {
+            var result = self.points_svc.listProductsBudget(params.page, params.page_size, tid, account_id, "", 1, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -291,17 +297,16 @@ pub fn FanAppApi(
 
         fn redeemPoints(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid_owned = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid_owned);
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(RedeemReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;
             };
-            const order_id = self.points_svc.redeem(tid, req.account_id, openid_owned, req.product_id) catch |err| {
+            const order_id = self.points_svc.redeem(tid, req.account_id, openid, req.product_id) catch |err| {
                 const msg = switch (err) {
                     error.OutOfStock => "库存不足",
                     error.InsufficientPoints => "积分不足",
@@ -316,14 +321,17 @@ pub fn FanAppApi(
 
         fn listPointsOrders(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid_owned = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid_owned);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
-            const rows = self.points_svc.listOrders(tid, account_id, openid_owned) catch {
+            const rows = self.points_svc.listOrdersBudget(tid, account_id, openid, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -348,15 +356,15 @@ pub fn FanAppApi(
 
         fn listCoupons(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
             // C 端只暴露上架券。
-            var result = self.coupon_svc.listCoupons(params.page, params.page_size, tid, account_id, "", 1) catch {
+            var result = self.coupon_svc.listCouponsBudget(params.page, params.page_size, tid, account_id, "", 1, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -386,11 +394,10 @@ pub fn FanAppApi(
 
         fn claimCoupon(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid_owned = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid_owned);
             const tid = tenantScope(ctx, self);
             const id = ctx.paramInt(i64, "id") catch {
                 try ctx.sendErrorResponse(400, 400, "无效的券 ID");
@@ -400,7 +407,7 @@ pub fn FanAppApi(
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;
             };
-            const code = self.coupon_svc.claimCoupon(ctx.allocator, tid, req.account_id, openid_owned, id) catch |err| {
+            const code = self.coupon_svc.claimCoupon(ctx.allocator, tid, req.account_id, openid, id) catch |err| {
                 const msg = switch (err) {
                     error.OutOfStock => "券已领完",
                     error.LimitReached => "已达领取上限",
@@ -418,15 +425,14 @@ pub fn FanAppApi(
 
         fn myCoupons(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid_owned = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid_owned);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.coupon_svc.listUserCoupons(params.page, params.page_size, tid, account_id, openid_owned, "", "") catch {
+            var result = self.coupon_svc.listUserCoupons(params.page, params.page_size, tid, account_id, openid, "", "") catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -469,10 +475,6 @@ pub fn FanAppApi(
 
         fn luckyDrawConfig(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            _ = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
-                try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
-                return;
-            };
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const cfg_json = self.module_svc.getConfig(ctx.allocator, tid, account_id, "lucky_draw") catch null;
@@ -487,11 +489,10 @@ pub fn FanAppApi(
 
         fn listDrawRecords(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid_owned = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid_owned);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
@@ -503,7 +504,7 @@ pub fn FanAppApi(
             var dtos = std.ArrayList(DrawRecordDto).empty;
             defer dtos.deinit(ctx.allocator);
             for (result.items) |row| {
-                if (!std.mem.eql(u8, row.openid, openid_owned)) continue;
+                if (!std.mem.eql(u8, row.openid, openid)) continue;
                 try dtos.append(ctx.allocator, .{
                     .id = row.id,
                     .prize_name = row.prize_name,
@@ -521,11 +522,10 @@ pub fn FanAppApi(
 
         fn draw(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid_owned = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid_owned);
             const tid = tenantScope(ctx, self);
             const req = ctx.bindJson(DrawReq) catch {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
@@ -534,7 +534,7 @@ pub fn FanAppApi(
             const cfg_json = self.module_svc.getConfig(ctx.allocator, tid, req.account_id, "lucky_draw") catch null;
             const cfg = self.lucky_draw_svc.parseConfig(ctx.allocator, cfg_json orelse "");
             defer cfg.free(ctx.allocator);
-            const result = self.lucky_draw_svc.draw(ctx.allocator, tid, req.account_id, openid_owned, &cfg) catch |err| {
+            const result = self.lucky_draw_svc.draw(ctx.allocator, tid, req.account_id, openid, &cfg) catch |err| {
                 const msg = switch (err) {
                     error.DailyLimit => "今日抽奖次数已用完",
                     else => @errorName(err),
@@ -552,14 +552,13 @@ pub fn FanAppApi(
         /// C 端钱包余额查询（粉丝 JWT，openid → fan_id → wallet）。
         fn walletBalance(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
-            const openid_owned = fan_auth.requireFanOpenid(ctx, self.user_svc) catch {
+            const openid = fan_auth.requireFanOpenid(ctx) catch {
                 try ctx.sendErrorResponse(401, 401, "未登录或登录已过期");
                 return;
             };
-            defer ctx.allocator.free(openid_owned);
             const tid = tenantScope(ctx, self);
             const account_id = ctx.queryInt(i64, "account_id", 0);
-            const fan_opt = self.fan_store.getByOpenid(tid, account_id, openid_owned) catch {
+            const fan_opt = self.fan_store.getByOpenid(tid, account_id, openid) catch {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };

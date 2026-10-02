@@ -86,12 +86,26 @@ pub fn usageDelta(before: ai.AgentMetrics.Stats, after: ai.AgentMetrics.Stats) U
     };
 }
 
+/// 微信被动回复等短窗口场景的专用短超时（毫秒）。微信被动回复窗约 5s，
+/// 默认 30s 超时会把回调 fiber 拖过窗口导致微信重推。
+pub const REPLY_TIMEOUT_MS: u64 = 4_000;
+
+/// chat 调用选项。zigmodu HttpClient 的超时在 init 期固化、无法按请求调整，
+/// 故短超时通过专用 client 实例（`http_short`）实现，`short_timeout` 只是
+/// 选择器。
+pub const ChatOpts = struct {
+    /// true = 走 4s 短超时 client（微信被动回复链路等短窗口场景）。
+    short_timeout: bool = false,
+};
+
 pub const AiService = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     store: *persist.AiStore,
     cfg: AiConfig,
     http: zigmodu.http.HttpClient,
+    /// 短超时专用 client（`REPLY_TIMEOUT_MS`），仅供短窗口场景使用。
+    http_short: zigmodu.http.HttpClient,
     registry: ai.SkillRegistry,
     agent_metrics: ai.AgentMetrics,
     bulkhead: zigmodu.Bulkhead,
@@ -139,6 +153,9 @@ pub const AiService = struct {
             .store = store,
             .cfg = cfg,
             .http = zigmodu.http.HttpClient.init(allocator, io, 4, 30_000),
+            // 短超时 client 不重试：4s 预算应花在单次尝试上，重试会把被动
+            // 回复链路的等待放大 max_retries 倍，拖过微信 ~5s 回复窗。
+            .http_short = shortHttp(allocator, io),
             .registry = ai.SkillRegistry.init(allocator, io),
             .agent_metrics = .{},
             .bulkhead = try zigmodu.Bulkhead.init(allocator, "ai-chat", 4, 16),
@@ -158,11 +175,10 @@ pub const AiService = struct {
     pub fn deinit(self: *AiService) void {
         self.registry.deinit();
         self.http.deinit();
+        self.http_short.deinit();
         self.bulkhead.deinit();
         self.breaker.deinit();
-    }
-
-    // ── Key encryption ─────────────────────────────────────────────────────
+    } // ── Key encryption ─────────────────────────────────────────────────────
 
     const KeyLen = 32;
     const NonceLen = 12;
@@ -465,6 +481,21 @@ pub const AiService = struct {
         tenant_id: i64,
         prompt: []const u8,
     ) !ChatOutcome {
+        return self.chatEx(allocator, session_id, user_id, tenant_id, prompt, .{});
+    }
+
+    /// `chat` 的可选项版本。`opts.short_timeout` 供微信被动回复等短窗口
+    /// 链路使用（4s 超时，见 `REPLY_TIMEOUT_MS`），避免拖过微信 ~5s 被动
+    /// 回复窗导致重推。
+    pub fn chatEx(
+        self: *AiService,
+        allocator: std.mem.Allocator,
+        session_id: i64,
+        user_id: i64,
+        tenant_id: i64,
+        prompt: []const u8,
+        opts: ChatOpts,
+    ) !ChatOutcome {
         const now = zigmodu.time.wallClockSeconds(self.io);
         const used = try self.store.runCountForUser(user_id, now - 24 * 3600);
         if (used >= self.cfg.daily_run_limit) return error.QuotaExceeded;
@@ -490,7 +521,7 @@ pub const AiService = struct {
 
         var provider = ai.AiProvider{
             .allocator = allocator,
-            .http = &self.http,
+            .http = if (opts.short_timeout) &self.http_short else &self.http,
             .endpoint = resolved.row.endpoint,
             .api_key = resolved.key,
             .model = resolved.model,
@@ -672,6 +703,15 @@ pub const AiService = struct {
         return true;
     }
 };
+
+/// 短超时专用 client：4s 读超时 + 不重试（`REPLY_TIMEOUT_MS` 的预算必须
+/// 花在单次尝试上，默认 3 次重试会把被动回复链路的等待放大 ~3 倍，拖过
+/// 微信 ~5s 回复窗导致重推）。
+fn shortHttp(allocator: std.mem.Allocator, io: std.Io) zigmodu.http.HttpClient {
+    var c = zigmodu.http.HttpClient.init(allocator, io, 2, REPLY_TIMEOUT_MS);
+    c.retry_policy.max_retries = 0;
+    return c;
+}
 
 fn fillRandom(io: std.Io, buf: []u8) void {
     var seed: [32]u8 = undefined;

@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "distribution",
     .description = "分销（三级分佣体系）",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "message", "user" },
     .is_internal = false,
 };
 

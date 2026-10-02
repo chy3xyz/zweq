@@ -1,0 +1,8 @@
+# gitleaks 指纹收编（处置说明见 CI secrets-scan job 注释与项目报告）：
+# 前 3 条为同一枚「仅测试夹具」RSA 私钥（src/tests/payment_test.zig 文件作用域，
+# 仅供 v3 prepay/refund 无网络构报文断言；注释声明非真实商户凭据，历史 commit 间搬移）；
+# 第 4 条为 vendored 第三方 minified JS（mp/uni_modules/sp-editor）的 generic-api-key 误报。
+8a3775888345cd7c98575ac0a5813c6ac3ec736c:src/tests/payment_test.zig:private-key:51
+8f5a21ad77977395d0c28b191de5f7482350256b:src/tests/payment_test.zig:private-key:166
+e070ef6833301dc7b82411c82eb4a53374a2fc3b:src/tests.zig:private-key:1179
+d6214fc274f1abd5a1d9931ffcb42da4deb6c89a:mp/uni_modules/sp-editor/static/quill.min.js:generic-api-key:7

@@ -140,7 +140,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
-            return mw.authTenantId(ctx) orelse self.default_tenant_id;
+            return mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
         }
 
         fn generateLicense(ctx: *http.Context) !void {
@@ -258,6 +258,7 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             const id = self.svc.publishPackage(tid, req.name, req.title, req.version, req.description, req.download_url, req.checksum) catch |err| {
                 const msg = switch (err) {
                     error.InvalidName => "包名不能为空",
+                    error.InvalidUrl => "download_url 不允许（需 http(s) 且非内网地址）",
                     else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
@@ -283,12 +284,17 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;
             };
-            const module_id = self.svc.installPackage(tid, name, req.account_id) catch |err| {
+            // 安装含远端产物下载（zwechat 同步阻塞 client）：投递远端 worker
+            // 执行，handler 限时等待结果——前端要求同步拿到 module_id，这是
+            // 该同步语义下的独立超时（见 CloudService.installPackageRemote）。
+            const module_id = self.svc.installPackageRemote(tid, name, req.account_id, service.CloudService.install_remote_wait_ms) catch |err| {
                 const msg = switch (err) {
                     error.InvalidName => "包名不能为空",
                     error.NotFound => "市场包不存在",
+                    error.InvalidUrl => "市场包下载地址不允许（需 http(s) 且非内网地址）",
                     error.ChecksumMismatch => "产物校验失败（sha256 不匹配）",
                     error.DownloadFailed => "产物下载失败",
+                    error.RemoteTimeout => "安装超时，请稍后在市场列表确认结果",
                     else => "操作失败",
                 };
                 try ctx.sendErrorResponse(400, 400, msg);
@@ -338,18 +344,14 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "未配置远端云服务（ZWEQ_CLOUD_REMOTE_URL）");
                 return;
             }
-            const count = self.svc.syncMarketRemote(ctx.allocator, tid) catch |err| {
-                const msg = switch (err) {
-                    error.RemoteUnavailable => "远端云服务不可达",
-                    else => "远端云服务同步失败",
-                };
-                try ctx.sendErrorResponse(502, 502, msg);
+            // 异步化（202）：同步 zwechat client 的远端拉取投递后台 worker，
+            // 立即返回；同步结果经市场列表可见，无前端调用点依赖 count。
+            self.svc.syncMarketRemoteAsync(tid) catch {
+                try ctx.sendErrorResponse(500, 500, "同步任务提交失败");
                 return;
             };
-            var d1: [96]u8 = undefined;
-            const det1 = try std.fmt.bufPrint(&d1, "同步云端市场 {d} 个包", .{count});
-            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.remote.sync", "cloud", 0, det1, zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
-            try ctx.okValue(.{ .count = count });
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "cloud.remote.sync", "cloud", 0, "提交云端市场同步任务", zigmodu.http.RequestUtil.getRealIp(ctx), true, tid);
+            try ctx.respondEnvelope(202, 0, "ok", "{\"status\":\"accepted\"}");
         }
 
         fn listDynamicTables(ctx: *http.Context) !void {

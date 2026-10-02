@@ -39,6 +39,7 @@ pub const points = @import("../modules/points/root.zig");
 pub const cache_svc = @import("../services/cache.zig");
 pub const mail = @import("../services/mail.zig");
 pub const mw_rate = @import("../middleware/rate_limit.zig");
+pub const mw_auth = @import("../middleware/auth.zig");
 
 /// 全部 schema group（openMemory / openPostgres 共用）。
 /// 注意：tuple 顺序即迁移顺序，新增模块时保持追加在末尾附近原有节奏。

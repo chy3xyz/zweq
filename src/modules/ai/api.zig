@@ -427,7 +427,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
         fn createSession(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             const uid = authUid(ctx) orelse return;
-            const tenant_id = mw.authTenantId(ctx) orelse 1;
+            const tenant_id = mw.authTenantIdOrDefault(ctx, 1);
             const req = ctx.bindJson(CreateSessionReq) catch CreateSessionReq{};
             const now = zigmodu.time.wallClockSeconds(self.svc.io);
             const title = if (req.title.len > 0) req.title else "新对话";
@@ -621,7 +621,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = authUid(ctx) orelse return;
-            const tenant_id = mw.authTenantId(ctx) orelse 1;
+            const tenant_id = mw.authTenantIdOrDefault(ctx, 1);
 
             var result = self.svc.runHealthWorkflow(ctx.allocator, admin_id, tenant_id) catch |err| {
                 std.log.err("internal error: {s}", .{@errorName(err)});

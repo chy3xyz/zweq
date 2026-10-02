@@ -6,7 +6,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "user",
     .description = "user domain (users + password reset tokens)",
-    .dependencies = &.{},
+    .dependencies = &.{"audit"},
     .is_internal = false,
 };
 

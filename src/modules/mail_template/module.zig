@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "mail_template",
     .description = "configurable email templates (verify-email, reset-password)",
-    .dependencies = &.{},
+    .dependencies = &.{"user"},
     .is_internal = true,
 };
 

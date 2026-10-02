@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "system",
     .description = "runtime introspection: uptime, db, mail, cache, tasks",
-    .dependencies = &.{},
+    .dependencies = &.{ "file", "notify", "task", "tenant", "user" },
     .is_internal = true,
 };
 

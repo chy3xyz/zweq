@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "member",
     .description = "WeChat fans (openid/unionid, subscribe state)",
-    .dependencies = &.{},
+    .dependencies = &.{ "account", "audit", "user" },
     .is_internal = false,
 };
 

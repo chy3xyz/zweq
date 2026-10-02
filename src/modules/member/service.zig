@@ -113,6 +113,8 @@ pub const MemberService = struct {
         defer self.allocator.free(body);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
+        // 低频管理面可接受：粉丝标签管理是管理员手动触发的低频操作；zwechat
+        // client 为同步阻塞实现且不支持 per-request 超时配置，不为其造线程池。
         wechat_log.beginCall();
         const resp = client.postJSON(uri, body) catch {
             wechat_log.logApiError("member.createWxTag");
@@ -148,6 +150,8 @@ pub const MemberService = struct {
         const client = zwechat.util.http.getDefaultClient(self.allocator);
         const uri = try std.fmt.allocPrint(self.allocator, "{s}?access_token={s}", .{ "https://api.weixin.qq.com/cgi-bin/tags/get", token });
         defer self.allocator.free(uri);
+        // 低频管理面可接受：标签同步是管理员手动触发的低频操作；zwechat
+        // client 为同步阻塞实现且不支持 per-request 超时配置，不为其造线程池。
         wechat_log.beginCall();
         const resp = client.get(uri) catch {
             wechat_log.logApiError("member.listWxTags");
@@ -201,6 +205,8 @@ pub const MemberService = struct {
         defer self.allocator.free(body);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
+        // 低频管理面可接受：粉丝打标签是管理员手动触发的低频操作；zwechat
+        // client 为同步阻塞实现且不支持 per-request 超时配置，不为其造线程池。
         wechat_log.beginCall();
         const resp = client.postJSON(uri, body) catch {
             wechat_log.logApiError("member.tagFan");

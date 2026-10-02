@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "app_bff",
     .description = "H5 mobile BFF — account/module entry points",
-    .dependencies = &.{ "account", "module" },
+    .dependencies = &.{ "account", "checkin", "coupon", "distribution", "lucky_draw", "member", "member_card", "module", "payment", "points", "seckill", "user", "vote" },
     .is_internal = false,
 };
 

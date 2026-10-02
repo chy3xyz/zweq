@@ -305,7 +305,7 @@ pub fn ShopApi(comptime Service: type, comptime UserService: type) type {
         }
 
         pub fn tenantScope(ctx: *http.Context, self: *Self) i64 {
-            return mw.authTenantId(ctx) orelse self.default_tenant_id;
+            return mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
         }
 
         // ── 公开 ────────────────────────────────────────────

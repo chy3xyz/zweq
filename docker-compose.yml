@@ -1,4 +1,5 @@
-# zweq + PostgreSQL 生产编排（构建上下文 = 仓库自身，配合根 .dockerignore）
+# zweq + PostgreSQL 生产编排（zweq 构建上下文 = 仓库自身，配合根 .dockerignore；
+# zweq-cloud 是独立构建根，上下文 = ./zweq-cloud，配合其目录内 .dockerignore）
 services:
   db:
     image: postgres:16-alpine
@@ -18,6 +19,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
@@ -25,12 +27,14 @@ services:
       ZWEQ_DB_DRIVER: postgres
       ZWEQ_PG_CONNINFO: host=db port=5432 dbname=zweq user=zweq password=zweq_secret
       ZWEQ_HTTP_PORT: "8000"
-      # 生产（postgres 驱动）fail-closed：JWT 与 CORS 未显式设置会拒绝启动。
-      # 在 shell 环境或本目录 .env 文件提供真实值，勿提交仓库。
+      # 生产（postgres 驱动或 ZWEQ_ENV=production）fail-closed：JWT 与 CORS
+      # 未显式设置会拒绝启动。在 shell 环境或本目录 .env 文件提供真实值，勿提交仓库。
       ZWEQ_JWT_SECRET: ${ZWEQ_JWT_SECRET:?compose 启动前须设置 ZWEQ_JWT_SECRET}
       ZWEQ_CORS_ORIGINS: ${ZWEQ_CORS_ORIGINS:?compose 启动前须设置 ZWEQ_CORS_ORIGINS（如 https://admin.example.com）}
       # 可选：不设则无法保存 AI provider 密钥
       ZWEQ_AI_KEY_SECRET: ${ZWEQ_AI_KEY_SECRET:-}
+      # /metrics 仅内网可达（空 = 不限制，勿在生产用空值）
+      ZWEQ_METRICS_ALLOW_IPS: ${ZWEQ_METRICS_ALLOW_IPS:-127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     ports:
       - "8000:8000"
     volumes:
@@ -42,6 +46,50 @@ services:
       retries: 5
       start_period: 10s
 
+  # 一次性建库：zweq-cloud 与主站 cloud 模块的实体同名（license / market_package，
+  # 见 src/modules/cloud/model.zig），共用 zweq 数据库会互相串数据，故在共享 db
+  # 容器里单独建 zweq_cloud 库（zweq-cloud 支持 postgres：ZWEQ_CLOUD_PG_CONNINFO）。
+  # 已存在时 createdb 非零退出，视为成功。
+  cloud-db-init:
+    image: postgres:16-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: zweq_secret
+    command: sh -c "createdb -h db -U zweq zweq_cloud 2>/dev/null || true"
+    restart: "no"
+
+  zweq-cloud:
+    build:
+      context: ./zweq-cloud
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      cloud-db-init:
+        condition: service_completed_successfully
+    environment:
+      ZWEQ_CLOUD_HTTP_PORT: "8100"
+      ZWEQ_CLOUD_DB_DRIVER: postgres
+      ZWEQ_CLOUD_PG_CONNINFO: host=db port=5432 dbname=zweq_cloud user=zweq password=zweq_secret
+      # 市场产物落盘目录（storage_backend=local；改 s3 时经 ZWEQ_CLOUD_S3_* 配置）
+      ZWEQ_CLOUD_ARTIFACT_DIR: /data/artifacts
+      # 管理 API Bearer token（所有写操作/管理接口鉴权），默认 change-me 必改
+      ZWEQ_CLOUD_ADMIN_TOKEN: ${ZWEQ_CLOUD_ADMIN_TOKEN:?compose 启动前须设置 ZWEQ_CLOUD_ADMIN_TOKEN}
+    ports:
+      - "8100:8100"
+    volumes:
+      - clouddata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8100/health/live || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
 volumes:
   pgdata:
   zweqdata:
+  clouddata:

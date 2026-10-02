@@ -16,4 +16,8 @@ test {
     _ = @import("tests/cloud_test.zig");
     _ = @import("tests/shop_core_test.zig");
     _ = @import("tests/shop_ops_test.zig");
+    _ = @import("tests/fan_auth_test.zig");
+    _ = @import("tests/request_budget_test.zig");
+    _ = @import("middleware/metrics.zig");
+    _ = @import("modules/user/api.zig");
 }

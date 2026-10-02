@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "material",
     .description = "material library (news + image/voice/video)",
-    .dependencies = &.{},
+    .dependencies = &.{ "account", "audit", "user" },
     .is_internal = false,
 };
 

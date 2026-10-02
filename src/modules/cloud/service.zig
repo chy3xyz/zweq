@@ -7,6 +7,7 @@ const zwechat = @import("zwechat");
 const zent = @import("zent");
 const persist = @import("persistence.zig");
 const module_svc_mod = @import("../module/service.zig");
+const url_guard = @import("../../http/url_guard.zig");
 
 pub const LicenseRow = persist.LicenseRow;
 pub const LicenseListResult = persist.LicenseListResult;
@@ -15,6 +16,7 @@ pub const MarketListResult = persist.MarketListResult;
 
 pub const CloudError = error{
     InvalidName,
+    InvalidUrl,
     InvalidDays,
     InvalidLicense,
     LicenseExpired,
@@ -22,6 +24,8 @@ pub const CloudError = error{
     DownloadFailed,
     NotFound,
     RemoteUnavailable,
+    /// 安装投递后台 worker 后等待结果超时（前端要求的同步语义下的独立超时）。
+    RemoteTimeout,
     Unexpected,
 };
 
@@ -52,6 +56,10 @@ pub const CloudService = struct {
     driver: ?zent.sql_driver.Driver = null,
     /// 动态表元数据存储（manifest tables 注册 + 通用查询）。null = 不可用。
     dyn_table_store: ?*persist.DynamicTableStore = null,
+    /// 远端云服务后台 worker：zwechat client 是同步阻塞实现，远端下载/同步
+    /// 统一投递到这里在专用线程执行，不占 io 线程。懒启动（首次投递时
+    /// spawn），deinit 时 join。
+    worker: RemoteWorker = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, store: *persist.CloudStore, module_svc: *module_svc_mod.ModuleService, remote_base_url: []const u8) CloudService {
         return .{ .allocator = allocator, .io = io, .store = store, .module_svc = module_svc, .remote_base_url = remote_base_url };
@@ -67,10 +75,11 @@ pub const CloudService = struct {
         self.dyn_table_store = s;
     }
 
-    /// 释放内部持有的字符串（site_license_key）。测试/短生命周期用；
-    /// main 中进程级存活可不调用。
+    /// 释放内部持有的字符串（site_license_key）并停止远端 worker。测试/
+    /// 短生命周期用；main 中进程级存活可不调用。
     pub fn deinit(self: *CloudService) void {
         if (self.site_license_key.len > 0) self.allocator.free(self.site_license_key);
+        self.stopRemoteWorker();
     }
 
     /// 是否启用远端云服务（zweq-cloud）模式。
@@ -184,6 +193,8 @@ pub const CloudService = struct {
 
     pub fn publishPackage(self: *CloudService, tenant_id: i64, name: []const u8, title: []const u8, version: []const u8, description: []const u8, download_url: []const u8, checksum: []const u8) CloudError!i64 {
         if (std.mem.trim(u8, name, " \t").len == 0) return error.InvalidName;
+        // SSRF 基线：download_url 非空时会被 installPackage 服务端拉取，写入前校验。
+        if (download_url.len > 0 and !url_guard.isAcceptableOutboundUrl(download_url)) return error.InvalidUrl;
         return self.store.upsertPackage(tenant_id, name, title, version, description, download_url, checksum, self.now()) catch error.Unexpected;
     }
 
@@ -233,6 +244,8 @@ pub const CloudService = struct {
         defer if (mf_owned) |*m| m.free(self.allocator);
 
         if (pkg.download_url.len > 0) {
+            // SSRF 基线：存量数据可能早于写入口校验，服务端拉取前再拦一次。
+            if (!url_guard.isAcceptableOutboundUrl(pkg.download_url)) return error.InvalidUrl;
             const content = try self.downloadAndVerify(pkg.name, pkg.version, pkg.download_url, pkg.checksum);
             defer self.allocator.free(content);
 
@@ -557,6 +570,8 @@ pub const CloudService = struct {
     }
 
     /// 下载产物并校验 sha256。返回 caller-owned 内容。
+    /// 注意：这是 zwechat 同步 client 的阻塞调用，handler 路径必须走
+    /// `installPackageRemote`（投递远端 worker 执行），不要直接调本函数。
     fn downloadAndVerify(self: *CloudService, name: []const u8, version: []const u8, url: []const u8, expected_hex: []const u8) CloudError![]u8 {
         _ = name;
         _ = version;
@@ -597,6 +612,9 @@ pub const CloudService = struct {
 
     /// 用远端 zweq-cloud 校验授权码（POST `{base}/cloud/licenses/verify`）。
     /// 返回 true = 有效；无效/过期映射为 InvalidLicense / LicenseExpired。
+    /// 低频管理面可保持同步：后台手动校验是低频操作；zwechat client 同步
+    /// 阻塞且不支持 per-request 超时配置。周期校验 checkSiteLicense 跑在
+    /// 主循环线程，不占 io 线程。
     pub fn verifyLicenseRemote(self: *CloudService, allocator: std.mem.Allocator, license_key: []const u8) CloudError!bool {
         const url = std.fmt.allocPrint(allocator, "{s}/cloud/licenses/verify", .{self.remote_base_url}) catch return error.Unexpected;
         defer allocator.free(url);
@@ -654,6 +672,223 @@ pub const CloudService = struct {
         }
         return count;
     }
+
+    /// installPackageRemote 的等待上限（毫秒）。前端安装流程要求同步拿到
+    /// module_id，这是该同步语义下的独立超时——zwechat client 自身无任何
+    /// 超时配置，超时只能靠等待侧限出来。
+    pub const install_remote_wait_ms: i64 = 60_000;
+
+    /// 市场同步投递后台 worker 异步执行（202 语义）：立即返回，结果经
+    /// 市场列表可见。失败只记日志（同步入口由 admin 重试）。
+    pub fn syncMarketRemoteAsync(self: *CloudService, tenant_id: i64) CloudError!void {
+        const job = try self.newRemoteJob(.sync_market, tenant_id, "", 0);
+        self.enqueueRemote(job) catch {
+            self.freeRemoteJob(job);
+            return error.Unexpected;
+        };
+    }
+
+    /// 安装（含远端产物下载）投递 worker 执行，handler 限时等待结果。
+    /// 前端安装流程要求同步返回 module_id，不能纯异步；阻塞下载在 worker
+    /// 线程上跑（不占 io 线程），handler 只 park 在条件变量上。
+    /// 取舍：等待超时返回 error.RemoteTimeout 后，worker 里的安装仍会在
+    /// 后台跑完（模块可能随后注册成功），调用方应提示用户稍后在市场列表确认。
+    pub fn installPackageRemote(self: *CloudService, tenant_id: i64, name: []const u8, account_id: i64, wait_ms: i64) CloudError!i64 {
+        const job = try self.newRemoteJob(.install, tenant_id, name, account_id);
+        self.enqueueRemote(job) catch {
+            self.freeRemoteJob(job);
+            return error.Unexpected;
+        };
+        const io = self.io;
+        self.worker.mutex.lock(io) catch {
+            // fiber 被取消：job 标记为无主，由 worker 收尾释放。
+            self.abandonRemoteJob(job);
+            return error.Unexpected;
+        };
+        while (!job.done) {
+            self.worker.cond.waitTimeout(io, &self.worker.mutex, awakeTimeoutMs(wait_ms)) catch |err| switch (err) {
+                error.Timeout => {
+                    self.worker.mutex.unlock(io);
+                    self.abandonRemoteJob(job);
+                    return error.RemoteTimeout;
+                },
+                error.Canceled => {
+                    self.worker.mutex.unlock(io);
+                    self.abandonRemoteJob(job);
+                    return error.Unexpected;
+                },
+            };
+        }
+        // done 由 worker 在持锁下置位：结果读尽后即可释放等待权与 job。
+        job.has_waiter = false;
+        self.worker.mutex.unlock(io);
+        if (job.err) |e| {
+            self.freeRemoteJob(job);
+            return e;
+        }
+        const module_id = job.module_id;
+        self.freeRemoteJob(job);
+        return module_id;
+    }
+
+    fn newRemoteJob(self: *CloudService, kind: RemoteJobKind, tenant_id: i64, name: []const u8, account_id: i64) CloudError!*RemoteJob {
+        const job = self.allocator.create(RemoteJob) catch return error.Unexpected;
+        errdefer self.allocator.destroy(job);
+        job.* = .{
+            .kind = kind,
+            .tenant_id = tenant_id,
+            .account_id = account_id,
+            .has_waiter = kind == .install,
+        };
+        if (name.len > 0) {
+            job.name = self.allocator.dupe(u8, name) catch return error.Unexpected;
+        }
+        return job;
+    }
+
+    fn freeRemoteJob(self: *CloudService, job: *RemoteJob) void {
+        if (job.name.len > 0) self.allocator.free(job.name);
+        self.allocator.destroy(job);
+    }
+
+    /// 等待方（限时等待的 handler fiber）放弃 job：锁内清掉 has_waiter，
+    /// worker 看到 false 时负责释放；若 worker 已先完成，则由等待方释放。
+    fn abandonRemoteJob(self: *CloudService, job: *RemoteJob) void {
+        const io = self.io;
+        self.worker.mutex.lockUncancelable(io);
+        job.has_waiter = false;
+        const done = job.done;
+        self.worker.mutex.unlock(io);
+        if (done) self.freeRemoteJob(job);
+    }
+
+    fn enqueueRemote(self: *CloudService, job: *RemoteJob) CloudError!void {
+        if (!self.ensureRemoteWorker()) return error.Unexpected;
+        const io = self.io;
+        self.worker.mutex.lockUncancelable(io);
+        defer self.worker.mutex.unlock(io);
+        self.worker.queue.append(self.allocator, job) catch return error.Unexpected;
+        self.worker.cond.signal(io);
+    }
+
+    /// 懒启动远端 worker（首次投递时 spawn）；失败返回 false。
+    fn ensureRemoteWorker(self: *CloudService) bool {
+        const io = self.io;
+        self.worker.mutex.lockUncancelable(io);
+        defer self.worker.mutex.unlock(io);
+        if (self.worker.started) return true;
+        const t = std.Thread.spawn(.{}, remoteWorkerMain, .{self}) catch {
+            std.log.err("[cloud] 远端任务 worker 启动失败，远端调用无法异步化", .{});
+            return false;
+        };
+        self.worker.thread = t;
+        self.worker.started = true;
+        return true;
+    }
+
+    /// 停止远端 worker 并释放队列残留。仅测试/短生命周期调用；main 中
+    /// 进程级存活依赖进程退出回收。
+    fn stopRemoteWorker(self: *CloudService) void {
+        if (!self.worker.started) return;
+        const io = self.io;
+        self.worker.mutex.lockUncancelable(io);
+        self.worker.stopping = true;
+        self.worker.cond.signal(io);
+        self.worker.mutex.unlock(io);
+        if (self.worker.thread) |t| t.join();
+        self.worker.thread = null;
+        for (self.worker.queue.items) |job| self.freeRemoteJob(job);
+        self.worker.queue.deinit(self.allocator);
+        self.worker.queue = .empty;
+        self.worker.started = false;
+    }
+
+    /// 远端 worker 主循环（专用线程）：从队列取任务执行。zwechat client
+    /// 同步阻塞，在这里跑不占 io 线程。
+    fn remoteWorkerMain(self: *CloudService) void {
+        const io = self.io;
+        std.log.info("[cloud] remote worker started", .{});
+        while (true) {
+            self.worker.mutex.lockUncancelable(io);
+            while (self.worker.queue.items.len == 0 and !self.worker.stopping) {
+                // 500ms 兜底唤醒保证 stop 及时性；push/stop 都会 signal。
+                self.worker.cond.waitTimeout(io, &self.worker.mutex, awakeTimeoutMs(500)) catch {};
+            }
+            if (self.worker.stopping and self.worker.queue.items.len == 0) {
+                self.worker.mutex.unlock(io);
+                std.log.info("[cloud] remote worker stopped", .{});
+                return;
+            }
+            const job = self.worker.queue.orderedRemove(0);
+            self.worker.mutex.unlock(io);
+
+            switch (job.kind) {
+                .sync_market => {
+                    if (self.syncMarketRemote(self.allocator, job.tenant_id)) |count| {
+                        std.log.info("[cloud] 后台市场同步完成 tenant={d} 共 {d} 个包", .{ job.tenant_id, count });
+                    } else |err| {
+                        std.log.err("[cloud] 后台市场同步失败 tenant={d}: {s}", .{ job.tenant_id, @errorName(err) });
+                    }
+                    self.freeRemoteJob(job);
+                },
+                .install => {
+                    const res = self.installPackage(job.tenant_id, job.name, job.account_id);
+                    if (res) |id| {
+                        self.worker.mutex.lockUncancelable(io);
+                        job.module_id = id;
+                    } else |e| {
+                        // 等待方可能已超时离开，错误不会有人看见——必须留痕。
+                        std.log.err("[cloud] 后台安装失败 tenant={d} pkg={s}: {s}", .{ job.tenant_id, job.name, @errorName(e) });
+                        self.worker.mutex.lockUncancelable(io);
+                        job.err = e;
+                    }
+                    job.done = true;
+                    if (job.has_waiter) {
+                        self.worker.cond.signal(io);
+                        self.worker.mutex.unlock(io);
+                    } else {
+                        // 等待方已超时/取消离开：由 worker 释放 job。
+                        self.worker.mutex.unlock(io);
+                        self.freeRemoteJob(job);
+                    }
+                },
+            }
+        }
+    }
+};
+
+/// 把毫秒数包成 `std.Io.Timeout`（awake 时钟，与 zigmodu runtime 一致）。
+fn awakeTimeoutMs(ms: i64) std.Io.Timeout {
+    return .{ .duration = .{ .raw = std.Io.Duration.fromMilliseconds(ms), .clock = .awake } };
+}
+
+/// 远端任务种类。
+const RemoteJobKind = enum { sync_market, install };
+
+/// 投递到远端 worker 的一个任务。输入字符串归本 job 所有（service 分配器）。
+/// 释放责任：has_waiter=true（install 限时等待）由等待方释放；否则由 worker
+/// 释放。超时/取消的等待方在锁内清掉 has_waiter 后离开。
+const RemoteJob = struct {
+    kind: RemoteJobKind,
+    tenant_id: i64,
+    account_id: i64 = 0,
+    /// install：包名（service 分配器持有）。
+    name: []u8 = &.{},
+    /// 是否仍有等待方（install 同步等待）。
+    has_waiter: bool = false,
+    done: bool = false,
+    module_id: i64 = 0,
+    err: ?CloudError = null,
+};
+
+/// 远端云服务后台 worker（单线程内存任务队列）。
+const RemoteWorker = struct {
+    mutex: std.Io.Mutex = .init,
+    cond: std.Io.Condition = .init,
+    queue: std.ArrayList(*RemoteJob) = .empty,
+    started: bool = false,
+    stopping: bool = false,
+    thread: ?std.Thread = null,
 };
 
 fn objField(v: std.json.Value, key: []const u8) ?std.json.Value {

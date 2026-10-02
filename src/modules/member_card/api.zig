@@ -127,7 +127,7 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
-            return mw.authTenantId(ctx) orelse self.default_tenant_id;
+            return mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
         }
 
         fn listLevels(ctx: *http.Context) !void {
@@ -276,7 +276,11 @@ pub fn MemberCardApi(comptime Service: type, comptime UserService: type) type {
             const account_id = ctx.queryInt(i64, "account_id", 0);
             const keyword = ctx.queryStr("keyword", "");
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            const result = self.svc.listAccounts(params.page, params.page_size, tid, account_id, keyword) catch {
+            const result = self.svc.listAccountsBudget(params.page, params.page_size, tid, account_id, keyword, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };

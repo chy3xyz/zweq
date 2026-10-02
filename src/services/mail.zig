@@ -148,7 +148,7 @@ const SmtpConnection = struct {
 
     /// Plain-text writer (pre-TLS).
     fn plainWriter(self: *SmtpConnection) std.Io.net.Stream.Writer {
-        const stream = self.stream orelse unreachable;
+        const stream = self.stream orelse unreachable; // audit: ignore b19 — 内部状态机不变式：stream 仅在 close() 后置 null，本方法只在连接存活期被调用
         return stream.writer(self.io, &self.write_buf);
     }
 
@@ -190,7 +190,7 @@ const SmtpConnection = struct {
             const n = if (self.tls) |*t|
                 try t.reader.readSliceShort(&one)
             else blk: {
-                const stream = self.stream orelse unreachable;
+                const stream = self.stream orelse unreachable; // audit: ignore b19 — 内部状态机不变式：stream 仅在 close() 后置 null，readLine 只在连接存活期被调用
                 var iovec: [1][]u8 = .{&one};
                 break :blk try stream.read(self.io, &iovec);
             };
@@ -214,7 +214,7 @@ const SmtpConnection = struct {
         try self.sendLine("STARTTLS");
         try self.expectCode('2', "STARTTLS");
 
-        const stream = self.stream orelse unreachable;
+        const stream = self.stream orelse unreachable; // audit: ignore b19 — 内部状态机不变式：stream 仅在 close() 后置 null，STARTTLS 升级在连接存活期内进行
         var entropy: [240]u8 = undefined; // std.crypto.tls.Client.entropy_len
         try fillEntropy(self.io, &entropy);
         var plain_reader = stream.reader(self.io, &self.read_buf);

@@ -92,6 +92,34 @@ test "cloud: license lifecycle + marketplace install" {
     try std.testing.expectError(error.NotFound, cloud_svc.installPackage(1, "nope", 7));
 }
 
+test "cloud: publish/install 拒绝内网 download_url（SSRF 基线）" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var cloud_store = cloud.persistence.CloudStore.init(allocator, env.client);
+    var cloud_svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "");
+
+    // 发布：字面回环/内网地址与非 http(s) scheme 一律拒绝。
+    try std.testing.expectError(error.InvalidUrl, cloud_svc.publishPackage(1, "p1", "P", "1.0.0", "", "http://127.0.0.1/pkg.bin", ""));
+    try std.testing.expectError(error.InvalidUrl, cloud_svc.publishPackage(1, "p1", "P", "1.0.0", "", "http://localhost/pkg.bin", ""));
+    try std.testing.expectError(error.InvalidUrl, cloud_svc.publishPackage(1, "p1", "P", "1.0.0", "", "http://192.168.1.1/pkg.bin", ""));
+    try std.testing.expectError(error.InvalidUrl, cloud_svc.publishPackage(1, "p1", "P", "1.0.0", "", "http://10.0.0.1/pkg.bin", ""));
+    try std.testing.expectError(error.InvalidUrl, cloud_svc.publishPackage(1, "p1", "P", "1.0.0", "", "http://169.254.169.254/latest/meta-data", ""));
+    try std.testing.expectError(error.InvalidUrl, cloud_svc.publishPackage(1, "p1", "P", "1.0.0", "", "ftp://example.com/pkg.bin", ""));
+    // 合法 https URL 与空 download_url（无产物包）放行。
+    _ = try cloud_svc.publishPackage(1, "ok1", "OK", "1.0.0", "", "https://cdn.example.com/ok1-1.0.0.bin", "");
+    _ = try cloud_svc.publishPackage(1, "ok2", "OK", "1.0.0", "", "", "");
+
+    // 安装：存量数据可能早于写入口校验（直接 upsert 绕过 service 模拟），
+    // 服务端拉取前再拦一次 → InvalidUrl（不会发出任何请求）。
+    _ = try cloud_store.upsertPackage(1, "evil", "Evil", "1.0.0", "", "http://169.254.169.254/x.bin", "", 0);
+    try std.testing.expectError(error.InvalidUrl, cloud_svc.installPackage(1, "evil", 0));
+    _ = try cloud_store.upsertPackage(1, "evil2", "Evil", "1.0.0", "", "http://127.0.0.1:8080/x.bin", "", 0);
+    try std.testing.expectError(error.InvalidUrl, cloud_svc.installPackage(1, "evil2", 0));
+}
+
 // ── 远端云服务（zweq-cloud）对接 mock ───────────────────────────────────
 const MockCloudCtx = struct {
     verify_valid: bool = true,
@@ -300,4 +328,105 @@ fn manifestMockTransport(ctx: *anyopaque, allocator: std.mem.Allocator, uri: []c
     _ = content_type;
     const c: *ManifestMockCtx = @ptrCast(@alignCast(ctx));
     return allocator.dupe(u8, c.content);
+}
+
+// ── 远端任务后台 worker（io 线程阻塞治理）────────────────────────────────
+
+test "cloud: 远端任务走后台 worker — 市场同步异步 + 安装限时等待" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var cloud_store = cloud.persistence.CloudStore.init(allocator, env.client);
+    var svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "http://cloud:8100/api/v1");
+    defer svc.deinit(); // join worker
+    svc.setDriver(env.asDriver()); // manifest 带迁移 SQL，worker 线程内执行
+    var ctx = MockCloudCtx{ .verify_valid = true };
+    svc.http_transport = mockCloudTransport;
+    svc.http_transport_ctx = &ctx;
+
+    // 市场同步：异步投递（202 语义），worker 完成后落库。
+    try svc.syncMarketRemoteAsync(1);
+    var synced = false;
+    for (0..100) |_| {
+        const row_opt = cloud_store.getPackageByName(1, "shop") catch null;
+        if (row_opt) |row| {
+            row.free(allocator);
+            synced = true;
+            break;
+        }
+        const ts = std.posix.timespec{ .sec = 0, .nsec = 20 * std.time.ns_per_ms };
+        _ = std.c.nanosleep(&ts, null);
+    }
+    try std.testing.expect(synced);
+
+    // 同步进来的包带 mock checksum（"abc123"），与 manifest 内容不匹配；
+    // 清空 checksum 让安装走 manifest mock（空 = 跳过校验）。
+    _ = try cloud_store.upsertPackage(1, "shop", "商城", "1.0.0", "多商户商城", "http://cloud:8100/api/v1/cloud/market/shop/download", "", 0);
+
+    // 安装：manifest mock，handler 限时等待拿到 module_id（模拟前端同步语义）。
+    const manifest = "{\"name\":\"shop\",\"title\":\"商城\",\"version\":\"2.0.0\",\"description\":\"\",\"migrations\":[\"CREATE TABLE IF NOT EXISTS shop_order (id INTEGER PRIMARY KEY, tenant_id INTEGER)\"]}";
+    var mctx = ManifestMockCtx{ .content = manifest };
+    svc.http_transport = manifestMockTransport;
+    svc.http_transport_ctx = &mctx;
+    const module_id = try svc.installPackageRemote(1, "shop", 7, 30_000);
+    try std.testing.expect(module_id > 0);
+    const bound = try module_svc.accountModules(1, 7);
+    defer {
+        for (bound) |r| r.free(allocator);
+        allocator.free(bound);
+    }
+    var found = false;
+    for (bound) |b| {
+        if (std.mem.eql(u8, b.module, "shop")) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+const SlowManifestMockCtx = struct {
+    content: []const u8,
+};
+
+/// 模拟慢云端：1.5s 后才返回 manifest（handler 侧等不到 → 触发独立超时）。
+fn slowManifestMockTransport(ctx: *anyopaque, allocator: std.mem.Allocator, uri: []const u8, method: std.http.Method, payload: []const u8, content_type: ?[]const u8) anyerror![]u8 {
+    _ = uri;
+    _ = method;
+    _ = payload;
+    _ = content_type;
+    const req_ts = std.posix.timespec{ .sec = 1, .nsec = 500 * std.time.ns_per_ms };
+    _ = std.c.nanosleep(&req_ts, null);
+    const c: *SlowManifestMockCtx = @ptrCast(@alignCast(ctx));
+    return allocator.dupe(u8, c.content);
+}
+
+test "cloud: installPackageRemote 等待超时 → RemoteTimeout，worker 后台跑完" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var module_store = appmod.persistence.ModuleStore.init(allocator, env.client);
+    var module_svc = appmod.service.ModuleService.init(allocator, std.testing.io, &module_store);
+    var cloud_store = cloud.persistence.CloudStore.init(allocator, env.client);
+    // publishPackage 的 download_url 走 url_guard：http://mock 字面合法（非内网）。
+    _ = try cloud_store.upsertPackage(1, "shop", "商城", "1.0.0", "", "http://mock/shop.json", "", 0);
+    var svc = cloud.service.CloudService.init(allocator, std.testing.io, &cloud_store, &module_svc, "http://cloud:8100/api/v1");
+    defer svc.deinit(); // join worker（会等慢任务收尾）
+    const manifest = "{\"name\":\"shop\",\"title\":\"商城\",\"version\":\"2.0.0\",\"description\":\"\"}";
+    var mctx = SlowManifestMockCtx{ .content = manifest };
+    svc.http_transport = slowManifestMockTransport;
+    svc.http_transport_ctx = &mctx;
+
+    // 等待上限 200ms ≪ 下载 1.5s → 独立超时（前端收到提示，不占 io 线程）。
+    try std.testing.expectError(error.RemoteTimeout, svc.installPackageRemote(1, "shop", 0, 200));
+
+    // 显式停机 join worker（defer 的 svc.deinit() 在断言之后才跑，等不了
+    // 后台任务）：慢任务跑完后模块仍注册成功（超时的取舍 = 后台完成）。
+    svc.deinit();
+    var mods = try module_svc.list(1, 100, 1);
+    defer mods.free(allocator);
+    var found = false;
+    for (mods.items) |m| {
+        if (std.mem.eql(u8, m.name, "shop")) found = true;
+    }
+    try std.testing.expect(found);
 }

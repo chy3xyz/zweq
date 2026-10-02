@@ -7,6 +7,7 @@ const zigmodu = @import("zigmodu");
 const zwechat = @import("zwechat");
 const zent = @import("zent");
 const persist = @import("persistence.zig");
+const db_mod = @import("../../db.zig");
 
 pub const WalletRow = persist.WalletRow;
 pub const RechargeOrderRow = persist.RechargeOrderRow;
@@ -25,6 +26,8 @@ pub const PaymentError = error{
     PrepayFailed,
     RefundFailed,
     TransferFailed,
+    /// 请求预算耗尽（zent PoolWaitTimeout/QueryTimeout，见 request_budget 闸门）。
+    RequestTimeout,
     Unexpected,
 };
 
@@ -151,8 +154,20 @@ pub const PaymentService = struct {
     /// in one transaction — a failure between the two writes rolls back so the
     /// user never loses money. Idempotent: a second notify for the same order
     /// (affected == 0, not pending) does nothing.
+    /// HTTP 入口用 completeRechargeBudget（带请求预算）。
     pub fn completeRecharge(self: *PaymentService, tenant_id: i64, order_no: []const u8) PaymentError!bool {
-        var tx = zent.codegen.client.beginTxFromDriver(persist.infos, self.store.client.driver, self.allocator) catch return error.Unexpected;
+        return self.completeRechargeBudget(tenant_id, order_no, null);
+    }
+
+    /// completeRecharge 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
+    /// 事务获取按剩余预算阻塞、超预算/已耗尽 → RequestTimeout。
+    pub fn completeRechargeBudget(self: *PaymentService, tenant_id: i64, order_no: []const u8, budget_ms: ?i64) PaymentError!bool {
+        if (db_mod.budgetSpent(budget_ms)) return error.RequestTimeout;
+        var exec_ctx = db_mod.execContext(budget_ms);
+        var tx = zent.codegen.beginTxFromDriverCtx(persist.infos, self.store.client.driver, self.allocator, if (exec_ctx.deadline_ns != null) &exec_ctx else null) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => return error.RequestTimeout,
+            else => return error.Unexpected,
+        };
         defer tx.deinit();
 
         const paid = self.store.markOrderPaidOn(tx.client, tenant_id, order_no, self.now()) catch return error.Unexpected;
@@ -179,8 +194,18 @@ pub const PaymentService = struct {
         return self.store.getWallet(tenant_id, account_id, fan_id) catch error.Unexpected;
     }
 
+    /// 充值订单分页列表。HTTP 入口用 listOrdersBudget（带请求预算）。
     pub fn listOrders(self: *PaymentService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) PaymentError!RechargeOrderListResult {
-        return self.store.listOrders(page, page_size, tenant_id, account_id) catch error.Unexpected;
+        return self.listOrdersBudget(page, page_size, tenant_id, account_id, null);
+    }
+
+    /// listOrders 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
+    /// 查询超预算 → zent QueryTimeout/PoolWaitTimeout → RequestTimeout。
+    pub fn listOrdersBudget(self: *PaymentService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, budget_ms: ?i64) PaymentError!RechargeOrderListResult {
+        return self.store.listOrdersBudget(page, page_size, tenant_id, account_id, budget_ms) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => error.RequestTimeout,
+            else => error.Unexpected,
+        };
     }
 
     /// Request a withdraw (pending). Balance is debited on approval (Phase 4).
@@ -194,8 +219,17 @@ pub const PaymentService = struct {
         return self.store.createWithdraw(tenant_id, account_id, fan_id, amount, self.now()) catch error.Unexpected;
     }
 
+    /// 提现分页列表。HTTP 入口用 listWithdrawsBudget（带请求预算）。
     pub fn listWithdraws(self: *PaymentService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) PaymentError!WithdrawListResult {
-        return self.store.listWithdraws(page, page_size, tenant_id, account_id) catch error.Unexpected;
+        return self.listWithdrawsBudget(page, page_size, tenant_id, account_id, null);
+    }
+
+    /// listWithdraws 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）。
+    pub fn listWithdrawsBudget(self: *PaymentService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, budget_ms: ?i64) PaymentError!WithdrawListResult {
+        return self.store.listWithdrawsBudget(page, page_size, tenant_id, account_id, budget_ms) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => error.RequestTimeout,
+            else => error.Unexpected,
+        };
     }
 
     /// Build a WeChat Pay v3 JSAPI unified-order request (body + auth header).

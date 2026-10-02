@@ -311,7 +311,14 @@ pub fn Mixin(comptime ApiT: type) type {
             const buyer_owned = ApiT.cOpenid(ctx, self);
             defer if (buyer_owned) |b| self.svc.allocator.free(b);
             const buyer_openid = buyer_owned orelse req.openid;
-            const order_id = self.svc.createOrder(tid, req.account_id, buyer_openid, req.address_id, req.items, req.coupon_code, req.client_trade_no, req.pay_type, req.pickup_store_id, req.remark) catch |err| {
+            const order_id = self.svc.createOrderBudget(tid, req.account_id, buyer_openid, req.address_id, req.items, req.coupon_code, req.client_trade_no, req.pay_type, req.pickup_store_id, req.remark, ctx.deadline_ms) catch |err| {
+                switch (err) {
+                    error.RequestTimeout => {
+                        try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                        return;
+                    },
+                    else => {},
+                }
                 const msg = switch (err) {
                     error.OutOfStock => "库存不足",
                     error.InsufficientBalance => "余额不足",
@@ -389,7 +396,11 @@ pub fn Mixin(comptime ApiT: type) type {
                 };
             }
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 50 });
-            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id, openid, status, "") catch {
+            var result = self.svc.listOrdersBudget(params.page, params.page_size, tid, account_id, openid, status, "", ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -506,7 +517,11 @@ pub fn Mixin(comptime ApiT: type) type {
                 return;
             }
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id, "", status, pickup_type) catch {
+            var result = self.svc.listOrdersBudget(params.page, params.page_size, tid, account_id, "", status, pickup_type, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -685,7 +700,11 @@ pub fn Mixin(comptime ApiT: type) type {
                 try ctx.sendErrorResponse(400, 400, "请求体格式错误");
                 return;
             };
-            self.svc.auditRefund(req.order_id, id, req.approve) catch |err| {
+            self.svc.auditRefundBudget(req.order_id, id, req.approve, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(400, 400, @errorName(err));
                 return;
             };

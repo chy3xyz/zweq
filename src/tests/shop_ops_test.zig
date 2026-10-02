@@ -550,29 +550,20 @@ test "shop: stock rollback on order failure paths" {
     try std.testing.expectEqual(@as(i64, 3), sku_after.stock); // 已回滚
 }
 
-test "shop: webhook dispatch on order paid" {
+test "shop: webhook dispatch on order paid enqueues deliver task" {
     const allocator = std.testing.allocator;
     var env = try openMemory(allocator);
     defer env.deinit();
     var store = shop.persistence.ShopStore.init(allocator, env.client);
     var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
-    const wt = @import("../http/webhook_transport.zig");
+    var task_store = task.persistence.TaskStore.init(allocator, env.client);
+    var task_svc = task.service.TaskService.init(&task_store, std.testing.io, 3);
+    svc.task_svc = &task_svc;
 
-    // Webhook 配置 + mock transport 记录。
+    // Webhook 配置。
     const wh_id = try svc.createWebhook(1, 9, "https://merchant.example.com/hook", "order.paid");
-    var received = std.ArrayList([]u8).empty;
-    const Recorder = struct {
-        var out: *std.ArrayList([]u8) = undefined;
-        fn rec(url: []const u8, payload: []const u8) void {
-            out.append(std.heap.c_allocator, std.fmt.allocPrint(std.heap.c_allocator, "{s}|{s}", .{ url, payload }) catch "") catch {};
-        }
-    };
-    Recorder.out = &received;
-    var transport = wt.WebhookTransport.init(std.testing.io);
-    transport.recorder = Recorder.rec;
-    svc.webhook_transport = &transport;
 
-    // 商品 + 下单 + 支付 → webhook 推送（event/order_id/account_id）。
+    // 商品 + 下单 + 支付 → webhook 投递任务入队（POST 由队列 worker 异步完成）。
     const pid = try svc.createProduct(1, 9, .{
         .category_id = 0,
         .name = "回调商品",
@@ -603,12 +594,14 @@ test "shop: webhook dispatch on order paid" {
     }, "", "", "", 0, "");
     svc.dispatchWebhooks("order.paid", 1, 9, oid);
 
-    // mock 收到 payload。
-    try std.testing.expectEqual(@as(usize, 1), received.items.len);
-    try std.testing.expect(std.mem.indexOf(u8, received.items[0], "order.paid") != null);
-    try std.testing.expect(std.mem.indexOf(u8, received.items[0], "merchant.example.com") != null);
-    for (received.items) |r| std.heap.c_allocator.free(r);
-    received.deinit(std.heap.c_allocator);
+    // 队列里躺着 webhook.deliver：endpoint + 事件 JSON（order_id/account_id）。
+    var result = try task_store.listTasks(1, 20, "pending");
+    defer result.free(allocator);
+    try std.testing.expectEqual(@as(usize, 1), result.items.len);
+    try std.testing.expectEqualStrings("webhook.deliver", result.items[0].name);
+    try std.testing.expect(std.mem.indexOf(u8, result.items[0].payload, "merchant.example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.items[0].payload, "order.paid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.items[0].payload, "order_id") != null);
 
     try svc.deleteWebhook(wh_id);
 }
@@ -831,4 +824,90 @@ test "shop: mock pay-complete with C-token ownership" {
     var o2 = (try svc.getOrder(oid)).?;
     defer o2.free(allocator);
     try std.testing.expectEqual(@as(i64, 1), o2.status); // 已支付
+}
+
+test "shop: orderSummaries 批量明细（一条 IN 查询，按 order_id 分组）" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_s",
+        .name = "S",
+        .mobile = "13800000000",
+        .region = "SZ",
+        .detail = "1",
+        .is_default = 1,
+    });
+    const pid1 = try svc.createProduct(1, 9, .{
+        .category_id = 0,
+        .name = "苹果",
+        .image = "img-a.png",
+        .images = "[]",
+        .content = "",
+        .price = 100,
+        .original_price = 200,
+        .stock = 10,
+        .status = 1,
+        .skus = &.{},
+    });
+    const pid2 = try svc.createProduct(1, 9, .{
+        .category_id = 0,
+        .name = "香蕉",
+        .image = "img-b.png",
+        .images = "[]",
+        .content = "",
+        .price = 200,
+        .original_price = 300,
+        .stock = 10,
+        .status = 1,
+        .skus = &.{},
+    });
+    const skus1 = try svc.listSkus(pid1);
+    defer {
+        for (skus1) |s| s.free(allocator);
+        if (skus1.len > 0) allocator.free(skus1);
+    }
+    const skus2 = try svc.listSkus(pid2);
+    defer {
+        for (skus2) |s| s.free(allocator);
+        if (skus2.len > 0) allocator.free(skus2);
+    }
+
+    // 单明细订单 + 双明细订单。
+    const oid1 = try svc.createOrder(1, 9, "o_s", addr_id, &.{
+        .{ .product_id = pid1, .sku_id = skus1[0].id, .quantity = 1 },
+    }, "", "", "", 0, "");
+    const oid2 = try svc.createOrder(1, 9, "o_s", addr_id, &.{
+        .{ .product_id = pid1, .sku_id = skus1[0].id, .quantity = 1 },
+        .{ .product_id = pid2, .sku_id = skus2[0].id, .quantity = 2 },
+    }, "", "", "", 0, "");
+
+    const summaries = try svc.orderSummaries(&.{ oid1, oid2, 987654321 });
+    defer {
+        for (summaries) |s| s.free(allocator);
+        allocator.free(summaries);
+    }
+    try std.testing.expectEqual(@as(usize, 3), summaries.len);
+
+    // 单明细：封面/摘要取唯一明细，计数 1。
+    try std.testing.expectEqual(oid1, summaries[0].order_id);
+    try std.testing.expectEqual(@as(i64, 1), summaries[0].item_count);
+    try std.testing.expectEqualStrings("img-a.png", summaries[0].cover_image);
+    try std.testing.expectEqualStrings("苹果", summaries[0].summary);
+
+    // 双明细：计数 2，摘要「首件 等2件」，封面为两件商品之一（行序不假设）。
+    try std.testing.expectEqual(oid2, summaries[1].order_id);
+    try std.testing.expectEqual(@as(i64, 2), summaries[1].item_count);
+    try std.testing.expect(std.mem.endsWith(u8, summaries[1].summary, " 等2件"));
+    const cover_ok = std.mem.eql(u8, summaries[1].cover_image, "img-a.png") or
+        std.mem.eql(u8, summaries[1].cover_image, "img-b.png");
+    try std.testing.expect(cover_ok);
+
+    // 无明细订单（id 不存在）：空封面/空摘要/计数 0。
+    try std.testing.expectEqual(@as(i64, 0), summaries[2].item_count);
+    try std.testing.expectEqualStrings("", summaries[2].cover_image);
+    try std.testing.expectEqualStrings("", summaries[2].summary);
 }

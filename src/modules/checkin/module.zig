@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "checkin",
     .description = "签到场景应用（示例：消息接收器 + 模块配置）",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "message", "module", "user" },
     .is_internal = false,
 };
 

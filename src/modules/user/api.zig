@@ -49,6 +49,40 @@ const UpdateUserReq = struct {
     admin: ?bool = null,
 };
 
+/// 把一行用户记录追加为 CSV 行。每个数值列各用独立的栈缓冲（保持零分配）：
+/// 共用一个 `buf` 时所有切片都指向同一内存，writeRow 时三列全部变成
+/// 最后格式化的 created_at。
+fn appendUserRow(csv: *zigmodu.csv.Writer, u: UserRow) !void {
+    var id_buf: [64]u8 = undefined;
+    var tid_buf: [64]u8 = undefined;
+    var ts_buf: [64]u8 = undefined;
+    const id_s = try std.fmt.bufPrint(&id_buf, "{d}", .{u.id});
+    const tid_s = try std.fmt.bufPrint(&tid_buf, "{d}", .{u.tenant_id});
+    const ts_s = try std.fmt.bufPrint(&ts_buf, "{d}", .{u.created_at});
+    const admin_s = if (u.admin) "true" else "false";
+    try csv.writeRow(&.{ id_s, u.name, u.email, admin_s, tid_s, ts_s });
+}
+
+test "user CSV export row uses each column's own value" {
+    var csv = zigmodu.csv.Writer.init(std.testing.allocator);
+    defer csv.deinit();
+    try appendUserRow(&csv, .{
+        .id = 7,
+        .name = "bob",
+        .email = "bob@example.com",
+        .verified = true,
+        .admin = false,
+        .tenant_id = 42,
+        .token_version = 1,
+        .created_at = 946684800,
+        .updated_at = 946684900,
+    });
+    try std.testing.expectEqualStrings(
+        "7,bob,bob@example.com,false,42,946684800",
+        csv.buf.items,
+    );
+}
+
 pub fn UserApi(comptime Service: type) type {
     return struct {
         const Self = @This();
@@ -96,30 +130,36 @@ pub fn UserApi(comptime Service: type) type {
             try ctx.setAttr("audit_actor", row.name);
         }
 
+        /// CSV 导出分页参数：每页 500 行边查边拼，上限 10000 行与旧实现一致。
+        const export_page_size: usize = 500;
+        const export_row_limit: usize = 10000;
+
         fn exportUsers(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
 
-            var result = self.svc.listUsers(1, 10000, null, null, null, false) catch |err| {
-                std.log.err("internal error: {s}", .{@errorName(err)});
-                try ctx.sendErrorResponse(500, 500, "服务器内部错误");
-                return;
-            };
-            // 行由 `UserStore.dupUser` 用 **store 分配器**（进程 gpa）分配，而
-            // `ctx.allocator` 是连接 fiber 的 arena（Zig 0.17 里 arena.free 是 no-op）：
-            // 用 arena 释放等于整页泄漏（实测 CSV 导出每次泄漏全部用户行）。
-            defer self.svc.freeList(&result);
-
             var csv = zigmodu.csv.Writer.init(ctx.allocator);
             defer csv.deinit();
             try csv.writeHeader(&.{ "id", "name", "email", "admin", "tenant_id", "created_at" });
-            for (result.items) |u| {
-                var buf: [64]u8 = undefined;
-                const id_s = try std.fmt.bufPrint(&buf, "{d}", .{u.id});
-                const tid_s = try std.fmt.bufPrint(&buf, "{d}", .{u.tenant_id});
-                const ts_s = try std.fmt.bufPrint(&buf, "{d}", .{u.created_at});
-                const admin_s = if (u.admin) "true" else "false";
-                try csv.writeRow(&.{ id_s, u.name, u.email, admin_s, tid_s, ts_s });
+            // 分页边查边拼（每页 500、上限 10000 不变）：行由 `UserStore.dupUser`
+            // 用 **store 分配器**（进程 gpa）分配，`ctx.allocator` 是连接 fiber 的
+            // arena（Zig 0.17 里 arena.free 是 no-op）：每页拼完立即 `freeList`
+            // （用 arena 释放等于整页泄漏，实测过），峰值内存从「万行同时存活」
+            // 降为「一页 + 已拼字符串」。
+            var page: usize = 1;
+            var exported: usize = 0;
+            while (exported < export_row_limit) {
+                var result = self.svc.listUsers(page, export_page_size, null, null, null, false) catch |err| {
+                    std.log.err("internal error: {s}", .{@errorName(err)});
+                    try ctx.sendErrorResponse(500, 500, "服务器内部错误");
+                    return;
+                };
+                defer self.svc.freeList(&result);
+                if (result.items.len == 0) break;
+                for (result.items) |u| try appendUserRow(&csv, u);
+                exported += result.items.len;
+                if (result.items.len < export_page_size) break;
+                page += 1;
             }
             try ctx.setHeader("Content-Type", "text/csv; charset=utf-8");
             try ctx.setHeader("Content-Disposition", "attachment; filename=users.csv");

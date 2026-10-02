@@ -44,6 +44,7 @@ const graph = zent.codegen.graph.buildGraph(&.{
     user_model.PasswordToken,
     user_model.EmailVerification,
     task_model.Task,
+    task_model.CronLock,
     file_model.File,
     file_model.UploadGroup,
     notify_model.Notification,

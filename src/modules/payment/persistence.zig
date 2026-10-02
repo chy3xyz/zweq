@@ -5,6 +5,7 @@ const zent = @import("zent");
 const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
+const db_mod = @import("../../db.zig");
 
 const graph = zent.codegen.graph.buildGraph(&.{ model.Wallet, model.RechargeOrder, model.Withdraw });
 pub const infos = graph.types;
@@ -303,9 +304,19 @@ pub const PaymentStore = struct {
         return affected > 0;
     }
 
+    /// 充值订单分页列表。带请求预算的版本见 listOrdersBudget。
     pub fn listOrders(self: *PaymentStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !RechargeOrderListResult {
+        return self.listOrdersBudget(page, page_size, tenant_id, account_id, null);
+    }
+
+    /// listOrders 的请求预算版：budget_ms 为 ctx.deadline_ms（null = 无界）。
+    /// deadline 盖进 builder 后由 zent 驱动在池等待/语句执行两侧强制执行
+    /// （sqlite busy_timeout+progress handler / postgres statement_timeout），
+    /// 超预算报 zent 的 PoolWaitTimeout/QueryTimeout。
+    pub fn listOrdersBudget(self: *PaymentStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, budget_ms: ?i64) !RechargeOrderListResult {
         var q = self.client.recharge_order.Query();
         defer q.deinit();
+        db_mod.applyDeadline(&q, budget_ms);
         const preds = self.client.recharge_order.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
@@ -345,9 +356,16 @@ pub const PaymentStore = struct {
         return row.id;
     }
 
+    /// 提现分页列表。带请求预算的版本见 listWithdrawsBudget。
     pub fn listWithdraws(self: *PaymentStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !WithdrawListResult {
+        return self.listWithdrawsBudget(page, page_size, tenant_id, account_id, null);
+    }
+
+    /// listWithdraws 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）。
+    pub fn listWithdrawsBudget(self: *PaymentStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, budget_ms: ?i64) !WithdrawListResult {
         var q = self.client.withdraw.Query();
         defer q.deinit();
+        db_mod.applyDeadline(&q, budget_ms);
         const preds = self.client.withdraw.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});

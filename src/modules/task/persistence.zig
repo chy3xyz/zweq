@@ -6,10 +6,11 @@ const crud = zent.crud_helpers;
 const model = @import("model.zig");
 const schema = @import("../../schema.zig");
 
-const graph = zent.codegen.graph.buildGraph(&.{model.Task});
+const graph = zent.codegen.graph.buildGraph(&.{ model.Task, model.CronLock });
 pub const infos = graph.types;
 pub const Client = schema.Client;
 pub const TaskInfo = infos[0];
+pub const CronLockInfo = infos[1];
 
 pub const TaskRow = struct {
     id: i64,
@@ -25,12 +26,27 @@ pub const TaskRow = struct {
     finished_at: i64,
     created_at: i64,
     updated_at: i64,
+    claim_owner: []const u8,
+    claimed_until: i64,
 
     pub fn free(self: TaskRow, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.payload);
         allocator.free(self.status);
         allocator.free(self.last_error);
+        allocator.free(self.claim_owner);
+    }
+};
+
+pub const CronLockRow = struct {
+    id: i64,
+    name: []const u8,
+    owner: []const u8,
+    expires_at: i64,
+
+    pub fn free(self: CronLockRow, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.owner);
     }
 };
 
@@ -69,6 +85,8 @@ pub const TaskStore = struct {
         errdefer self.allocator.free(status);
         const last_error = try self.allocator.dupe(u8, e.last_error);
         errdefer self.allocator.free(last_error);
+        const claim_owner = try self.allocator.dupe(u8, e.claim_owner);
+        errdefer self.allocator.free(claim_owner);
         return .{
             .id = e.id,
             .name = name,
@@ -83,6 +101,8 @@ pub const TaskStore = struct {
             .finished_at = e.finished_at,
             .created_at = e.created_at orelse 0,
             .updated_at = e.updated_at orelse 0,
+            .claim_owner = claim_owner,
+            .claimed_until = e.claimed_until,
         };
     }
 
@@ -149,7 +169,10 @@ pub const TaskStore = struct {
     }
 
     /// Oldest due task (`pending` and `available_at <= now`), or null.
-    pub fn claimNext(self: *TaskStore, now: i64) !?TaskRow {
+    /// Claims with a fencing token: `owner` (dispatcher 实例 token) is written
+    /// to `claim_owner` and the lease `claimed_until = now + stale_after`, so
+    /// a worker that dies mid-run can only lose its lease, never its writes.
+    pub fn claimNext(self: *TaskStore, now: i64, owner: []const u8, stale_after: i64) !?TaskRow {
         var q = self.client.task.Query();
         defer q.deinit();
         const preds = self.client.task.predicates;
@@ -168,6 +191,8 @@ pub const TaskStore = struct {
         _ = try upd.setFieldValue("attempts", entity.attempts + 1);
         _ = try upd.setFieldValue("started_at", now);
         _ = try upd.setFieldValue("updated_at", now);
+        _ = try upd.set("claim_owner", .{ .string = owner });
+        _ = try upd.setFieldValue("claimed_until", now + stale_after);
         _ = try upd.Where(.{preds.idEQ(.{ .int = entity.id })});
         _ = try upd.Where(.{preds.statusEQ(.{ .string = "pending" })});
         const affected = try upd.Save();
@@ -179,7 +204,10 @@ pub const TaskStore = struct {
         return try self.getTaskById(entity.id);
     }
 
-    pub fn markDone(self: *TaskStore, id: i64, now: i64) !void {
+    /// Finalize a claimed task as done. The `owner` fencing token must still
+    /// own the row — a late write from a worker whose claim was requeued away
+    /// matches 0 rows and returns false（写穿被 fencing 谓词拦下）。
+    pub fn markDone(self: *TaskStore, id: i64, owner: []const u8, now: i64) !bool {
         const preds = self.client.task.predicates;
         var upd = self.client.task.Update();
         defer upd.deinit();
@@ -187,12 +215,15 @@ pub const TaskStore = struct {
         _ = try upd.setFieldValue("finished_at", now);
         _ = try upd.setFieldValue("updated_at", now);
         _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try upd.Save();
+        _ = try upd.Where(.{preds.statusEQ(.{ .string = "claimed" })});
+        _ = try upd.Where(.{preds.claim_ownerEQ(.{ .string = owner })});
+        return (try upd.Save()) > 0;
     }
 
     /// Mark failed permanently, or schedule a retry (attempts stay as-is;
-    /// the next claim increments them again).
-    pub fn markFailedOrRetry(self: *TaskStore, id: i64, attempts: i64, max_attempts: i64, last_error: []const u8, now: i64, retry_interval: i64) !void {
+    /// the next claim increments them again). Same fencing predicate as
+    /// `markDone`; returns false when the row is no longer ours.
+    pub fn markFailedOrRetry(self: *TaskStore, id: i64, owner: []const u8, attempts: i64, max_attempts: i64, last_error: []const u8, now: i64, retry_interval: i64) !bool {
         const preds = self.client.task.predicates;
         var upd = self.client.task.Update();
         defer upd.deinit();
@@ -207,25 +238,38 @@ pub const TaskStore = struct {
             _ = try upd.setFieldValue("started_at", 0);
         }
         _ = try upd.setFieldValue("updated_at", now);
+        // 释放租约:回到 pending / 终态的行不再属于任何 worker。
+        _ = try upd.set("claim_owner", .{ .string = "" });
+        _ = try upd.setFieldValue("claimed_until", 0);
         _ = try upd.Where(.{preds.idEQ(.{ .int = id })});
-        _ = try upd.Save();
+        _ = try upd.Where(.{preds.statusEQ(.{ .string = "claimed" })});
+        _ = try upd.Where(.{preds.claim_ownerEQ(.{ .string = owner })});
+        return (try upd.Save()) > 0;
     }
 
-    /// Re-queue tasks whose worker died mid-run (`claimed` but started too
-    /// long ago). Fails tasks past their attempt budget.
+    /// Re-queue tasks whose lease expired (`claimed` and
+    /// `claimed_until < now` — the claim-time deadline, not a re-derived
+    /// `started_at` window, so only the claimer-side timeout decides).
+    /// Fails tasks past their attempt budget. The reclaim is a
+    /// compare-and-swap on the fencing token: if another replica already
+    /// reclaimed between our SELECT and UPDATE, the row changed and our
+    /// UPDATE hits 0 rows (not counted, not double-requeued).
+    /// `stale_after` 保留在签名里(调用方语义不变),判定已改用 claimed_until。
     pub fn requeueStale(self: *TaskStore, now: i64, stale_after: i64) !usize {
+        _ = stale_after;
         const preds = self.client.task.predicates;
         var q = self.client.task.Query();
         defer q.deinit();
         _ = try q.Where(.{preds.statusEQ(.{ .string = "claimed" })});
-        _ = try q.Where(.{preds.started_atLT(.{ .int = now - stale_after })});
+        _ = try q.Where(.{preds.claimed_untilLT(.{ .int = now })});
         var found = try q.All();
         defer self.client.task.deinitRows(&found);
 
         var count: usize = 0;
         for (found.items) |e| {
             if (e.attempts >= e.max_attempts) {
-                try self.markFailedOrRetry(e.id, e.attempts, e.max_attempts, "stale (worker died)", now, 0);
+                // 借 markFailedOrRetry 的 fencing 谓词:claim_owner 已变则放弃。
+                if (try self.markFailedOrRetry(e.id, e.claim_owner, e.attempts, e.max_attempts, "stale (worker died)", now, 0)) count += 1;
             } else {
                 var upd = self.client.task.Update();
                 defer upd.deinit();
@@ -233,10 +277,13 @@ pub const TaskStore = struct {
                 _ = try upd.setFieldValue("available_at", now);
                 _ = try upd.setFieldValue("started_at", 0);
                 _ = try upd.setFieldValue("updated_at", now);
+                _ = try upd.set("claim_owner", .{ .string = "" });
+                _ = try upd.setFieldValue("claimed_until", 0);
                 _ = try upd.Where(.{preds.idEQ(.{ .int = e.id })});
-                _ = try upd.Save();
+                _ = try upd.Where(.{preds.claim_ownerEQ(.{ .string = e.claim_owner })});
+                _ = try upd.Where(.{preds.claimed_untilEQ(.{ .int = e.claimed_until })});
+                if ((try upd.Save()) > 0) count += 1;
             }
-            count += 1;
         }
         return count;
     }
@@ -309,5 +356,61 @@ pub const TaskStore = struct {
             pair[1].* = @intCast(try q.Count());
         }
         return counts;
+    }
+};
+
+/// DB 表锁(cron_locks),给 ScheduledRunner 在多副本部署下互斥执行 interval
+/// job。协议是「可续租约」而非「抢-放」:
+///   1. INSERT 优先(SaveIgnore,撞唯一键即失败);
+///   2. 已有锁未过期且 owner 不是自己 → 让位(别的副本正在负责本轮);
+///   3. 已过期,或 owner 是自己(上一轮的租约还没到期)→ 按旧 expires_at
+///      做 compare-and-swap 续期/抢占,两副本同时动手只有一个 UPDATE 命中。
+/// 持锁者跑完不释放:租约自身就是「本轮已有人负责」的标记,下个周期 owner
+/// 相同直接续期;crash 则由 TTL 兜底,过期后由其他副本抢走,接管延迟 ≤ TTL。
+pub const CronLockStore = struct {
+    allocator: std.mem.Allocator,
+    client: Client,
+
+    pub fn init(allocator: std.mem.Allocator, client: Client) CronLockStore {
+        return .{ .allocator = allocator, .client = client };
+    }
+
+    pub fn getLock(self: *CronLockStore, name: []const u8) !?CronLockRow {
+        const preds = self.client.cron_lock.predicates;
+        var entity = (try crud.first(self.client.cron_lock, .{preds.nameEQ(.{ .string = name })})) orelse return null;
+        defer self.client.cron_lock.deinitRow(&entity);
+        return .{
+            .id = entity.id,
+            .name = try self.allocator.dupe(u8, entity.name),
+            .owner = try self.allocator.dupe(u8, entity.owner),
+            .expires_at = entity.expires_at,
+        };
+    }
+
+    /// 尝试抢占/续期 `name` 锁,租约 `now + ttl_secs`。返回是否由本 owner 持有。
+    pub fn tryLock(self: *CronLockStore, name: []const u8, owner: []const u8, now: i64, ttl_secs: i64) !bool {
+        var cb = try self.client.cron_lock.Create();
+        defer cb.deinit();
+        _ = try cb.setFieldValue("name", name);
+        _ = try cb.setFieldValue("owner", owner);
+        _ = try cb.setFieldValue("expires_at", now + ttl_secs);
+        var row = try cb.SaveIgnore();
+        defer self.client.cron_lock.deinitRow(&row);
+        // SaveIgnore 撞唯一键时 RETURNING 无行,自增 id 保持 0;插入成功才带回 id。
+        if (row.id != 0) return true;
+
+        const existing = (try self.getLock(name)) orelse return false; // 极端竞态:行刚被删
+        defer existing.free(self.allocator);
+        // 他人持有未过期租约 → 让位;自己的租约(上轮遗留)与过期租约都进入 CAS。
+        if (existing.expires_at > now and !std.mem.eql(u8, existing.owner, owner)) return false;
+
+        const preds = self.client.cron_lock.predicates;
+        var upd = self.client.cron_lock.Update();
+        defer upd.deinit();
+        _ = try upd.set("owner", .{ .string = owner });
+        _ = try upd.setFieldValue("expires_at", now + ttl_secs);
+        _ = try upd.Where(.{preds.idEQ(.{ .int = existing.id })});
+        _ = try upd.Where(.{preds.expires_atEQ(.{ .int = existing.expires_at })});
+        return (try upd.Save()) > 0;
     }
 };

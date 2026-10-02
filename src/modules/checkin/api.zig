@@ -67,7 +67,7 @@ pub fn CheckinApi(comptime Service: type, comptime UserService: type) type {
         fn list(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
 
             const account_raw = ctx.queryParam("account_id") orelse {
                 try ctx.sendErrorResponse(400, 400, "缺少 account_id");

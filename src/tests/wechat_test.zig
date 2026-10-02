@@ -286,7 +286,7 @@ test "message: replay guard rejects stale timestamp + duplicate nonce" {
     var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
     var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
     var message_store = message.persistence.MessageStore.init(allocator, env.client);
-    var cache = cache_svc.CacheService.init(allocator, 1024, 300);
+    var cache = cache_svc.CacheService.init(allocator, std.testing.io, 1024, 300);
     defer cache.deinit();
     var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
     wechat_svc.cache = &cache;
@@ -417,6 +417,100 @@ test "message: default reply + AI-flag fallback without provider" {
     const hit_reply = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, hit_xml);
     defer allocator.free(hit_reply);
     try std.testing.expect(std.mem.indexOf(u8, hit_reply, "你好呀") != null);
+}
+
+/// 监听但不服务的假 AI endpoint：连接在 kernel backlog 里挂起，客户端读
+/// 数据永远等不到 → 触发短超时。返回选中的端口（bind :0 没法直读端口，
+/// 这里从 base 起逐个试探）。
+const SlowListenResult = struct {
+    server: std.Io.net.Server,
+    port: u16,
+};
+
+fn listenButNeverServe(io: std.Io, base_port: u16) !SlowListenResult {
+    var port: u16 = base_port;
+    while (port < base_port + 100) : (port += 1) {
+        const addr = try std.Io.net.IpAddress.parse("127.0.0.1", port);
+        if (addr.listen(io, .{ .reuse_address = true })) |server| {
+            return .{ .server = server, .port = port };
+        } else |err| switch (err) {
+            error.AddressInUse => continue,
+            else => return err,
+        }
+    }
+    return error.AddressInUse;
+}
+
+test "message: AI 自动回复慢响应 → 4s 短超时快速回退兜底默认回复" {
+    const allocator = std.testing.allocator;
+    var env = try openMemory(allocator);
+    defer env.deinit();
+
+    // 慢响应 provider：监听但不服务，AI 请求会挂起到读超时。
+    const base: u16 = 38000 + @as(u16, @intCast(@mod(zigmodu.time.monotonicNowMilliseconds(), 5000)));
+    var slow = try listenButNeverServe(std.testing.io, base);
+    defer slow.server.deinit(std.testing.io);
+    const endpoint = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/v1/chat/completions", .{slow.port});
+    defer allocator.free(endpoint);
+
+    var account_store = account.persistence.AccountStore.init(allocator, env.client);
+    var account_svc = account.service.AccountService.init(allocator, std.testing.io, &account_store);
+    var rule_store = rule.persistence.RuleStore.init(allocator, env.client);
+    var rule_svc = rule.service.RuleService.init(allocator, std.testing.io, &rule_store);
+    var fan_store = member.persistence.FanStore.init(allocator, env.client);
+    var member_svc = member.service.MemberService.init(allocator, std.testing.io, &fan_store);
+    var setting_store = setting.persistence.SettingStore.init(allocator, env.client);
+    var message_store = message.persistence.MessageStore.init(allocator, env.client);
+    var wechat_svc = message.service.WechatService.init(allocator, std.testing.io, &account_svc, &rule_svc, &member_svc, &setting_store, &message_store);
+
+    var ai_store = ai.persistence.AiStore.init(allocator, env.client);
+    var user_store = user.persistence.UserStore.init(allocator, env.client);
+    var task_store = task.persistence.TaskStore.init(allocator, env.client);
+    var audit_store = audit.persistence.AuditStore.init(allocator, env.client);
+    var tenant_store = tenant.persistence.TenantStore.init(allocator, env.client);
+    var notify_store = notify.persistence.NotificationStore.init(allocator, env.client);
+    var notify_svc = notify.service.NotificationService.init(allocator, std.testing.io, &notify_store);
+    const refs = ai.service.SkillsRefs{
+        .user_store = &user_store,
+        .task_store = &task_store,
+        .audit_store = &audit_store,
+        .tenant_store = &tenant_store,
+        .ai_store = &ai_store,
+        .notify_svc = &notify_svc,
+    };
+    var ai_svc = try ai.service.AiService.init(allocator, std.testing.io, &ai_store, .{ .key_secret = "master-secret" }, refs);
+    defer ai_svc.deinit();
+    wechat_svc.ai_svc = &ai_svc;
+
+    // provider 直插库（绕过 url_guard：环回地址会被写入口校验拒绝，而本测
+    // 只关心超时路径）。
+    const enc = try ai_svc.encryptKeys(allocator, "[\"sk-test\"]");
+    defer allocator.free(enc);
+    _ = try ai_store.createProvider("slow", endpoint, enc, "mock-model", "", true, 0);
+
+    const account_id = try account_svc.create(1, "测试公众号", "wechat");
+    _ = try account_svc.upsertWechat(1, account_id, .{ .appid = "wx1", .secret = "s", .token = "toka", .encoding_aes_key = "", .verified = false });
+    _ = try setting_store.set(1, "wechat_ai_auto_reply", "1", 100);
+    _ = try setting_store.set(1, "wechat_default_reply", "兜底默认回复", 101);
+
+    const token = "toka";
+    var ts_buf: [16]u8 = undefined;
+    const ts = try std.fmt.bufPrint(&ts_buf, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    const nonce = "n-ai-slow";
+    const sig = try zwechat.util.signature.signature(allocator, &[_][]const u8{ token, ts, nonce });
+    defer allocator.free(sig);
+
+    // 未命中规则 → AI 挂起 → 4s 短超时 → 快速回退兜底默认回复（而非 30s）。
+    const text_xml = "<xml><ToUserName><![CDATA[gh]]></ToUserName><FromUserName><![CDATA[o_ai]]></FromUserName><CreateTime>1700000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[随便聊聊]]></Content></xml>";
+    const start = zigmodu.time.monotonicNowMilliseconds();
+    const reply = try wechat_svc.handleCallback(allocator, token, .{ .signature = sig, .timestamp = ts, .nonce = nonce }, text_xml);
+    defer allocator.free(reply);
+    const elapsed_ms = zigmodu.time.monotonicNowMilliseconds() - start;
+
+    try std.testing.expect(std.mem.indexOf(u8, reply, "兜底默认回复") != null);
+    // 确实等到了读超时（不是连接级秒败），且被 4s 短超时兜住（远小于默认 30s）。
+    try std.testing.expect(elapsed_ms >= 3000);
+    try std.testing.expect(elapsed_ms < 15_000);
 }
 
 test "material: news + file CRUD, kind validation" {

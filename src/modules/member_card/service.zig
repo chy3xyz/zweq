@@ -19,6 +19,8 @@ pub const MemberCardError = error{
     AlreadyOpened,
     InsufficientPoints,
     InvalidState,
+    /// 请求预算耗尽（zent PoolWaitTimeout/QueryTimeout，见 request_budget 闸门）。
+    RequestTimeout,
     Unexpected,
 };
 
@@ -89,7 +91,16 @@ pub const MemberCardService = struct {
     }
 
     pub fn listAccounts(self: *MemberCardService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8) MemberCardError!persist.MemberAccountListResult {
-        return self.store.listAccounts(page, page_size, tenant_id, account_id, keyword) catch error.Unexpected;
+        return self.listAccountsBudget(page, page_size, tenant_id, account_id, keyword, null);
+    }
+
+    /// listAccounts 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
+    /// 查询超预算 → zent QueryTimeout/PoolWaitTimeout → RequestTimeout。
+    pub fn listAccountsBudget(self: *MemberCardService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, keyword: []const u8, budget_ms: ?i64) MemberCardError!persist.MemberAccountListResult {
+        return self.store.listAccountsBudget(page, page_size, tenant_id, account_id, keyword, budget_ms) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => error.RequestTimeout,
+            else => error.Unexpected,
+        };
     }
 
     /// 开卡：openid 一卡唯一；自动匹配最低等级（threshold 最小的等级）。

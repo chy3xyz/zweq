@@ -107,7 +107,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
-            return mw.authTenantId(ctx) orelse self.default_tenant_id;
+            return mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
         }
 
         fn list(ctx: *http.Context) !void {
@@ -221,7 +221,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
             };
             var d2: [128]u8 = undefined;
             const det2 = try std.fmt.bufPrint(&d2, "更新账号 #{d} → {s}", .{ id, status });
-            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.update", "account", id, det2, zigmodu.http.RequestUtil.getRealIp(ctx), true, mw.authTenantId(ctx) orelse self.default_tenant_id);
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.update", "account", id, det2, zigmodu.http.RequestUtil.getRealIp(ctx), true, mw.authTenantIdOrDefault(ctx, self.default_tenant_id));
             try ctx.ok("null");
         }
 
@@ -238,7 +238,7 @@ pub fn AccountApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
-            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.delete", "account", id, "删除账号", zigmodu.http.RequestUtil.getRealIp(ctx), true, mw.authTenantId(ctx) orelse self.default_tenant_id);
+            self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "account.delete", "account", id, "删除账号", zigmodu.http.RequestUtil.getRealIp(ctx), true, mw.authTenantIdOrDefault(ctx, self.default_tenant_id));
             try ctx.ok("null");
         }
 

@@ -14,12 +14,12 @@
 
 | Path | What it is |
 | --- | --- |
-| `src/` | Zig backend source: `main.zig` (server), `config.zig`, `db.zig` (SQLite/Postgres driver + migrations), `schema.zig` (schema aggregation), `modules/<domain>/` (model → persistence → service → api → module), `services/`, `http/`, `middleware/`, background `jobs.zig` / `scheduled.zig`, admin tooling (`admin_cli.zig`, `admin_nav*`, `permission_*`), and `tests/`. |
+| `src/` | Zig backend source: `main.zig` (server), `config.zig`, `db.zig` (SQLite/Postgres driver + migrations), `schema.zig` (schema aggregation), `modules/<domain>/` (model → persistence → service → api → module), `services/`, `http/`, `middleware/` (incl. `panic_hook.zig` — request-context-aware panic hook, `request_budget.zig` — request-budget 408 gate), background `jobs.zig` / `scheduled.zig`, admin tooling (`admin_cli.zig`, `admin_nav*`, `permission_*`), and `tests/`. |
 | `web/` | Admin console: SolidJS + TypeScript + Rsbuild + Tailwind/DaisyUI SPA under `web/src`. The Zig binary serves compiled `web/dist` in production. |
 | `unix/` | **Reference/scaffolding** — the upstream **unibestX** uni-app X template source (git-ignored). The shipped, customized mini-program lives in `mp/`. |
 | `mp/` | The shipped uni-app X **mini-program**, customized from the `unix/` template: `.uvue`/`.uts` pages, `uni_modules`, `uniCloud-aliyun`, `pages.json`. |
-| `docs/` | Canonical documentation: `ARCHITECTURE.md` (deep dive), `DIRECTORY.md` (this file), `backup.md`, `benchmark-report.md`, `test-report-v0.3.0.md`, and `superpowers/` (specs + plans). |
-| `scripts/` | Dev/e2e helpers: backup, file-size check, Python e2e runners, Unix test-data seed. |
+| `docs/` | Canonical documentation: `ARCHITECTURE.md` (deep dive), `DIRECTORY.md` (this file), `OBSERVABILITY.md` (metrics + minimal Prometheus alerting runbook), `backup.md`, `benchmark-report.md`, `test-report-v0.3.0.md`, and `superpowers/` (specs + plans). |
+| `scripts/` | Dev/e2e/lint helpers: backup, file-size check, module-dependency lint (`check_module_deps.py`, backs `zig build lint-deps`), Python e2e runners, Unix test-data seed. |
 | `tools/` | Codegen helpers: `gen_module.py` (scaffolds a new `modules/<domain>` five-file shape). |
 | `uploads/` | **Runtime data** — uploaded files directory (contains `market/`), git-ignored. |
 | `_dev/` | **Reference/local scaffolding** — WeEngine (微擎) PHP install archive + `weengine_src`, used for local install study. Not part of the project. |

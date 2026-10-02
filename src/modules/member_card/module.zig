@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "member_card",
     .description = "会员卡（卡等级 + 积分账户）",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "message", "user" },
     .is_internal = false,
 };
 

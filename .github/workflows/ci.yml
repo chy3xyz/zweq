@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  secrets-scan:
+    # 全历史 secret 扫描（gitleaks）。误报收编进 .gitleaksignore（指纹制，逐条带处置说明）：
+    # 当前仅 3 条测试夹具 RSA 私钥（src/tests/payment_test.zig 文件作用域，无网络构报文断言用，
+    # 非真实商户凭据）+ 1 条 vendored quill.min.js 的 generic-api-key 误报。命中即红。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build-test:
     runs-on: ubuntu-latest
     services:
@@ -28,7 +42,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.17.0-dev.1567+f0354179a
+          version: 0.17.0-dev.1970+67f39b551
 
       - name: Build
         run: zig build
@@ -38,6 +52,9 @@ jobs:
 
       - name: Allocator-owner lint (arena vs long-lived allocator)
         run: zig build lint-alloc
+
+      - name: Module dependencies lint (declared vs real imports)
+        run: zig build lint-deps
 
       - name: Format check (zig fmt)
         run: zig build lint-fmt
@@ -61,10 +78,46 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.17.0-dev.1567+f0354179a
+          version: 0.17.0-dev.1970+67f39b551
 
       - name: E2E (fresh SQLite + admin/fan suites + shutdown leak gate)
         run: ./scripts/run_e2e.sh
+
+  zweq-cloud:
+    # 独立云服务（zweq-cloud/ 有自己的 build.zig.zon），单独装 zig 构建+测试。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.17.0-dev.1970+67f39b551
+
+      - name: Build zweq-cloud
+        working-directory: zweq-cloud
+        run: zig build
+
+      - name: Unit tests (zweq-cloud)
+        working-directory: zweq-cloud
+        run: zig build test
+
+  docker-build:
+    # 自包含 Dockerfile 冒烟：构建x + GHA 层缓存，验证镜像可构建（不推送）。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   frontend:
     runs-on: ubuntu-latest
@@ -83,6 +136,13 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: npm audit (high severity and above)
+        # 现存 1 个 high 漏洞已登记在案：nanoid <3.3.18（GHSA-2v37-7h3g-55p8，
+        # custom generators can loop indefinitely when size is zero），fix available via npm audit fix。
+        # 消除后请删除本注释与 continue-on-error，让该步骤恢复硬门禁。
+        continue-on-error: true
+        run: npm audit --audit-level=high
 
       - name: Typecheck
         run: npm run typecheck

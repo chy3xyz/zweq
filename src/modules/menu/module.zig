@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "menu",
     .description = "公众号自定义菜单（保存/发布/删除）",
-    .dependencies = &.{},
+    .dependencies = &.{ "account", "audit", "user" },
     .is_internal = false,
 };
 

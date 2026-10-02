@@ -106,7 +106,7 @@ tenants ride in the JWT `aud` claim, and platform admins get cross-tenant toolin
 | Layer | Technology |
 | --- | --- |
 | Backend | [Zig](https://ziglang.org) 0.17 · [zigmodu](https://github.com/chy3xyz/zigmodu) (HTTP, security, task queue) · [zent](https://github.com/chy3xyz/zent) (ORM, schema-as-code, migrations) |
-| WeChat SDK | [zwechat](https://github.com/chy3xyz/zwechat) (callback, AES, Pay v2/v3, mTLS over [zhttp](https://github.com/chy3xyz/zhttp)) |
+| WeChat SDK | [zwechat](https://github.com/chy3xyz/zwechat) (callback, AES, Pay v2/v3; mTLS since v0.5 via runtime `dlopen` of OpenSSL — zhttp removed) |
 | Frontend | [SolidJS](https://www.solidjs.com) · TypeScript · [Rsbuild](https://rsbuild.dev) · Tailwind CSS 4 · DaisyUI |
 | Database | SQLite (default) ↔ PostgreSQL (one env var) |
 
@@ -200,8 +200,9 @@ vars — keys are stored encrypted or masked respectively.
 - AI provider keys encrypted at rest (AES-256-GCM)
 - Admin routes enforce roles server-side (`requireAdmin` against the DB, not the JWT)
 - Rate-limited auth, redacted access logs, security headers, CORS allow-list
-- Production fails closed: explicit `ZWEQ_JWT_SECRET` and `ZWEQ_AI_KEY_SECRET` required
-  for critical paths
+- Production fails closed (PostgreSQL or `ZWEQ_ENV=production`): the server
+  refuses to start without an explicit `ZWEQ_JWT_SECRET` (≥16 chars, not the
+  dev placeholder) and explicit `ZWEQ_CORS_ORIGINS`
 
 Report a vulnerability via [SECURITY.md](SECURITY.md).
 
@@ -232,6 +233,11 @@ Every endpoint returns `{ code, msg, data }`; `code === 0` means success.
 # stores, services, JWT/multi-tenancy, WeChat callback round-trips,
 # Pay v3 signer + notify verification (tamper-rejected), audit, RBAC, HTTP flow
 zig build test
+
+# E2E: throwaway SQLite DB + a real server process, admin and fan-side
+# suites, then a graceful-shutdown gate that fails on panic or any
+# leaked allocation (real-DB + shutdown-leak regression gate, CI's e2e job)
+./scripts/run_e2e.sh
 
 # Frontend: type check and production build
 cd web && npm run typecheck && npm run build

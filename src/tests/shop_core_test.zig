@@ -364,7 +364,7 @@ test "shop: coupon deduction + member points accrual on payment" {
     var coupon_svc = coupon.service.CouponService.init(allocator, std.testing.io, &coupon_store);
     var mc_store = member_card.persistence.MemberCardStore.init(allocator, env.client);
     var mc_svc = member_card.service.MemberCardService.init(allocator, std.testing.io, &mc_store);
-    svc.coupon_store = &coupon_store;
+    svc.coupon_svc = &coupon_svc; // 下单优惠券校验/核销（经 service 事务内窄方法）
     svc.member_svc = &mc_svc;
 
     // 商品 100 元（10000 分）。

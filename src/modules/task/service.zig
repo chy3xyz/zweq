@@ -93,6 +93,10 @@ pub const Dispatcher = struct {
     tick_interval_ms: u64 = 1000,
     processed: std.atomic.Value(u64),
     failed: std.atomic.Value(u64),
+    /// fencing token 计数:每次 claim 自增,owner = "disp-{tag}-{seq}"。
+    claim_seq: u64 = 0,
+    /// 实例标识(进程级唯一),惰性生成。
+    instance_tag: u64 = 0,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -164,7 +168,9 @@ pub const Dispatcher = struct {
         }
         var ran: usize = 0;
         while (true) {
-            const task_opt = self.store.claimNext(now) catch |err| {
+            var owner_buf: [64]u8 = undefined;
+            const owner = self.nextOwner(&owner_buf);
+            const task_opt = self.store.claimNext(now, owner, self.stale_after_seconds) catch |err| {
                 std.log.err("[task] claimNext 失败,本 tick 提前结束: {s}", .{@errorName(err)});
                 break;
             };
@@ -177,6 +183,15 @@ pub const Dispatcher = struct {
         std.log.info("[task] tick 完成: {d} 个任务,总耗时 {d}ms", .{ ran, tick_ms });
     }
 
+    fn nextOwner(self: *Dispatcher, buf: []u8) []const u8 {
+        if (self.instance_tag == 0) {
+            const ns: u64 = @bitCast(@import("zigmodu").time.monotonicNow());
+            self.instance_tag = ns ^ @as(u64, @truncate(@intFromPtr(self)));
+        }
+        self.claim_seq += 1;
+        return std.fmt.bufPrint(buf, "disp-{x}-{d}", .{ self.instance_tag, self.claim_seq }) catch unreachable;
+    }
+
     fn runTask(self: *Dispatcher, task: TaskRow) void {
         var found: ?Handler = null;
         for (self.handlers) |h| {
@@ -187,9 +202,12 @@ pub const Dispatcher = struct {
         }
         const handler = found orelse {
             // Unknown handler — fail so the row does not spin forever.
-            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, "no handler registered", wallNow(self), 0) catch |mark_err| {
+            const ok = self.store.markFailedOrRetry(task.id, task.claim_owner, task.attempts, task.max_attempts, "no handler registered", wallNow(self), 0) catch |mark_err| {
                 std.log.err("[task] {s}#{d} 无 handler 标记失败写入失败: {s}", .{ task.name, task.id, @errorName(mark_err) });
+                _ = self.failed.fetchAdd(1, .monotonic);
+                return;
             };
+            if (!ok) std.log.warn("[task] {s}#{d} 无 handler,但认领已易主(fencing 拒写)", .{ task.name, task.id });
             _ = self.failed.fetchAdd(1, .monotonic);
             return;
         };
@@ -201,20 +219,32 @@ pub const Dispatcher = struct {
             // 超限标记 failed,任务不再被静默记成功而丢信。
             const elapsed_ms = @divTrunc(@import("zigmodu").time.monotonicNow() - run_start, std.time.ns_per_ms);
             std.log.err("[task] {s}#{d} 执行失败: {s} (耗时 {d}ms)", .{ task.name, task.id, @errorName(err), elapsed_ms });
-            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, @errorName(err), wallNow(self), self.retry_interval_seconds) catch |mark_err| {
+            const ok = self.store.markFailedOrRetry(task.id, task.claim_owner, task.attempts, task.max_attempts, @errorName(err), wallNow(self), self.retry_interval_seconds) catch |mark_err| {
                 std.log.err("[task] {s}#{d} 重试/失败标记写入失败: {s}", .{ task.name, task.id, @errorName(mark_err) });
+                _ = self.failed.fetchAdd(1, .monotonic);
+                return;
             };
+            if (!ok) std.log.warn("[task] {s}#{d} 执行失败后写标记被 fencing 拒绝(认领已易主)", .{ task.name, task.id });
             _ = self.failed.fetchAdd(1, .monotonic);
             return;
         };
         const elapsed_ms = @divTrunc(@import("zigmodu").time.monotonicNow() - run_start, std.time.ns_per_ms);
-        self.store.markDone(task.id, wallNow(self)) catch {
-            self.store.markFailedOrRetry(task.id, task.attempts, task.max_attempts, "store error", wallNow(self), self.retry_interval_seconds) catch |mark_err| {
+        const done = self.store.markDone(task.id, task.claim_owner, wallNow(self)) catch {
+            const fb = self.store.markFailedOrRetry(task.id, task.claim_owner, task.attempts, task.max_attempts, "store error", wallNow(self), self.retry_interval_seconds) catch |mark_err| {
                 std.log.err("[task] {s}#{d} markDone 失败后的兜底标记同样失败: {s}", .{ task.name, task.id, @errorName(mark_err) });
+                _ = self.failed.fetchAdd(1, .monotonic);
+                return;
             };
+            if (!fb) std.log.warn("[task] {s}#{d} markDone 失败后的兜底标记被 fencing 拒绝", .{ task.name, task.id });
             _ = self.failed.fetchAdd(1, .monotonic);
             return;
         };
+        if (!done) {
+            // 认领已被 requeue 走并易主(本 handler 跑过了 stale 期限):
+            // 收尾写穿被 fencing 拦下,结果以新 owner's 为准。
+            std.log.warn("[task] {s}#{d} markDone 被 fencing 拒绝(认领已易主)", .{ task.name, task.id });
+            return;
+        }
         std.log.debug("[task] {s}#{d} 执行完成,耗时 {d}ms", .{ task.name, task.id, elapsed_ms });
         _ = self.processed.fetchAdd(1, .monotonic);
     }

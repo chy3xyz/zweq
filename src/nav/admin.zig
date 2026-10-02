@@ -99,7 +99,7 @@ pub fn handleAdminNav(
         try ctx.sendErrorResponse(401, 401, "未登录");
         return;
     };
-    const tid = mw.authTenantId(ctx) orelse default_tenant_id;
+    const tid = mw.authTenantIdOrDefault(ctx, default_tenant_id);
 
     const row_opt = users.getUserById(uid) catch {
         try ctx.sendErrorResponse(500, 500, "用户查询失败");

@@ -3,6 +3,7 @@ const std = @import("std");
 const zent = @import("zent");
 const crud = zent.crud_helpers;
 const persist = @import("persistence.zig");
+const db_mod = @import("../../db.zig");
 const Client = persist.Client;
 
 // 行类型经 rows.zig 引用（沿用原名，正文逐字搬运）。
@@ -378,8 +379,15 @@ pub const TradeStore = struct {
     }
 
     pub fn listOrders(self: *TradeStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64, pickup_type: []const u8) !OrderListResult {
+        return self.listOrdersBudget(page, page_size, tenant_id, account_id, openid, status, pickup_type, null);
+    }
+
+    /// listOrders 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
+    /// deadline 盖进 zent builder，由驱动在池等待/语句执行两侧强制执行。
+    pub fn listOrdersBudget(self: *TradeStore, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64, pickup_type: []const u8, budget_ms: ?i64) !OrderListResult {
         var q = self.client.shop_order.Query();
         defer q.deinit();
+        db_mod.applyDeadline(&q, budget_ms);
         const preds = self.client.shop_order.predicates;
         _ = try q.Where(.{preds.tenant_idEQ(.{ .int = tenant_id })});
         if (account_id > 0) _ = try q.Where(.{preds.account_idEQ(.{ .int = account_id })});
@@ -452,6 +460,43 @@ pub const TradeStore = struct {
 
     pub fn listOrderProducts(self: *TradeStore, order_id: i64) ![]ShopOrderProductRow {
         return self.listOrderProductsOn(self.client, order_id);
+    }
+
+    /// 批量读取多个订单的明细：一条 `order_id IN (...)` 查询代替逐单查询
+    /// （C 端 summaries 等批量场景的 N+1 修法）。返回平铺列表，caller 按
+    /// order_id 分组（同 permission persistence 的 idValues/In 写法）。
+    pub fn listOrderProductsByIds(self: *TradeStore, order_ids: []const i64) ![]ShopOrderProductRow {
+        if (order_ids.len == 0) return try self.allocator.alloc(ShopOrderProductRow, 0);
+        const vals = try self.allocator.alloc(zent.sql.Value, order_ids.len);
+        defer self.allocator.free(vals);
+        for (order_ids, 0..) |id, i| vals[i] = .{ .int = id };
+
+        var q = self.client.shop_order_product.Query();
+        defer q.deinit();
+        const preds = self.client.shop_order_product.predicates;
+        _ = try q.Where(.{preds.order_idIn(vals)});
+        var rows = try q.All();
+        defer self.client.shop_order_product.deinitRows(&rows);
+        var out = try self.allocator.alloc(ShopOrderProductRow, rows.items.len);
+        errdefer self.allocator.free(out);
+        var n: usize = 0;
+        errdefer for (out[0..n]) |r| r.free(self.allocator);
+        for (rows.items) |e| {
+            out[n] = .{
+                .id = e.id,
+                .order_id = e.order_id,
+                .product_id = e.product_id,
+                .sku_id = e.sku_id,
+                .name = try self.allocator.dupe(u8, e.name),
+                .image = try self.allocator.dupe(u8, e.image),
+                .spec_json = try self.allocator.dupe(u8, e.spec_json),
+                .price = try self.allocator.dupe(u8, e.price),
+                .quantity = e.quantity,
+                .created_at = e.created_at orelse 0,
+            };
+            n += 1;
+        }
+        return out;
     }
 
     pub fn getOrderProduct(self: *TradeStore, id: i64) !?ShopOrderProductRow {

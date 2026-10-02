@@ -223,12 +223,16 @@ pub const WechatService = struct {
         if (delta > 300) return error.TimestampExpired;
 
         // Nonce dedup: reject a repeated nonce within the cache TTL window
-        // (best effort — skipped when no cache is injected).
+        // (best effort — skipped when no cache is injected). setIfAbsent
+        // 锁内先查后写，check-then-act 原子化，重放防线不被并发回调穿透。
         if (self.cache) |c| {
             var key_buf: [160]u8 = undefined;
             const key = std.fmt.bufPrint(&key_buf, "wxnonce:{d}:{s}", .{ account_id, q.nonce }) catch "";
-            if (key.len > 0 and c.get(key) != null) return error.ReplayDetected;
-            c.set(key, "1") catch {};
+            if (key.len > 0) {
+                // 缓存写入失败(OOM)时放行，与旧 best-effort 语义一致。
+                const first_seen = c.setIfAbsent(key, "1") catch true;
+                if (!first_seen) return error.ReplayDetected;
+            }
         }
 
         // 3. URL handshake (GET with echostr).
@@ -423,8 +427,10 @@ pub const WechatService = struct {
         var buf: [512]u8 = undefined;
         const content = if (parsed.content.len > 200) parsed.content[0..200] else parsed.content;
         const prompt = std.fmt.bufPrint(&buf, "你是公众号智能客服。请用中文简洁回复用户，不超过200字。用户说：{s}", .{content}) catch return null;
+        // 微信被动回复窗口约 5s：AI 调用走 4s 短超时（见 AiService.REPLY_TIMEOUT_MS），
+        // 超时/失败快速返回 null，让外层回兜底默认回复，避免拖过窗口被微信重推。
         // user_id 0 = no platform user → no skill permissions → plain completion.
-        const outcome = ai.chat(allocator, 0, 0, tenant_id, prompt) catch return null;
+        const outcome = ai.chatEx(allocator, 0, 0, tenant_id, prompt, .{ .short_timeout = true }) catch return null;
         defer allocator.free(outcome.answer);
         if (outcome.answer.len == 0 or std.mem.eql(u8, outcome.answer, "success")) return null;
         const answer = if (outcome.answer.len > 1000) outcome.answer[0..1000] else outcome.answer;
@@ -547,6 +553,8 @@ pub const WechatService = struct {
         defer self.allocator.free(body);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
+        // 低频管理面可接受：后台群发是管理员手动触发的低频操作；zwechat
+        // client 为同步阻塞实现且不支持 per-request 超时配置，不为其造线程池。
         wechat_log.beginCall();
         const resp = client.postJSON(uri, body) catch {
             wechat_log.logApiError("message.sendBroadcastText");
@@ -603,6 +611,8 @@ pub const WechatService = struct {
         defer self.allocator.free(body);
 
         const client = zwechat.util.http.getDefaultClient(self.allocator);
+        // 低频管理面可接受：数据统计是管理员手动触发的低频操作；zwechat
+        // client 为同步阻塞实现且不支持 per-request 超时配置，不为其造线程池。
         wechat_log.beginCall();
         const resp = client.postJSON(uri, body) catch {
             wechat_log.logApiError("message.getDatacube");
@@ -705,9 +715,19 @@ pub const WechatService = struct {
         };
     }
 
-    /// Admin view: list callback logs for an account.
+    /// Admin view: list callback logs for an account. HTTP 入口用
+    /// listLogsBudget（带请求预算）。
     pub fn listLogs(self: *WechatService, page: usize, page_size: usize, tenant_id: i64, account_id: i64) !MessageLogListResult {
-        return self.store.list(page, page_size, tenant_id, account_id);
+        return self.listLogsBudget(page, page_size, tenant_id, account_id, null);
+    }
+
+    /// listLogs 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
+    /// 查询超预算 → zent QueryTimeout/PoolWaitTimeout → RequestTimeout。
+    pub fn listLogsBudget(self: *WechatService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, budget_ms: ?i64) !MessageLogListResult {
+        return self.store.listBudget(page, page_size, tenant_id, account_id, budget_ms) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => error.RequestTimeout,
+            else => err,
+        };
     }
 };
 

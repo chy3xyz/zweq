@@ -8,8 +8,10 @@ const zent = @import("zent");
 const persist = @import("persistence.zig");
 const schema = @import("../../schema.zig");
 const crud = zent.crud_helpers;
-const coupon_persist = @import("../coupon/persistence.zig");
+const coupon_service = @import("../coupon/service.zig");
 const member_persist = @import("../member/persistence.zig");
+const task_service = @import("../task/service.zig");
+const db_mod = @import("../../db.zig");
 
 pub const ShopCategoryRow = persist.ShopCategoryRow;
 pub const ShopProductRow = persist.ShopProductRow;
@@ -41,6 +43,8 @@ pub const ShopError = error{
     OutOfStock,
     InsufficientBalance,
     OrderStateConflict,
+    /// 请求预算耗尽（zent PoolWaitTimeout/QueryTimeout，见 request_budget 闸门）。
+    RequestTimeout,
     Unexpected,
 };
 
@@ -98,20 +102,22 @@ pub const ShopService = struct {
     store: *persist.ShopStore,
     /// 分销服务（可选注入，支付成功后触发三级分佣）
     dist_svc: ?*anyopaque = null,
-    /// 优惠券存储（可选注入，下单校验/核销券）
-    coupon_store: ?*coupon_persist.CouponStore = null,
     /// 会员卡服务（可选注入，支付后累计积分）
     member_svc: ?*anyopaque = null,
     /// 支付服务（可选注入，余额支付扣钱包）
     payment_svc: ?*anyopaque = null,
-    /// 粉丝存储（可选注入，openid → fan_id）
+    /// 粉丝存储（可选注入，openid → fan_id）。
+    /// 边界例外（理由见 docs/ARCHITECTURE.md「模块依赖与边界」）：装配契约在
+    /// main.zig 注入的是 FanStore 指针而非 MemberService，两处只读单查
+    /// （余额支付/储值充值前取 fan_id）保留直读 member persistence。
     fan_store: ?*member_persist.FanStore = null,
     /// 优惠券服务（可选注入，邀请达标发券）
     coupon_svc: ?*anyopaque = null,
     /// 支付事件总线（可选注入；存在则支付走事件分发，否则同步回退）
     order_paid_bus: ?*OrderPaidBus = null,
-    /// Webhook HTTP 传输（测试注入 mock；生产用真实 HTTP）
-    webhook_transport: ?*anyopaque = null,
+    /// 任务队列服务（可选注入；webhook 投递经它入队 webhook.deliver，
+    /// 由 Dispatcher worker 异步 POST + 退避重试，不在事件监听里同步阻塞）
+    task_svc: ?*task_service.TaskService = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, store: *persist.ShopStore) ShopService {
         return .{ .allocator = allocator, .io = io, .store = store };
@@ -275,7 +281,15 @@ pub const ShopService = struct {
 
     /// 下单：校验商品/SKU/库存 → 原子扣库存 → 生成订单号 → 写订单+明细。
     /// 返回订单 id。支付由 payment 模块承接（mock 即时入账 / v3 微信支付）。
+    /// 无请求预算的调用点（测试/内部）走这里；HTTP 入口用 createOrderBudget。
     pub fn createOrder(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, items: []const OrderItemInput, coupon_code: []const u8, client_trade_no: []const u8, pay_type: []const u8, pickup_store_id: i64, remark: []const u8) ShopError!i64 {
+        return self.createOrderBudget(tenant_id, account_id, openid, address_id, items, coupon_code, client_trade_no, pay_type, pickup_store_id, remark, null);
+    }
+
+    /// createOrder 的请求预算版：budget_ms 为 zigmodu ctx.deadline_ms（CLOCK_MONOTONIC
+    /// 毫秒绝对 deadline，null = 无界）。事务获取（池等待）按预算上限阻塞、超预算
+    /// 报 RequestTimeout；预算耗尽时前置拒绝，不再启动事务。
+    pub fn createOrderBudget(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, items: []const OrderItemInput, coupon_code: []const u8, client_trade_no: []const u8, pay_type: []const u8, pickup_store_id: i64, remark: []const u8, budget_ms: ?i64) ShopError!i64 {
         // 幂等：同 client_trade_no 已存在 → 返回原单（不重复扣库存）。
         if (client_trade_no.len > 0) {
             if (self.store.trade.getByClientTradeNo(tenant_id, client_trade_no) catch return error.Unexpected) |existing| {
@@ -305,7 +319,16 @@ pub const ShopService = struct {
         defer if (pickup_code_owned) |c| self.allocator.free(c);
 
         // 事务：扣库存 + 建单 + 明细 原子提交（SQLite/Postgres 均支持）；失败整体回滚。
-        var tx = zent.codegen.beginTx(schema.infos, self.store.client) catch return error.Unexpected;
+        // beginTxCtx 携带请求预算：池等待按剩余预算上限阻塞（zent borrowCtx），
+        // 超预算 → PoolWaitTimeout → RequestTimeout；预算已耗尽则前置拒绝，
+        // 不启动事务（事务内语句的 deadline 化见 request_budget 中间件说明，
+        // 属逐步推进项）。
+        if (db_mod.budgetSpent(budget_ms)) return error.RequestTimeout;
+        var exec_ctx = db_mod.execContext(budget_ms);
+        var tx = zent.codegen.beginTxCtx(schema.infos, self.store.client, if (exec_ctx.deadline_ns != null) &exec_ctx else null) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => return error.RequestTimeout,
+            else => return error.Unexpected,
+        };
         // 提交后须立即归还池连接（连接在 deinit 时才 release），否则提交后的
         // 余额支付/订单明细查询在 max_connections=1（:memory:）下必然耗尽。
         // 错误路径先显式回滚再释放（池层 rollback 幂等），避免依赖 deinit 兜底。
@@ -365,24 +388,17 @@ pub const ShopService = struct {
             }
         }
 
-        // 优惠券减免：code 可选，校验归属/未用/门槛后减免。
-        // 全部走 tx.client：核销标记必须随订单事务提交/回滚，否则回滚时券白扣。
+        // 优惠券减免：code 可选，经 coupon 模块 service 的事务内窄方法校验
+        // 归属/未用/门槛并核销（CouponService.redeemOnOrder——核销标记必须随
+        // 订单事务提交/回滚，属文档化的 persistence 直读例外）。
         var discount: i64 = 0;
         if (coupon_code.len > 0) {
-            if (self.coupon_store) |cs| {
-                const u_opt = cs.getByCodeOn(tx.client, coupon_code) catch return error.Unexpected;
-                const u = u_opt orelse return error.InvalidInput;
-                defer u.free(self.allocator);
-                if (!std.mem.eql(u8, u.openid, openid)) return error.InvalidInput;
-                if (!std.mem.eql(u8, u.status, "unused")) return error.InvalidInput;
-                const c_opt = cs.getCouponOn(tx.client, u.coupon_id) catch return error.Unexpected;
-                const c = c_opt orelse return error.InvalidInput;
-                defer c.free(self.allocator);
-                const coupon_min = std.fmt.parseInt(i64, c.min_amount, 10) catch return error.Unexpected;
-                const coupon_amount = std.fmt.parseInt(i64, c.amount, 10) catch return error.Unexpected;
-                if (coupon_min > 0 and total < coupon_min) return error.InvalidInput;
-                discount = @min(coupon_amount, total);
-                cs.setStatusOn(tx.client, u.id, "used", self.now()) catch return error.Unexpected;
+            if (self.coupon_svc) |cs| {
+                const csvc: *coupon_service.CouponService = @ptrCast(@alignCast(cs));
+                discount = csvc.redeemOnOrder(tx.client, coupon_code, openid, total) catch |err| switch (err) {
+                    error.InvalidInput => return error.InvalidInput,
+                    else => return error.Unexpected,
+                };
             }
         }
         const pay_amount = total - discount;
@@ -505,7 +521,18 @@ pub const ShopService = struct {
     }
 
     pub fn listOrders(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64, pickup_type: []const u8) ShopError!OrderListResult {
-        return self.store.trade.listOrders(page, page_size, tenant_id, account_id, openid, status, pickup_type) catch error.Unexpected;
+        return self.listOrdersBudget(page, page_size, tenant_id, account_id, openid, status, pickup_type, null);
+    }
+
+    /// listOrders 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
+    /// 查询超预算 → zent QueryTimeout/PoolWaitTimeout → RequestTimeout。
+    /// HTTP 入口（管理端订单列表/C 端我的订单）用本变体；智能客服等内部
+    /// 旁路读保持无界（原方法）。
+    pub fn listOrdersBudget(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64, pickup_type: []const u8, budget_ms: ?i64) ShopError!OrderListResult {
+        return self.store.trade.listOrdersBudget(page, page_size, tenant_id, account_id, openid, status, pickup_type, budget_ms) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => error.RequestTimeout,
+            else => error.Unexpected,
+        };
     }
 
     pub fn listOrderProducts(self: *ShopService, order_id: i64) ShopError![]ShopOrderProductRow {
@@ -638,27 +665,36 @@ pub const ShopService = struct {
             for (out.items) |s| s.free(self.allocator);
             out.deinit(self.allocator);
         }
+        // 一条 IN 查询拉全部明细，内存里按 order_id 分组（原逐单查询在公开
+        // 接口上是 N+1：30 个 id = 30 条 SQL）。
+        const all = self.store.trade.listOrderProductsByIds(order_ids) catch return error.Unexpected;
+        defer {
+            for (all) |op| op.free(self.allocator);
+            if (all.len > 0) self.allocator.free(all);
+        }
         for (order_ids) |oid| {
-            const ops = self.listOrderProducts(oid) catch return error.Unexpected;
-            defer {
-                for (ops) |op| op.free(self.allocator);
-                if (ops.len > 0) self.allocator.free(ops);
+            var first: ?ShopOrderProductRow = null;
+            var count: i64 = 0;
+            for (all) |op| {
+                if (op.order_id != oid) continue;
+                if (first == null) first = op;
+                count += 1;
             }
-            const cover_image = if (ops.len > 0)
-                (self.allocator.dupe(u8, ops[0].image) catch return error.Unexpected)
+            const cover_image = if (first) |op|
+                (self.allocator.dupe(u8, op.image) catch return error.Unexpected)
             else
                 (self.allocator.dupe(u8, "") catch return error.Unexpected);
             errdefer self.allocator.free(cover_image);
-            const summary = if (ops.len > 1)
-                std.fmt.allocPrint(self.allocator, "{s} 等{d}件", .{ ops[0].name, ops.len }) catch return error.Unexpected
-            else if (ops.len == 1)
-                (self.allocator.dupe(u8, ops[0].name) catch return error.Unexpected)
+            const summary = if (count > 1)
+                std.fmt.allocPrint(self.allocator, "{s} 等{d}件", .{ first.?.name, count }) catch return error.Unexpected
+            else if (count == 1)
+                (self.allocator.dupe(u8, first.?.name) catch return error.Unexpected)
             else
                 (self.allocator.dupe(u8, "") catch return error.Unexpected);
             out.append(self.allocator, .{
                 .order_id = oid,
                 .cover_image = cover_image,
-                .item_count = @intCast(ops.len),
+                .item_count = count,
                 .summary = summary,
             }) catch return error.Unexpected;
         }
@@ -674,12 +710,24 @@ pub const ShopService = struct {
     /// refund 状态翻转（pending→终态，条件更新）与 订单状态/库存回滚 包在
     /// 同一事务（beginTxFromDriver + *On 变体走 tx.client），三写要么全提交
     /// 要么全回滚；重复审核 affected=0 → 幂等返回，绝不重复回滚库存。
+    /// HTTP 入口用 auditRefundBudget（带请求预算）。
     pub fn auditRefund(self: *ShopService, order_id: i64, refund_id: i64, approve: bool) ShopError!void {
+        return self.auditRefundBudget(order_id, refund_id, approve, null);
+    }
+
+    /// auditRefund 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
+    /// 事务获取按剩余预算阻塞、超预算/已耗尽 → RequestTimeout。
+    pub fn auditRefundBudget(self: *ShopService, order_id: i64, refund_id: i64, approve: bool, budget_ms: ?i64) ShopError!void {
         const target: i64 = if (approve) 1 else 2;
         const now_secs = self.now();
+        if (db_mod.budgetSpent(budget_ms)) return error.RequestTimeout;
+        var exec_ctx = db_mod.execContext(budget_ms);
         // shop 模块私有 graph 的事务：TxClient(persist.infos)，故 *On 变体
         // 均为 `client: anytype`（root Client / TxClient 均可传入）。
-        var tx = zent.codegen.client.beginTxFromDriver(persist.infos, self.store.client.driver, self.allocator) catch return error.Unexpected;
+        var tx = zent.codegen.beginTxFromDriverCtx(persist.infos, self.store.client.driver, self.allocator, if (exec_ctx.deadline_ns != null) &exec_ctx else null) catch |err| switch (err) {
+            error.PoolWaitTimeout, error.QueryTimeout => return error.RequestTimeout,
+            else => return error.Unexpected,
+        };
         var tx_closed = false;
         // 未提交路径由 defer 兜底回滚；回滚/释放失败只吞错：各失败分支均已 return 错误，
         // 幂等返回分支本就无需持久化，回滚失败无可挽回。
@@ -962,23 +1010,31 @@ pub const ShopService = struct {
     }
 
     /// 推送订单事件到配置的 webhook URL（事件驱动开放出口）。
+    /// 投递改走持久任务队列（webhook.deliver，见 src/jobs.zig）：此处只
+    /// 入队，POST 与退避重试由 Dispatcher worker 异步完成，不再在事件
+    /// 监听里逐个同步 POST 外部 URL。入队失败只记日志（不影响支付主流程）。
     pub fn dispatchWebhooks(self: *ShopService, event: []const u8, tenant_id: i64, account_id: i64, order_id: i64) void {
+        const ts = self.task_svc orelse return;
         const hooks = self.store.content.listWebhooks(tenant_id, account_id) catch return;
         defer {
             for (hooks) |h| h.free(self.allocator);
             if (hooks.len > 0) self.allocator.free(hooks);
         }
-        if (self.webhook_transport) |wt| {
-            for (hooks) |h| {
-                if (std.mem.indexOf(u8, h.events, event) == null) continue;
-                const payload = std.fmt.allocPrint(self.allocator, "{{\"event\":\"{s}\",\"order_id\":{d},\"account_id\":{d}}}", .{ event, order_id, account_id }) catch continue;
-                defer self.allocator.free(payload);
-                const Transport = @import("../../http/webhook_transport.zig");
-                const t: *Transport.WebhookTransport = @ptrCast(@alignCast(wt));
-                // 外部推送本就 best-effort（无重试队列，失败即丢本次投递），
-                // 不影响本函数调用方（事件主流程已提交），故只记日志。
-                t.post(h.url, payload) catch |err| std.log.warn("[shop] webhook 推送失败 event={s} url={s} err={s}", .{ event, h.url, @errorName(err) });
-            }
+        for (hooks) |h| {
+            if (std.mem.indexOf(u8, h.events, event) == null) continue;
+            const body = std.fmt.allocPrint(self.allocator, "{{\"event\":\"{s}\",\"order_id\":{d},\"account_id\":{d}}}", .{ event, order_id, account_id }) catch continue;
+            defer self.allocator.free(body);
+            // 任务参数 JSON 序列化（与 auth/api.zig jsonPayload 同惯例）：
+            // payload 本身是 JSON 文本，std.json.fmt 负责转义内嵌引号。
+            const task_payload = std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(.{
+                .endpoint = h.url,
+                .event = event,
+                .payload = body,
+            }, .{})}) catch continue;
+            defer self.allocator.free(task_payload);
+            _ = ts.enqueueNow("webhook.deliver", task_payload, tenant_id) catch |err| {
+                std.log.warn("[shop] webhook 投递任务入队失败 url={s} err={s}", .{ h.url, @errorName(err) });
+            };
         }
     }
 
@@ -1047,8 +1103,7 @@ pub const ShopService = struct {
             }
         } else if (std.mem.eql(u8, g.reward_type, "coupon")) {
             if (self.coupon_svc) |cs| {
-                const c_mod = @import("../coupon/service.zig");
-                const csvc: *c_mod.CouponService = @ptrCast(@alignCast(cs));
+                const csvc: *coupon_service.CouponService = @ptrCast(@alignCast(cs));
                 // 同上：发券失败则邀请人拿不到券，留痕对账。
                 _ = csvc.claimCoupon(self.allocator, tenant_id, account_id, openid, g.reward_value) catch |err| std.log.err("[shop] 邀请奖励发券失败 openid={s} coupon_id={d} err={s}", .{ openid, g.reward_value, @errorName(err) });
             }

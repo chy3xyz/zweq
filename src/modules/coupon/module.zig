@@ -4,7 +4,7 @@ const zigmodu = @import("zigmodu");
 pub const info = zigmodu.api.Module{
     .name = "coupon",
     .description = "优惠券（模板/领券/核销）",
-    .dependencies = &.{},
+    .dependencies = &.{ "audit", "message", "module", "user" },
     .is_internal = false,
 };
 

@@ -253,7 +253,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
-            return mw.authTenantId(ctx) orelse self.default_tenant_id;
+            return mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
         }
 
         fn recharge(ctx: *http.Context) !void {
@@ -299,7 +299,11 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 try ctx.sendErrorResponse(400, 400, "缺少订单号");
                 return;
             };
-            const paid = self.svc.completeRecharge(tid, order_no) catch {
+            const paid = self.svc.completeRechargeBudget(tid, order_no, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -354,7 +358,11 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listOrders(params.page, params.page_size, tid, account_id) catch {
+            var result = self.svc.listOrdersBudget(params.page, params.page_size, tid, account_id, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -402,7 +410,11 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
                 return;
             };
             const params = zigmodu.http.PageParams.parse(ctx, .{ .max_page_size = 100 });
-            var result = self.svc.listWithdraws(params.page, params.page_size, tid, account_id) catch {
+            var result = self.svc.listWithdrawsBudget(params.page, params.page_size, tid, account_id, ctx.deadline_ms) catch |err| {
+                if (err == error.RequestTimeout) {
+                    try ctx.sendErrorResponse(408, 408, "请求超时，请稍后重试");
+                    return;
+                }
                 try ctx.sendErrorResponse(500, 500, "服务器错误");
                 return;
             };
@@ -452,7 +464,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const cfg_opt = readPayV2Config(ctx, self, tid);
             const cfg = cfg_opt orelse {
                 try ctx.sendErrorResponse(400, 400, "未配置微信支付 V2（wechat_pay_v2_mchid/key/cert_p12）");
@@ -487,7 +499,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const cfg_opt = readPayV2Config(ctx, self, tid);
             const cfg = cfg_opt orelse {
                 try ctx.sendErrorResponse(400, 400, "未配置微信支付 V2（wechat_pay_v2_mchid/key/cert_p12）");
@@ -520,7 +532,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const cfg_opt = readPayConfig(ctx, self, tid);
             const cfg = cfg_opt orelse {
                 try ctx.sendErrorResponse(400, 400, "未配置微信支付 v3（wechat_pay_mchid/appid/serial_no/private_key）");
@@ -553,7 +565,7 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
             const admin_id = ctx.userIdInt(i64) orelse return;
-            const tid = mw.authTenantId(ctx) orelse self.default_tenant_id;
+            const tid = mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
             const cfg_opt = readPayConfig(ctx, self, tid);
             const cfg = cfg_opt orelse {
                 try ctx.sendErrorResponse(400, 400, "未配置微信支付 v3（wechat_pay_mchid/appid/serial_no/private_key）");

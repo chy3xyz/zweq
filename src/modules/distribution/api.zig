@@ -137,7 +137,7 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
         }
 
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
-            return mw.authTenantId(ctx) orelse self.default_tenant_id;
+            return mw.authTenantIdOrDefault(ctx, self.default_tenant_id);
         }
 
         fn list(ctx: *http.Context) !void {

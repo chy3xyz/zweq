@@ -119,7 +119,7 @@ pub const http_mw = struct {
     const Stored = struct { token: []const u8 };
 
     pub fn bearerAuth(token: []const u8) http.Middleware {
-        const stored = std.heap.page_allocator.create(Stored) catch unreachable;
+        const stored = std.heap.page_allocator.create(Stored) catch @panic("bearerAuth: out of memory");
         stored.* = .{ .token = token };
         return .{
             .func = struct {
