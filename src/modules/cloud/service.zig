@@ -588,10 +588,9 @@ pub const CloudService = struct {
     fn storeArtifact(self: *CloudService, name: []const u8, version: []const u8, content: []const u8) CloudError!void {
         if (!safeArtifactComponent(name) or !safeArtifactComponent(version)) return error.InvalidName;
         var dir = std.Io.Dir.cwd();
-        dir.createDir(self.io, "uploads/market", .default_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return error.Unexpected,
-        };
+        // mkdir -p 语义：父目录（如 uploads）不存在时 createDir 会 ENOENT
+        // （CI 干净 checkout 实证），已存在不算错。
+        dir.createDirPath(self.io, "uploads/market") catch return error.Unexpected;
         const path = std.fmt.allocPrint(self.allocator, "uploads/market/{s}-{s}.bin", .{ name, version }) catch return error.Unexpected;
         defer self.allocator.free(path);
         var file = std.Io.Dir.cwd().createFile(self.io, path, .{ .exclusive = true }) catch |err| switch (err) {

@@ -37,8 +37,8 @@ pub const FileService = struct {
 
     pub fn ensureDir(self: *FileService) !void {
         var dir = std.Io.Dir.cwd();
-        dir.createDir(self.io, self.upload_dir, .default_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
+        // mkdir -p 语义：父目录不存在时 createDir 会 ENOENT，已存在不算错。
+        dir.createDirPath(self.io, self.upload_dir) catch |err| switch (err) {
             else => return err,
         };
     }

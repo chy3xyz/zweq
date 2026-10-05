@@ -56,8 +56,8 @@ pub const LocalArtifactStorage = struct {
         const self: *LocalArtifactStorage = @ptrCast(@alignCast(ptr));
         _ = allocator;
         var cwd = std.Io.Dir.cwd();
-        cwd.createDir(self.io, self.dir, .default_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
+        // mkdir -p 语义：父目录不存在时 createDir 会 ENOENT，已存在不算错。
+        cwd.createDirPath(self.io, self.dir) catch |err| switch (err) {
             else => return err,
         };
         const path = try self.pathOf(key);
