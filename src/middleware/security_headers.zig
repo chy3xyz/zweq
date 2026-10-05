@@ -4,6 +4,6 @@
 const zigmodu = @import("zigmodu");
 const http = zigmodu.http;
 
-pub fn securityHeaders() http.Middleware {
+pub fn securityHeaders() !http.Middleware {
     return http.http_middleware.securityHeaders(null);
 }

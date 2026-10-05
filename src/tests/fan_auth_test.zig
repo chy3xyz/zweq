@@ -81,8 +81,8 @@ test "fan 声明式鉴权：.jwt 401 / .optional 公开 / RBAC 不拦 fan / 限�
     defer server.deinit();
     var slot: zigmodu.http.CatalogSlot = .{};
     defer slot.deinit();
-    try server.addMiddleware(zigmodu.http.http_middleware.jwtAuthFromCatalogWithPermissions(&sec.module, &slot, catalog_permissions.load, .{}));
-    try server.addMiddleware(zigmodu.http.http_middleware.permissionGateWith(&slot, .{ .mode = .rbac }));
+    try server.addMiddleware(try zigmodu.http.http_middleware.jwtAuthFromCatalogWithPermissions(&sec.module, &slot, catalog_permissions.load, .{}));
+    try server.addMiddleware(try zigmodu.http.http_middleware.permissionGateWith(&slot, .{ .mode = .rbac }));
     try server.addMiddleware(mw_auth.tokenVersionGuard(&sec, &user_store));
 
     var app_state: void = {};

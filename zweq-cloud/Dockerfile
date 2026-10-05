@@ -5,25 +5,23 @@
 # 驱动面 = SQLite + PostgreSQL（build.zig 硬编码 sqlite+postgres，无 -Ddb 选项），
 # 不含 mysql；运行时可经 ZWEQ_CLOUD_DB_DRIVER 在 sqlite / postgres 间切换。
 #
-# Zig 版本说明：同主站 Dockerfile —— 0.17.0 尚无稳定发布（ziglang/zig 镜像亦无该
-# tag），zent v0.78 的 minimum_zig_version 又要求 0.17.0，因此固定使用与本地/CI
-# 一致的官方 dev 构建 0.17.0-dev.1970+67f39b551（ziglang.org/builds），避免版本
-# 漂移导致编译差异。
+# Zig 版本说明：同主站 Dockerfile —— 0.17.0 正式版已发布，主站/云端/CI/本地统一钉
+# 0.17.0（ziglang.org/download），避免版本漂移导致编译差异。
 
-# ── 构建：Zig 0.17.0-dev.1970+67f39b551 ──────────────────────────
+# ── 构建：Zig 0.17.0 正式版 ───────────────────────────────────────
 # alpine 与运行阶段同基底（musl ABI 一致）；dev 包提供 pq/sqlite3 的头文件
 # 与链接库（驱动按需链接：sqlite+postgres，不含 mysql）。
 FROM alpine:3.21 AS backend
 # TARGETARCH 由 BuildKit 注入（amd64/arm64），映射到 zig 官方 tarball 的命名
 ARG TARGETARCH
-ARG ZIG_VERSION=0.17.0-dev.1970+67f39b551
+ARG ZIG_VERSION=0.17.0
 RUN apk add --no-cache git postgresql-dev sqlite-dev tar xz \
  && case "${TARGETARCH}" in \
       amd64) ZIG_TUPLE=x86_64-linux ;; \
       arm64) ZIG_TUPLE=aarch64-linux ;; \
       *) echo "不支持的 TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
- && wget -q "https://ziglang.org/builds/zig-${ZIG_TUPLE}-${ZIG_VERSION}.tar.xz" \
+ && wget -q "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_TUPLE}-${ZIG_VERSION}.tar.xz" \
  && tar -xJf "zig-${ZIG_TUPLE}-${ZIG_VERSION}.tar.xz" -C /opt \
  && mv "/opt/zig-${ZIG_TUPLE}-${ZIG_VERSION}" /opt/zig \
  && ln -s /opt/zig/zig /usr/local/bin/zig

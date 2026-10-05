@@ -42,7 +42,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.17.0-dev.1970+67f39b551
+          version: 0.17.0
 
       - name: Build
         run: zig build
@@ -78,7 +78,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.17.0-dev.1970+67f39b551
+          version: 0.17.0
 
       - name: E2E (fresh SQLite + admin/fan suites + shutdown leak gate)
         run: ./scripts/run_e2e.sh
@@ -92,7 +92,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.17.0-dev.1970+67f39b551
+          version: 0.17.0
 
       - name: Build zweq-cloud
         working-directory: zweq-cloud

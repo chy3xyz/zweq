@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **工具链 + zigmodu 升级：Zig 0.17.0 正式版统一钉子 + zigmodu v0.39.4 → v0.39.6**（主站 + `zweq-cloud` 同步；本地 zigup 切 stable，CI ×3 job 与两 Dockerfile 的 `0.17.0-dev.1970+67f39b551` dev 钉子全部改 `0.17.0` 正式版，Dockerfile 下载 URL 从 `ziglang.org/builds` 换 `ziglang.org/download/` 并实测 200；`minimum_zig_version` 本就是 `0.17.0` 不动）。适配点 4 处：
+  - **`mail.zig` `readLine`**：`std.Io.net.Stream.read` 在 stable 上是 std 自身破碎函数（`net_read` 换了 `ReadResult` 结构体、`Stream.read` 仍按元组解构，一实例化即编译断）——与上游 v0.39.5 第 127 批同修法改走 `std.posix.read(stream.socket.handle, …)`（阻塞读，0 → EOF→`ConnectionClosed` 语义不变）；TLS 分支不动。
+  - **上游 5 个中间件/路由构造把资源类失败从 panic 改为错误返回**（OOM、`SlotPoolExhausted`），调用点补内层 `try`：`http_middleware.cors`、`jwtAuthFromCatalogWithPermissions`、`permissionGateWith`（main ×3 + tests/fan_auth_test ×2）、`securityHeaders`（包装函数签名同步 `!Middleware`）、`openApiFromCatalog`。`jwtAuthWithSecurity` 签名未变，27 处 `group.use` 无需动。
+  - **上游版本内容**：v0.39.5 = zig 0.17.0 正式版适配批（修它自己树内的一处 `StreamReader.readInto` 编译断 + soak harness 编译期配置拒绝）；v0.39.6 = 框架示例 zent 升 v0.83.0 + soak-cluster 两阶段 deadline（均为框架自留地，对消费方无感、无 UPGRADING 新节）。
+  - 验证：`zig build` + 四门禁 + **126/126 测试**（首跑现已知 macOS 假 flake，同种子 `0xa1cb62af` 复跑全过）+ `zweq-cloud` build/test + e2e 16/16 + 停机无泄漏无 panic。
+
 ### Fixed
 - **就绪探针每次都泄漏一整页用户行**：`/api/v1/health/ready` 的探针用 `listUsers(1, 1, …)` 探库，却用 `ctx.allocator`（连接 arena，`free` 是 no-op）释放结果——行与切片实由 `UserStore` 的进程 gpa 分配，而健康检查在生产是按秒调用的，属稳态泄漏。已改为 `UserStore.freeList`。**这处是新加的分配器归属 lint 抓到的**（见 `### Added`）。
 - **77 处 `catch {}` 吞错分诊**：A 类 27 处（资源清理 / 事务回滚 / 定时兜底——语义上确实无可挽回且错误另有通道）补注释说明为何可吞；B 类 49 处（业务写入、状态变更、外部调用被静默吞掉）补 `std.log.err`/`warn` 带上下文，**控制流与 best-effort 语义不变**。钱相关的几处值得点名：余额支付成功后的 `markPaid`、支付成功后的分佣与积分入账、取消/退款/超时的库存回滚、成团后的 `markPaid`，以及分销佣金第二笔 `total_commission` 累加（同一函数第一步是 `try`、第二步却把 `Save` 吞掉——账目半成功且静默漂移）。
