@@ -39,13 +39,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.17.0
-          # action 自带 mirror 服务对正式版 tag 长期 404（连续两轮 CI 实证），
-          # 直连 ziglang.org 官方源（Dockerfile 同源，实测 200）。
-          mirror: false
+      - name: Setup Zig 0.17.0
+        # mlugg/setup-zig 的 mirror 服务 404、mirror:false 拼官方 URL 报 Invalid URL（连续三轮 CI 实证），
+        # 弃用该 action，改为与 Dockerfile 完全同构的官方源直下。
+        run: |
+          curl -fsSLo /tmp/zig.tar.xz https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+          mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+          echo /opt/zig >> "$GITHUB_PATH"
 
       - name: Build
         run: zig build
@@ -78,13 +78,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.17.0
-          # action 自带 mirror 服务对正式版 tag 长期 404（连续两轮 CI 实证），
-          # 直连 ziglang.org 官方源（Dockerfile 同源，实测 200）。
-          mirror: false
+      - name: Setup Zig 0.17.0
+        # mlugg/setup-zig 的 mirror 服务 404、mirror:false 拼官方 URL 报 Invalid URL（连续三轮 CI 实证），
+        # 弃用该 action，改为与 Dockerfile 完全同构的官方源直下。
+        run: |
+          curl -fsSLo /tmp/zig.tar.xz https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+          mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+          echo /opt/zig >> "$GITHUB_PATH"
 
       - name: E2E (fresh SQLite + admin/fan suites + shutdown leak gate)
         run: ./scripts/run_e2e.sh
@@ -95,13 +95,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.17.0
-          # action 自带 mirror 服务对正式版 tag 长期 404（连续两轮 CI 实证），
-          # 直连 ziglang.org 官方源（Dockerfile 同源，实测 200）。
-          mirror: false
+      - name: Setup Zig 0.17.0
+        # mlugg/setup-zig 的 mirror 服务 404、mirror:false 拼官方 URL 报 Invalid URL（连续三轮 CI 实证），
+        # 弃用该 action，改为与 Dockerfile 完全同构的官方源直下。
+        run: |
+          curl -fsSLo /tmp/zig.tar.xz https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+          mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+          echo /opt/zig >> "$GITHUB_PATH"
 
       - name: Build zweq-cloud
         working-directory: zweq-cloud
