@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **CI 三连根因（曾致 6 legs 全红多轮）**：① `mlugg/setup-zig` 自带 mirror 服务对任何版本 404（dev.1970 与 0.17.0 两轮实证），`mirror: false` 又曝出该 action 对 0.17.0 拼官方 URL 报 `Invalid URL`——彻底弃用，CI 改为与 Dockerfile 完全同构的 ziglang.org 官方源直下（curl + tar + GITHUB_PATH）；② 根 `.gitignore` 的 `package-lock.json` 规则（无 `/` 锚定）误杀 `web/package-lock.json`，导致它从未入库——frontend 的 npm cache 与 Dockerfile 的 `COPY` 双双找不到文件，ignore 规则改锚定根目录、lockfile 入库；③ `createDir("uploads/market")` 在父目录不存在时 Linux 返回 `ENOENT`、被 `else => error.Unexpected` 吞掉——CI 干净 checkout 没有 gitignore 掉的 `uploads/`，3 个 cloud 测试全挂而本地因目录恰好存在而绿，`storeArtifact`/`file.ensureDir`/zweq-cloud `LocalArtifactStorage` 三处同款统一改 `createDirPath`（mkdir -p 语义），并已在本机挪走 `uploads/` 复现验证 126/126。
+
 ### Changed
 - **工具链 + zigmodu 升级：Zig 0.17.0 正式版统一钉子 + zigmodu v0.39.4 → v0.39.6**（主站 + `zweq-cloud` 同步；本地 zigup 切 stable，CI ×3 job 与两 Dockerfile 的 `0.17.0-dev.1970+67f39b551` dev 钉子全部改 `0.17.0` 正式版，Dockerfile 下载 URL 从 `ziglang.org/builds` 换 `ziglang.org/download/` 并实测 200；`minimum_zig_version` 本就是 `0.17.0` 不动）。适配点 4 处：
   - **`mail.zig` `readLine`**：`std.Io.net.Stream.read` 在 stable 上是 std 自身破碎函数（`net_read` 换了 `ReadResult` 结构体、`Stream.read` 仍按元组解构，一实例化即编译断）——与上游 v0.39.5 第 127 批同修法改走 `std.posix.read(stream.socket.handle, …)`（阻塞读，0 → EOF→`ConnectionClosed` 语义不变）；TLS 分支不动。
