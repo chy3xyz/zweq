@@ -46,8 +46,8 @@ zenaipa.db
 # Uploaded files (runtime data)
 uploads/
 
-# Stray root package-lock (real lockfile lives in web/)
-package-lock.json
+# Stray root package-lock（真实 lockfile 在 web/，需入库供 CI npm ci 与镜像构建）
+/package-lock.json
 
 # Agent working state (not project code)
 .reasonix/

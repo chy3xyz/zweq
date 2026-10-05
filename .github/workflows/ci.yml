@@ -43,6 +43,9 @@ jobs:
         uses: mlugg/setup-zig@v1
         with:
           version: 0.17.0
+          # action 自带 mirror 服务对正式版 tag 长期 404（连续两轮 CI 实证），
+          # 直连 ziglang.org 官方源（Dockerfile 同源，实测 200）。
+          mirror: false
 
       - name: Build
         run: zig build
@@ -79,6 +82,9 @@ jobs:
         uses: mlugg/setup-zig@v1
         with:
           version: 0.17.0
+          # action 自带 mirror 服务对正式版 tag 长期 404（连续两轮 CI 实证），
+          # 直连 ziglang.org 官方源（Dockerfile 同源，实测 200）。
+          mirror: false
 
       - name: E2E (fresh SQLite + admin/fan suites + shutdown leak gate)
         run: ./scripts/run_e2e.sh
@@ -93,6 +99,9 @@ jobs:
         uses: mlugg/setup-zig@v1
         with:
           version: 0.17.0
+          # action 自带 mirror 服务对正式版 tag 长期 404（连续两轮 CI 实证），
+          # 直连 ziglang.org 官方源（Dockerfile 同源，实测 200）。
+          mirror: false
 
       - name: Build zweq-cloud
         working-directory: zweq-cloud
