@@ -6,7 +6,7 @@
     .dependencies = .{
         // Git-tag pinned (stable releases).
         .zent = .{
-            .url = "git+https://github.com/chy3xyz/zent?ref=v0.83.0#82716e1fa65d8f619e1d7c214a79c5845817275f",
+            .url = "git+https://github.com/chy3xyz/zent?ref=v0.83.1#baff74d5c520a54cf497604b1fbbb1c0fc96ca4e",
             .hash = "zent-0.83.1-oiur-2T8JAA-0Kgp4in0vaP7uAwVrXu8wNx9cKpWdip8",
         },
         .zigmodu = .{
