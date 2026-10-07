@@ -7,11 +7,11 @@
         // Git-tag pinned (stable releases).
         .zent = .{
             .url = "git+https://github.com/chy3xyz/zent?ref=v0.83.0#82716e1fa65d8f619e1d7c214a79c5845817275f",
-            .hash = "zent-0.83.0-oiur-476JADyxe4btqZKUiAAEjtAbcIl--6K-WUObfx9",
+            .hash = "zent-0.83.1-oiur-2T8JAA-0Kgp4in0vaP7uAwVrXu8wNx9cKpWdip8",
         },
         .zigmodu = .{
-            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.39.6#df6259ac1251eda8b35a44261120807cafb4f70b",
-            .hash = "zigmodu-0.39.6-U40vszYHlAAdhYEvVskLkLdepx8xA_yfWWWmHkWvYSA1",
+            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.39.7#6877a74e108be92cccd5c0a9d3270fddd8117d36",
+            .hash = "zigmodu-0.39.7-U40vsxIJlADLdd9rH-NvMuHyey6zb7C8buwgKbJrqrbM",
         },
         .zwechat = .{
             .url = "git+https://github.com/chy3xyz/zwechat?ref=v0.5.1#464c5bf28d58d125443059d073b17d131e454f7f",
