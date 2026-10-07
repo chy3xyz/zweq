@@ -6,8 +6,8 @@
     .dependencies = .{
         // Git-tag pinned (stable releases).
         .zent = .{
-            .url = "git+https://github.com/chy3xyz/zent?ref=v0.78.0#fe04124a4ca0ae806193da23745d3c7253eb4bb2",
-            .hash = "zent-0.78.0-oiur-60NIwCJVa685Nmr31bwW2foZoA6SMA7IvATdrgG",
+            .url = "git+https://github.com/chy3xyz/zent?ref=v0.83.0#82716e1fa65d8f619e1d7c214a79c5845817275f",
+            .hash = "zent-0.83.0-oiur-476JADyxe4btqZKUiAAEjtAbcIl--6K-WUObfx9",
         },
         .zigmodu = .{
             .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.39.6#df6259ac1251eda8b35a44261120807cafb4f70b",
@@ -21,7 +21,6 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "db_link.zig",
         "src",
     },
 }

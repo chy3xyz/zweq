@@ -27,6 +27,9 @@ pub fn build(b: *std.Build) void {
         .pg = features.postgres,
         .mysql = features.mysql,
     });
+    // zent 0.81.1+ 的官方驱动链接（target-aware 探测，上游明说镜像副本会漂移），
+    // 替代自维护的 db_link.link 镜像探测。
+    const zent_build = b.lazyImport(@This(), "zent").?;
     const zwechat_dep = b.dependency("zwechat", .{
         .target = target,
         .optimize = optimize,
@@ -45,7 +48,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("zigmodu", zigmodu_dep.module("zigmodu"));
     exe_mod.addImport("zent", zent_dep.module("zent"));
     exe_mod.addImport("zwechat", zwechat_dep.module("zwechat"));
-    db_link.link(exe_mod, b, features);
+    zent_build.linkDrivers(b, exe_mod, target, .{ .sqlite = features.sqlite, .pg = features.postgres, .mysql = features.mysql });
 
     const exe = b.addExecutable(.{ .name = "zweq", .root_module = exe_mod });
     b.installArtifact(exe);
@@ -65,7 +68,7 @@ pub fn build(b: *std.Build) void {
     admin_mod.addImport("zigmodu", zigmodu_dep.module("zigmodu"));
     admin_mod.addImport("zent", zent_dep.module("zent"));
     admin_mod.addImport("zwechat", zwechat_dep.module("zwechat"));
-    db_link.link(admin_mod, b, features);
+    zent_build.linkDrivers(b, admin_mod, target, .{ .sqlite = features.sqlite, .pg = features.postgres, .mysql = features.mysql });
 
     const admin_exe = b.addExecutable(.{ .name = "zweq-admin", .root_module = admin_mod });
     b.installArtifact(admin_exe);
@@ -85,7 +88,7 @@ pub fn build(b: *std.Build) void {
     tests_mod.addImport("zigmodu", zigmodu_dep.module("zigmodu"));
     tests_mod.addImport("zent", zent_dep.module("zent"));
     tests_mod.addImport("zwechat", zwechat_dep.module("zwechat"));
-    db_link.link(tests_mod, b, features);
+    zent_build.linkDrivers(b, tests_mod, target, .{ .sqlite = features.sqlite, .pg = features.postgres, .mysql = features.mysql });
 
     const tests = b.addTest(.{ .root_module = tests_mod });
     const run_tests = b.addRunArtifact(tests);

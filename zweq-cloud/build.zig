@@ -1,12 +1,8 @@
 const std = @import("std");
-const db_link = @import("db_link.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-
-    // 驱动面 = SQLite + PostgreSQL（同主站；postgres 是 zweq-cloud 的运行选项），不含 mysql。
-    const features: db_link.Features = .{ .sqlite = true, .postgres = true };
 
     const zigmodu_dep = b.dependency("zigmodu", .{ .target = target, .optimize = optimize, .db = "sqlite,postgres" });
     const zent_dep = b.dependency("zent", .{
@@ -17,6 +13,8 @@ pub fn build(b: *std.Build) void {
         .pg = true,
         .mysql = false,
     });
+    // zent 0.81.1+ 的官方驱动链接（target-aware 探测），替代镜像的 db_link.link。
+    const zent_build = b.lazyImport(@This(), "zent").?;
     const zwechat_dep = b.dependency("zwechat", .{
         .target = target,
         .optimize = optimize,
@@ -33,7 +31,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("zigmodu", zigmodu_dep.module("zigmodu"));
     exe_mod.addImport("zent", zent_dep.module("zent"));
     exe_mod.addImport("zwechat", zwechat_dep.module("zwechat"));
-    db_link.link(exe_mod, b, features);
+    zent_build.linkDrivers(b, exe_mod, target, .{ .sqlite = true, .pg = true, .mysql = false });
 
     const exe = b.addExecutable(.{ .name = "zweq-cloud", .root_module = exe_mod });
     b.installArtifact(exe);
@@ -52,7 +50,7 @@ pub fn build(b: *std.Build) void {
     tests_mod.addImport("zigmodu", zigmodu_dep.module("zigmodu"));
     tests_mod.addImport("zent", zent_dep.module("zent"));
     tests_mod.addImport("zwechat", zwechat_dep.module("zwechat"));
-    db_link.link(tests_mod, b, features);
+    zent_build.linkDrivers(b, tests_mod, target, .{ .sqlite = true, .pg = true, .mysql = false });
 
     const tests = b.addTest(.{ .root_module = tests_mod });
     const run_tests = b.addRunArtifact(tests);
