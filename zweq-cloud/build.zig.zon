@@ -6,16 +6,16 @@
     .dependencies = .{
         // Git-tag pinned (stable releases).
         .zent = .{
-            .url = "git+https://github.com/chy3xyz/zent?ref=v0.87.0#ae51e1fac5ec6f16cc1a8f6cd3498ce8854624f6",
-            .hash = "zent-0.87.0-oiur-6u4JgB9PKix2oW36EROEF1haz2wpDh4SB3WBEQP",
+            .url = "git+https://github.com/chy3xyz/zent?ref=v0.91.0#b74bd6e89cd30c4e1843d29b21cd7f60dba0ba1d",
+            .hash = "zent-0.91.0-oiur-0mvKQAAo-IlAXWN4F2-hfwDhayID6T6J49YM36y",
         },
         .zigmodu = .{
-            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.39.9#f6bca58aef5c8bc2a492fa3030e32b4439c0e26c",
-            .hash = "zigmodu-0.39.9-U40vs30XlQC-bpglzBxccOirAgxJ7vKltNWcx0CfJxh9",
+            .url = "git+https://github.com/chy3xyz/zigmodu?ref=v0.39.11#84a5d98aca2bbd11d56ec1049f95a9d2de7d69e2",
+            .hash = "zigmodu-0.39.11-U40vs33ytQCpSQHrJmSIGdsTaEaxYKBCTQXg-5SsDVk7",
         },
         .zwechat = .{
-            .url = "git+https://github.com/chy3xyz/zwechat?ref=v0.8.0#ce6f32fa26fb6659565d411f9e61c1ce2a0bfcfd",
-            .hash = "zwechat-0.8.0-C1V2ZFWJNgBV6-M-OQQL0MprJFqzbENmHWr39r_vgAd0",
+            .url = "git+https://github.com/chy3xyz/zwechat?ref=v0.9.0#8f3ed8f32592106d0ef8a6d1543dfdfd71197956",
+            .hash = "zwechat-0.9.0-C1V2ZFx-OgCCAH4kKddCSptIrAv2ryWpfoDV3js-M3rs",
         },
     },
     .paths = .{
