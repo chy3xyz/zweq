@@ -157,10 +157,17 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
                         .connectCtx = connectSqlite,
                     });
                     errdefer pool.deinit();
-                    const d = pool.asDriver();
+                    // 迁移在单连接上进行：zent v0.91+ 的迁移过程会先在事务里
+                    // 占住一条连接，内部目录探针（getExistingColumns 等）仍经
+                    // driver 参数再借新连接——传池化 driver 会在 min 池上自锁
+                    // （PoolWaitTimeout）。先借出池内唯一连接，迁移后归还；
+                    // :memory: 的库生命周期由这条池内连接承载，语义不变。
+                    const conn = try pool.borrow();
+                    defer pool.release(conn);
                     inline for (MigrateGroups) |gi| {
-                        try zent.sql_schema.migrateSchema(allocator, d, gi);
+                        try zent.sql_schema.migrateSchema(allocator, conn.asDriver(), gi);
                     }
+                    const d = pool.asDriver();
                     self.sqlite_ctx = ctx;
                     self.sqlite_pool = pool;
                     self.client = zent.codegen.client.makeClient(ClientInfos, allocator, d);
@@ -183,19 +190,24 @@ pub fn StoreEnv(comptime ClientInfos: anytype, comptime MigrateGroups: anytype) 
                         .connectCtx = connectPg,
                     });
                     errdefer pool.deinit();
-                    const d = pool.asDriver();
-                    // 迁移锁：pg_advisory_lock 跨实例互斥，防止多实例同时启动
-                    // 竞态建表（首个实例拿到锁执行迁移，其余实例阻塞等待；
-                    // 连接断开自动释放）。key = "ZEWQ" 的 32 位魔数。
-                    _ = try d.exec("SELECT pg_advisory_lock(1515040593)", &.{});
+                    // 迁移锁 + 迁移都在同一条借出的连接上执行：zent v0.91+
+                    // 的迁移内部走单连接（见 sqlite 分支注释）；且咨询锁是
+                    // 会话级的——旧写法经池化 driver exec，加锁/解锁可能落在
+                    // 不同会话，锁根本不会释放。借出连接保证加锁、迁移、
+                    // 解锁在同一会话内，跨实例互斥语义才真正成立。
+                    const conn = try pool.borrow();
+                    defer pool.release(conn);
+                    _ = try conn.exec("SELECT pg_advisory_lock(1515040593)", &.{});
                     // 迁移失败的清理路径:此处解锁失败已无可挽回,而连接随
                     // pool.deinit() 关闭时 PG 会自动释放会话级咨询锁,
                     // 不会挡住后续实例启动,故吞掉。
-                    errdefer _ = d.exec("SELECT pg_advisory_unlock(1515040593)", &.{}) catch {};
-                    inline for (MigrateGroups) |gi| {
-                        try zent.sql_schema.migrateSchema(allocator, d, gi);
+                    defer {
+                        _ = conn.exec("SELECT pg_advisory_unlock(1515040593)", &.{}) catch {};
                     }
-                    _ = try d.exec("SELECT pg_advisory_unlock(1515040593)", &.{});
+                    inline for (MigrateGroups) |gi| {
+                        try zent.sql_schema.migrateSchema(allocator, conn.asDriver(), gi);
+                    }
+                    const d = pool.asDriver();
                     self.pg_ctx = ctx;
                     self.pg_pool = pool;
                     self.client = zent.codegen.client.makeClient(ClientInfos, allocator, d);

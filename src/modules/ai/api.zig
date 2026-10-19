@@ -132,6 +132,11 @@ const ChatReq = struct {
     content: []const u8,
 };
 
+/// C 端 AI 助手请求体（无 session，匿名 user_id=0）。
+const AppChatReq = struct {
+    content: []const u8,
+};
+
 pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
     return struct {
         const Self = @This();
@@ -143,6 +148,9 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
         pub const State = Self;
 
         pub const routes: []const http.RouteSpec(Self) = &.{
+            // C 端（H5 / 小程序）AI 助手：不建 session、不落库，匿名 user_id=0 走同一 AI 引擎。
+            // 配额 / 并发舱壁 / 熔断仍由 AiService 统一控制。
+            .{ .method = .POST, .path = "app/ai/chat", .handler = http.wrapHandler(Self, appChat), .meta = .{ .auth = .public } },
             .{ .method = .GET, .path = "ai/sessions", .handler = http.wrapHandler(Self, listSessions), .meta = .{ .auth = .jwt } },
             .{ .method = .POST, .path = "ai/sessions", .handler = http.wrapHandler(Self, createSession), .meta = .{ .auth = .jwt } },
             .{ .method = .GET, .path = "ai/sessions/{id}/messages", .handler = http.wrapHandler(Self, listMessages), .meta = .{ .auth = .jwt } },
@@ -540,6 +548,50 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
             });
         }
 
+        /// C 端无 session 聊天：把用户输入交给 AiService（与后台 Chat / 微信自动回复同一引擎），
+        /// 只返回 answer，不创建 session/message，避免匿名用户把聊天历史写进后台会话。
+        fn appChat(ctx: *http.Context) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
+            const req = ctx.bindJson(AppChatReq) catch {
+                try ctx.sendErrorResponse(400, 400, "无效的请求 JSON");
+                return;
+            };
+            const content = std.mem.trim(u8, req.content, " \t\r\n");
+            if (content.len == 0) {
+                try ctx.sendErrorResponse(400, 400, "消息内容不能为空");
+                return;
+            }
+            if (content.len > 2000) {
+                try ctx.sendErrorResponse(400, 400, "消息过长（最多 2000 字）");
+                return;
+            }
+
+            // 单租户默认 tenant=1；C 端走无工具 pure chat，不触发后台管理技能。
+            var outcome = self.svc.simpleChat(ctx.allocator, 1, content) catch |err| {
+                switch (err) {
+                    error.NoAiProvider => try ctx.sendErrorResponse(503, 503, "未配置可用的 AI Provider"),
+                    error.QuotaExceeded => try ctx.sendErrorResponse(429, 429, "今日 AI 调用次数已达上限"),
+                    error.AiCircuitOpen => try ctx.sendErrorResponse(503, 503, "AI 服务暂不可用(熔断保护中)"),
+                    error.AiBusy => try ctx.sendErrorResponse(503, 503, "AI 服务繁忙，请稍后再试"),
+                    error.MissingKeySecret => try ctx.sendErrorResponse(503, 503, "站点未配置 AI 密钥主控密钥 (ZWEQ_AI_KEY_SECRET)"),
+                    error.AuthenticationFailed, error.InvalidCipher => try ctx.sendErrorResponse(503, 503, "AI Provider 密钥解密失败，请检查 ZWEQ_AI_KEY_SECRET 与保存时是否一致"),
+                    error.EmptyApiKeys => try ctx.sendErrorResponse(503, 503, "AI Provider 未配置 API Key"),
+                    else => {
+                        std.log.err("[ai] app chat failed: {s}", .{@errorName(err)});
+                        try ctx.sendErrorResponse(502, 502, "AI 引擎调用失败，请稍后再试");
+                    },
+                }
+                return;
+            };
+            defer outcome.free(ctx.allocator);
+
+            try ctx.okValue(.{
+                .answer = outcome.answer,
+                .reasoning_content = outcome.reasoning,
+                .budget_exhausted = outcome.budget_exhausted,
+            });
+        }
+
         fn deleteSession(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             const uid = authUid(ctx) orelse return;
@@ -664,7 +716,7 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
         fn skills(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);
-            const names = [_][]const u8{ "zweq.user.search", "zweq.task.stats", "zweq.audit.search", "zweq.tenant.list", "zweq.notify.send" };
+            const names = [_][]const u8{ "zweq_user_search", "zweq_task_stats", "zweq_audit_search", "zweq_tenant_list", "zweq_notify_send" };
             try ctx.okValue(.{ .skills = names[0..] });
         }
     };

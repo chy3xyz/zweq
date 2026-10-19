@@ -1,8 +1,0 @@
-// #ifdef APP
-export * from 'vue'
-// #endif
-// #ifndef APP
-export const defineMixin = (options: any) => {
-	return options
-}
-// #endif

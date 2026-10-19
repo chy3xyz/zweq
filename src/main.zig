@@ -839,9 +839,23 @@ pub fn main(init: std.process.Init) !void {
     });
 
     // WeChat Pay v3 payment notify (public — WeChat pushes here).
+    // 验签策略按站点配置梯度降级（fail-closed 优先）：
+    //   ① mch_id+serial_no+private_key 齐备 → NotifyVerifier 验签+解密一体化
+    //      （平台证书自动拉取/轮换/缓存，时间戳窗口防重放）——推荐姿态；
+    //   ② 手工配置 wechat_pay_platform_cert → 手动验签 + 纯解密（fail-closed）；
+    //   ③ 仅 APIv3 密钥 → 纯解密（解密已证明发送方持有密钥，但无来源认证，
+    //      上线正式商户后请尽快升到 ①）。
     const PayNotify = struct {
         var svc: *payment.service.PaymentService = undefined;
         var settings: *setting.persistence.SettingStore = undefined;
+
+        fn settingDup(a: std.mem.Allocator, key: []const u8) ?[]u8 {
+            const row_opt = settings.get(1, key) catch return null;
+            const row = row_opt orelse return null;
+            defer row.free(a);
+            if (row.value.len == 0) return null;
+            return a.dupe(u8, row.value) catch null;
+        }
     };
     PayNotify.svc = &payment_svc;
     PayNotify.settings = &setting_store;
@@ -851,33 +865,64 @@ pub fn main(init: std.process.Init) !void {
         .handler = struct {
             fn handle(ctx: *zigmodu.http.Context) !void {
                 const body = ctx.body orelse "";
-                // api_v3_key 从站点设置读取；未配置则拒绝。
-                var key_buf: [128]u8 = undefined;
-                var api_v3_key: []const u8 = "";
-                const key_opt = PayNotify.settings.get(1, "wechat_pay_apiv3_key") catch null;
-                if (key_opt) |row| {
-                    defer row.free(ctx.allocator);
-                    if (row.value.len <= key_buf.len) {
-                        @memcpy(key_buf[0..row.value.len], row.value);
-                        api_v3_key = key_buf[0..row.value.len];
-                    }
-                }
-                // 平台证书验签：配置了证书则必须验签通过，否则拒绝。
-                const cert_opt = PayNotify.settings.get(1, "wechat_pay_platform_cert") catch null;
-                if (cert_opt) |cert| {
-                    defer cert.free(ctx.allocator);
-                    if (cert.value.len > 0) {
-                        const sig = ctx.header("Wechatpay-Signature") orelse "";
-                        const ts = ctx.header("Wechatpay-Timestamp") orelse "";
-                        const nonce = ctx.header("Wechatpay-Nonce") orelse "";
-                        const ok = PayNotify.svc.verifyV3NotifySignature(ctx.allocator, cert.value, ts, nonce, sig, body) catch false;
-                        if (!ok) {
-                            try ctx.jsonStruct(200, .{ .code = "FAIL", .message = "验签失败" });
-                            return;
+                // APIv3 密钥是解密前提：未配置直接拒绝。
+                const api_v3_key_dup = PayNotify.settingDup(ctx.allocator, "wechat_pay_apiv3_key") orelse {
+                    try ctx.jsonStruct(200, .{ .code = "FAIL", .message = "未配置 APIv3 密钥" });
+                    return;
+                };
+                defer ctx.allocator.free(api_v3_key_dup);
+
+                const headers = zwechat.pay.v3.notify.NotifyHeaders{
+                    .signature = ctx.header("Wechatpay-Signature") orelse "",
+                    .timestamp = ctx.header("Wechatpay-Timestamp") orelse "",
+                    .nonce = ctx.header("Wechatpay-Nonce") orelse "",
+                    .serial = ctx.header("Wechatpay-Serial") orelse "",
+                    .signature_type = ctx.header("Wechatpay-Signature-Type") orelse "",
+                };
+
+                // ① 一体化验签+解密（商户证书材料齐备时）。
+                const mch_id = PayNotify.settingDup(ctx.allocator, "wechat_pay_mchid");
+                defer if (mch_id) |m| ctx.allocator.free(m);
+                const serial_no = PayNotify.settingDup(ctx.allocator, "wechat_pay_serial_no");
+                defer if (serial_no) |s| ctx.allocator.free(s);
+                const private_key = PayNotify.settingDup(ctx.allocator, "wechat_pay_private_key");
+                defer if (private_key) |p| ctx.allocator.free(p);
+
+                var handled = false;
+                var verify_note: []const u8 = "";
+                if (mch_id != null and serial_no != null and private_key != null) {
+                    const plain = PayNotify.svc.verifyAndDecryptV3Notify(ctx.allocator, .{
+                        .app_id = "",
+                        .mch_id = mch_id.?,
+                        .api_v3_key = api_v3_key_dup,
+                        .serial_no = serial_no.?,
+                        .private_key_pem = private_key.?,
+                    }, headers, body) catch |err| {
+                        std.log.warn("[pay/v3] notify 验签/解密失败（{s}），已拒绝", .{@errorName(err)});
+                        try ctx.jsonStruct(200, .{ .code = "FAIL", .message = "验签失败" });
+                        return;
+                    };
+                    defer ctx.allocator.free(plain);
+                    handled = PayNotify.svc.processV3Plaintext(ctx.allocator, plain) catch false;
+                    verify_note = "verifier";
+                } else {
+                    // ② 手工平台证书（配置了则强制验签）。
+                    const cert_opt = PayNotify.settings.get(1, "wechat_pay_platform_cert") catch null;
+                    if (cert_opt) |cert| {
+                        defer cert.free(ctx.allocator);
+                        if (cert.value.len > 0) {
+                            const ok = PayNotify.svc.verifyV3NotifySignature(ctx.allocator, cert.value, headers.timestamp, headers.nonce, headers.signature, body) catch false;
+                            if (!ok) {
+                                try ctx.jsonStruct(200, .{ .code = "FAIL", .message = "验签失败" });
+                                return;
+                            }
+                            verify_note = "manual-cert";
                         }
                     }
+                    // ③ 纯解密（含证书已验签后的解密）。
+                    handled = PayNotify.svc.handleV3Notify(ctx.allocator, api_v3_key_dup, body) catch false;
                 }
-                const handled = PayNotify.svc.handleV3Notify(ctx.allocator, api_v3_key, body) catch false;
+                std.log.info("[pay/v3] notify 处理完成 handled={} verify={s}", .{ handled, verify_note });
                 if (handled) {
                     try ctx.jsonStruct(200, .{ .code = "SUCCESS", .message = "成功" });
                 } else {

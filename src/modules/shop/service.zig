@@ -43,6 +43,8 @@ pub const ShopError = error{
     OutOfStock,
     InsufficientBalance,
     OrderStateConflict,
+    /// 核销码连续试错超限，订单进入冷却锁定（见 PickupGuard）。
+    PickupLocked,
     /// 请求预算耗尽（zent PoolWaitTimeout/QueryTimeout，见 request_budget 闸门）。
     RequestTimeout,
     Unexpected,
@@ -79,6 +81,82 @@ pub const OrderPaidEvent = struct {
 
 pub const OrderPaidBus = zigmodu.TypedEventBus(OrderPaidEvent);
 
+/// 核销防暴力守卫：按订单维度记连续失败次数，达到阈值进入冷却锁定。
+/// 取货码仅 6 位数字（1e6 空间），无限速即可被遍历——本守卫把成本抬到
+/// 「每订单每冷却窗至多 max_fails 次试错」。定长槽位、零分配（ShopService
+/// 无 deinit，测试泄漏门禁零负担），进程重启清零可接受：内存态锁定的意义
+/// 是限速而非封禁名单。路由层另有 per-IP 限流双保险（api.zig 注册处）。
+pub const PickupGuard = struct {
+    pub const capacity = 64;
+    pub const max_fails = 5;
+    pub const lockout_secs: i64 = 900;
+
+    pub const Entry = struct {
+        /// 0 表示空槽（订单 id 从 1 起自增，不会为 0）。
+        order_id: i64 = 0,
+        fails: u32 = 0,
+        locked_until: i64 = 0,
+    };
+
+    pub const Decision = enum { allowed, locked };
+
+    /// 极短临界区（64 槽线性扫）用原子自旋锁即可；std.Io.Mutex 需要
+    /// io 实例才能解锁，守卫方法不便携带 io。
+    guard_locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    slots: [capacity]Entry = @splat(.{}),
+    /// 环形覆盖指针：槽满时新订单覆盖最旧一条（约 64 个在途核销订单，够用）。
+    clock: usize = 0,
+
+    /// 本次尝试是否放行（冷却窗口未过 → locked）。
+    fn acquire(self: *PickupGuard) void {
+        while (self.guard_locked.swap(true, .acquire)) {}
+    }
+
+    fn release(self: *PickupGuard) void {
+        self.guard_locked.store(false, .release);
+    }
+
+    pub fn allow(self: *PickupGuard, order_id: i64, now: i64) Decision {
+        self.acquire();
+        defer self.release();
+        const s = self.find(order_id) orelse return .allowed;
+        if (s.locked_until > now) return .locked;
+        return .allowed;
+    }
+
+    /// 记一次失败；累计到阈值即进入冷却并清零计数（冷却后重新计满 5 次）。
+    pub fn fail(self: *PickupGuard, order_id: i64, now: i64) void {
+        self.acquire();
+        defer self.release();
+        if (self.find(order_id)) |s| {
+            s.fails += 1;
+            if (s.fails >= max_fails) {
+                s.locked_until = now + lockout_secs;
+                s.fails = 0;
+            }
+            return;
+        }
+        self.slots[self.clock % capacity] = .{ .order_id = order_id, .fails = 1 };
+        self.clock +%= 1;
+    }
+
+    /// 核销成功，清除该订单的失败记录。
+    pub fn reset(self: *PickupGuard, order_id: i64) void {
+        self.acquire();
+        defer self.release();
+        if (self.find(order_id)) |s| {
+            s.* = .{};
+        }
+    }
+
+    fn find(self: *PickupGuard, order_id: i64) ?*Entry {
+        for (&self.slots) |*s| {
+            if (s.order_id == order_id) return s;
+        }
+        return null;
+    }
+};
+
 // ── 交易业务（Phase 2）────────────────────────────────────
 
 pub const OrderItemInput = struct {
@@ -95,6 +173,39 @@ pub const AddressInput = struct {
     detail: []const u8,
     is_default: i64 = 0,
 };
+
+// ── 聚合 DTO（原为 ShopService 嵌套声明，拆分时提升到文件级，片段与宿主同名引用）──
+pub const OrderSummary = struct {
+    order_id: i64,
+    cover_image: []const u8,
+    item_count: i64,
+    summary: []const u8,
+
+    pub fn free(self: OrderSummary, allocator: std.mem.Allocator) void {
+        allocator.free(self.cover_image);
+        allocator.free(self.summary);
+    }
+};
+
+pub const OrderStats = struct {
+    pending_pay: i64,
+    pending_ship: i64,
+    completed: i64,
+    total_sales: i64,
+};
+
+pub const FanOrderOverview = struct {
+    pending_pay: i64,
+    pending_ship: i64,
+    shipped: i64,
+    completed: i64,
+    order_timeout_secs: i64,
+};
+
+const parts_catalog = @import("service/catalog.zig");
+const parts_trade = @import("service/trade.zig");
+const parts_marketing = @import("service/marketing.zig");
+const parts_content = @import("service/content.zig");
 
 pub const ShopService = struct {
     allocator: std.mem.Allocator,
@@ -118,1136 +229,94 @@ pub const ShopService = struct {
     /// 任务队列服务（可选注入；webhook 投递经它入队 webhook.deliver，
     /// 由 Dispatcher worker 异步 POST + 退避重试，不在事件监听里同步阻塞）
     task_svc: ?*task_service.TaskService = null,
+    /// 核销防暴力守卫（见 PickupGuard）。
+    pickup_guard: PickupGuard = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, store: *persist.ShopStore) ShopService {
         return .{ .allocator = allocator, .io = io, .store = store };
     }
 
-    fn now(self: *ShopService) i64 {
+    pub fn now(self: *ShopService) i64 {
         return zigmodu.time.wallClockSeconds(self.io);
     }
 
     // ── 分类 ───────────────────────────────────────────────
 
-    pub fn createCategory(self: *ShopService, tenant_id: i64, account_id: i64, name: []const u8, parent_id: i64, sort: i64) ShopError!i64 {
-        if (std.mem.trim(u8, name, " \t").len == 0) return error.InvalidInput;
-        return self.store.catalog.createCategory(tenant_id, account_id, name, parent_id, sort, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listCategories(self: *ShopService, tenant_id: i64, account_id: i64) ShopError!CategoryListResult {
-        return self.store.catalog.listCategories(tenant_id, account_id) catch error.Unexpected;
-    }
-
-    pub fn deleteCategory(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.catalog.deleteCategory(id) catch return error.Unexpected;
-    }
-
-    // ── 商品 ───────────────────────────────────────────────
-
-    pub fn createProduct(self: *ShopService, tenant_id: i64, account_id: i64, p: ProductInput) ShopError!i64 {
-        if (std.mem.trim(u8, p.name, " \t").len == 0 or p.price < 0 or p.stock < 0) return error.InvalidInput;
-        const id = self.store.catalog.createProduct(tenant_id, account_id, p, self.now()) catch return error.Unexpected;
-        // 回滚清理：SKU 写入失败时删除已建商品行；清理失败无可挽回，且各失败分支
-        // 均已 return 具体错误给调用方（失败已反馈），故此处只吞错。
-        errdefer _ = self.store.catalog.deleteProduct(id) catch {};
-
-        // 默认 SKU：未传 skus 时按商品主数据建一行（spec_json="[]"）。
-        if (p.skus.len == 0) {
-            _ = self.store.catalog.createSku(tenant_id, account_id, id, "[]", p.image, p.price, p.stock, self.now()) catch return error.Unexpected;
-        } else {
-            for (p.skus) |s| {
-                _ = self.store.catalog.createSku(tenant_id, account_id, id, s.spec_json, s.image, s.price, s.stock, self.now()) catch return error.Unexpected;
-            }
-        }
-        return id;
-    }
-
-    pub fn getProduct(self: *ShopService, id: i64) ShopError!?ShopProductRow {
-        return self.store.catalog.getProduct(id) catch error.Unexpected;
-    }
-
-    pub fn updateProduct(self: *ShopService, tenant_id: i64, account_id: i64, id: i64, p: ProductInput) ShopError!void {
-        if (std.mem.trim(u8, p.name, " \t").len == 0 or p.price < 0 or p.stock < 0) return error.InvalidInput;
-        if (!(self.store.catalog.updateProduct(id, p, self.now()) catch return error.Unexpected)) return error.NotFound;
-        // 重建 SKU（幂等：删旧建新）。下面三处写入失败时商品主数据已更新、本函数
-        // 仍返回成功，会让 SKU 缺失或新旧混杂，故只吞错但留痕供对账。
-        self.store.catalog.deleteSkusByProduct(id) catch |err| std.log.err("[shop] 更新商品删除旧 SKU 失败 product_id={d} err={s}", .{ id, @errorName(err) });
-        if (p.skus.len == 0) {
-            _ = self.store.catalog.createSku(tenant_id, account_id, id, "[]", p.image, p.price, p.stock, self.now()) catch |err| std.log.err("[shop] 更新商品写入默认 SKU 失败 product_id={d} err={s}", .{ id, @errorName(err) });
-        } else {
-            for (p.skus) |s| {
-                _ = self.store.catalog.createSku(tenant_id, account_id, id, s.spec_json, s.image, s.price, s.stock, self.now()) catch |err| std.log.err("[shop] 更新商品写入 SKU 失败 product_id={d} err={s}", .{ id, @errorName(err) });
-            }
-        }
-    }
-
-    pub fn deleteProduct(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.catalog.deleteProduct(id) catch return error.Unexpected;
-        // 商品行已删除且本函数返回成功；残留 SKU 仍可被 listSkus/getSku 读到，留痕对账。
-        self.store.catalog.deleteSkusByProduct(id) catch |err| std.log.err("[shop] 删除商品后清理 SKU 失败 product_id={d} err={s}", .{ id, @errorName(err) });
-    }
-
-    /// `status` 为 -1 表示不过滤（管理端），0/1 按下架/上架筛选。
-    pub fn listProducts(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, category_id: i64, keyword: []const u8, status: i64) ShopError!ProductListResult {
-        return self.store.catalog.listProducts(page, page_size, tenant_id, account_id, category_id, keyword, status) catch error.Unexpected;
-    }
-
-    // ── SKU ───────────────────────────────────────────────
-
-    pub fn listSkus(self: *ShopService, product_id: i64) ShopError![]ShopSkuRow {
-        return self.store.catalog.listSkus(product_id) catch error.Unexpected;
-    }
-
-    pub fn getSku(self: *ShopService, id: i64) ShopError!?ShopSkuRow {
-        return self.store.catalog.getSku(id) catch error.Unexpected;
-    }
-    // ── 购物车 ───────────────────────────────────────────
-
-    pub fn addCart(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, product_id: i64, sku_id: i64, quantity: i64) ShopError!i64 {
-        if (quantity <= 0) return error.InvalidInput;
-        const sku_opt = self.store.catalog.getSku(sku_id) catch return error.Unexpected;
-        const sku = sku_opt orelse return error.NotFound;
-        sku.free(self.allocator);
-        return self.store.trade.upsertCart(tenant_id, account_id, openid, product_id, sku_id, quantity, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listCarts(self: *ShopService, tenant_id: i64, openid: []const u8) ShopError![]ShopCartRow {
-        return self.store.trade.listCarts(tenant_id, openid) catch error.Unexpected;
-    }
-
-    pub fn updateCart(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64, quantity: i64) ShopError!void {
-        if (quantity <= 0) return error.InvalidInput;
-        if (!(self.store.trade.updateCartQuantity(tenant_id, openid, id, quantity) catch return error.Unexpected)) return error.NotFound;
-    }
-
-    pub fn deleteCart(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64) ShopError!void {
-        if (!(self.store.trade.deleteCart(tenant_id, openid, id) catch return error.Unexpected)) return error.NotFound;
-    }
-
-    // ── 地址 ─────────────────────────────────────────────
-
-    pub fn createAddress(self: *ShopService, tenant_id: i64, account_id: i64, a: AddressInput) ShopError!i64 {
-        if (std.mem.trim(u8, a.name, " \t").len == 0 or std.mem.trim(u8, a.mobile, " \t").len == 0) return error.InvalidInput;
-        return self.store.trade.createAddress(tenant_id, account_id, a, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listAddresses(self: *ShopService, tenant_id: i64, openid: []const u8) ShopError![]ShopAddressRow {
-        return self.store.trade.listAddresses(tenant_id, openid) catch error.Unexpected;
-    }
-
-    pub fn deleteAddress(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64) ShopError!void {
-        if (!(self.store.trade.deleteAddress(tenant_id, openid, id) catch return error.Unexpected)) return error.NotFound;
-    }
-
-    pub fn setAddressDefault(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64) ShopError!void {
-        self.store.trade.setDefaultAddress(tenant_id, openid, id, self.now()) catch |err| switch (err) {
-            error.AddressNotFound => return error.NotFound,
-            error.InvalidInput => return error.InvalidInput,
-            else => return error.Unexpected,
-        };
-    }
-
-    pub fn updateAddress(self: *ShopService, tenant_id: i64, openid: []const u8, id: i64, a: anytype) ShopError!void {
-        if (std.mem.trim(u8, a.name, " \t").len == 0 or std.mem.trim(u8, a.mobile, " \t").len == 0) return error.InvalidInput;
-        self.store.trade.updateAddress(tenant_id, openid, id, a, self.now()) catch |err| switch (err) {
-            error.AddressNotFound => return error.NotFound,
-            error.InvalidInput => return error.InvalidInput,
-            else => return error.Unexpected,
-        };
-    }
-
-    // ── 下单引擎 ─────────────────────────────────────────
-
-    /// 自提核销码：6 位数字（PK 前缀展示用）。
-    fn genPickupCode(self: *ShopService) ![]const u8 {
-        var buf: [4]u8 = undefined;
-        var file = try std.Io.Dir.cwd().openFile(self.io, "/dev/urandom", .{});
-        defer file.close(self.io);
-        const read = try file.readPositionalAll(self.io, &buf, 0);
-        if (read != buf.len) return error.Unexpected;
-        const n = std.mem.readInt(u32, &buf, .little) % 1000000;
-        return std.fmt.allocPrint(self.allocator, "{d:0>6}", .{n});
-    }
-
-    /// 唯一订单号：SO + 秒级时间戳 + 8 字节随机 hex（防撞号）。
-    fn genOrderNo(self: *ShopService) ![]const u8 {
-        var buf: [8]u8 = undefined;
-        var file = try std.Io.Dir.cwd().openFile(self.io, "/dev/urandom", .{});
-        defer file.close(self.io);
-        const read = try file.readPositionalAll(self.io, &buf, 0);
-        if (read != buf.len) return error.Unexpected;
-        return std.fmt.allocPrint(self.allocator, "SO{d}{x:0>16}", .{ self.now(), std.mem.readInt(u64, &buf, .little) });
-    }
-
-    /// 下单：校验商品/SKU/库存 → 原子扣库存 → 生成订单号 → 写订单+明细。
-    /// 返回订单 id。支付由 payment 模块承接（mock 即时入账 / v3 微信支付）。
-    /// 无请求预算的调用点（测试/内部）走这里；HTTP 入口用 createOrderBudget。
-    pub fn createOrder(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, items: []const OrderItemInput, coupon_code: []const u8, client_trade_no: []const u8, pay_type: []const u8, pickup_store_id: i64, remark: []const u8) ShopError!i64 {
-        return self.createOrderBudget(tenant_id, account_id, openid, address_id, items, coupon_code, client_trade_no, pay_type, pickup_store_id, remark, null);
-    }
-
-    /// createOrder 的请求预算版：budget_ms 为 zigmodu ctx.deadline_ms（CLOCK_MONOTONIC
-    /// 毫秒绝对 deadline，null = 无界）。事务获取（池等待）按预算上限阻塞、超预算
-    /// 报 RequestTimeout；预算耗尽时前置拒绝，不再启动事务。
-    pub fn createOrderBudget(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, items: []const OrderItemInput, coupon_code: []const u8, client_trade_no: []const u8, pay_type: []const u8, pickup_store_id: i64, remark: []const u8, budget_ms: ?i64) ShopError!i64 {
-        // 幂等：同 client_trade_no 已存在 → 返回原单（不重复扣库存）。
-        if (client_trade_no.len > 0) {
-            if (self.store.trade.getByClientTradeNo(tenant_id, client_trade_no) catch return error.Unexpected) |existing| {
-                defer existing.free(self.allocator);
-                return existing.id;
-            }
-        }
-        if (items.len == 0) return error.InvalidInput;
-        // 地址快照（带 tenant 归属：防跨租户把他人收货地址 PII 写进订单）。
-        const addr_opt = self.store.trade.getAddress(tenant_id, address_id) catch return error.Unexpected;
-        const addr = addr_opt orelse return error.InvalidInput;
-        defer addr.free(self.allocator);
-        const address_json = std.json.Stringify.valueAlloc(self.allocator, .{
-            .name = addr.name,
-            .mobile = addr.mobile,
-            .region = addr.region,
-            .detail = addr.detail,
-            .remark = remark,
-        }, .{}) catch return error.Unexpected;
-        defer self.allocator.free(address_json);
-
-        // 逐项校验 + 原子扣库存 + 汇总金额
-        var total: i64 = 0;
-        const order_no = self.genOrderNo() catch return error.Unexpected;
-        defer self.allocator.free(order_no);
-        var pickup_code_owned: ?[]const u8 = null;
-        defer if (pickup_code_owned) |c| self.allocator.free(c);
-
-        // 事务：扣库存 + 建单 + 明细 原子提交（SQLite/Postgres 均支持）；失败整体回滚。
-        // beginTxCtx 携带请求预算：池等待按剩余预算上限阻塞（zent borrowCtx），
-        // 超预算 → PoolWaitTimeout → RequestTimeout；预算已耗尽则前置拒绝，
-        // 不启动事务（事务内语句的 deadline 化见 request_budget 中间件说明，
-        // 属逐步推进项）。
-        if (db_mod.budgetSpent(budget_ms)) return error.RequestTimeout;
-        var exec_ctx = db_mod.execContext(budget_ms);
-        var tx = zent.codegen.beginTxCtx(schema.infos, self.store.client, if (exec_ctx.deadline_ns != null) &exec_ctx else null) catch |err| switch (err) {
-            error.PoolWaitTimeout, error.QueryTimeout => return error.RequestTimeout,
-            else => return error.Unexpected,
-        };
-        // 提交后须立即归还池连接（连接在 deinit 时才 release），否则提交后的
-        // 余额支付/订单明细查询在 max_connections=1（:memory:）下必然耗尽。
-        // 错误路径先显式回滚再释放（池层 rollback 幂等），避免依赖 deinit 兜底。
-        // 本函数内所有 rollback()/deinit 失败只吞错：各失败分支均已 return 具体错误
-        // 给调用方，回滚失败无可挽回，且下面 defer 兜底会再回滚一次。
-        var tx_closed = false;
-        defer if (!tx_closed) {
-            tx.rollback() catch {};
-            tx.deinit();
-        };
-        for (items) |it| {
-            // 事务内读写必须走 tx.client：连接池下事务独占借用的连接，
-            // 再从池里借会 PoolExhausted；即便借得到，也读不到本事务未提交的写。
-            if (it.sku_id == 0) {
-                // 无 SKU 商品：回退商品主数据（价格/库存）下单。tenant 归属校验：
-                // 拿不到别租户商品，防跨租户拿价下单。
-                const product_opt = self.store.catalog.getProductOn(tx.client, tenant_id, it.product_id) catch return error.Unexpected;
-                const product = product_opt orelse return error.NotFound;
-                defer product.free(self.allocator);
-                const pp = tx.client.shop_product.predicates;
-                // 库存守卫参数化（zent.sql.RawArgs）：数量走绑定参数而非拼进 SQL 文本。
-                const affected = crud.increment(tx.client.shop_product, "stock", -it.quantity, &.{
-                    pp.idEQ(.{ .int = it.product_id }),
-                    zent.sql.RawArgs("stock >= ?", &.{.{ .int = it.quantity }}),
-                }) catch {
-                    tx.rollback() catch {};
-                    return error.OutOfStock;
-                };
-                if (affected == 0) {
-                    tx.rollback() catch {};
-                    return error.OutOfStock;
-                }
-                const product_price = std.fmt.parseInt(i64, product.price, 10) catch return error.Unexpected;
-                total += product_price * it.quantity;
-                _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch |err| std.log.err("[shop] 下单累计商品销量失败 product_id={d} quantity={d} err={s}", .{ it.product_id, it.quantity, @errorName(err) });
-            } else {
-                const sp = tx.client.shop_product_sku.predicates;
-                const sku_opt = self.store.catalog.getSkuOn(tx.client, tenant_id, it.sku_id) catch return error.Unexpected;
-                const sku = sku_opt orelse return error.NotFound;
-                defer sku.free(self.allocator);
-                // 库存守卫参数化（zent.sql.RawArgs），同商品分支。
-                const affected = crud.increment(tx.client.shop_product_sku, "stock", -it.quantity, &.{
-                    sp.idEQ(.{ .int = it.sku_id }),
-                    zent.sql.RawArgs("stock >= ?", &.{.{ .int = it.quantity }}),
-                }) catch {
-                    tx.rollback() catch {};
-                    return error.OutOfStock;
-                };
-                if (affected == 0) {
-                    tx.rollback() catch {};
-                    return error.OutOfStock;
-                }
-                const sku_price = std.fmt.parseInt(i64, sku.price, 10) catch return error.Unexpected;
-                total += sku_price * it.quantity;
-                const pp = tx.client.shop_product.predicates;
-                _ = crud.increment(tx.client.shop_product, "sales", it.quantity, &.{pp.idEQ(.{ .int = it.product_id })}) catch |err| std.log.err("[shop] 下单累计商品销量失败 product_id={d} quantity={d} err={s}", .{ it.product_id, it.quantity, @errorName(err) });
-            }
-        }
-
-        // 优惠券减免：code 可选，经 coupon 模块 service 的事务内窄方法校验
-        // 归属/未用/门槛并核销（CouponService.redeemOnOrder——核销标记必须随
-        // 订单事务提交/回滚，属文档化的 persistence 直读例外）。
-        var discount: i64 = 0;
-        if (coupon_code.len > 0) {
-            if (self.coupon_svc) |cs| {
-                const csvc: *coupon_service.CouponService = @ptrCast(@alignCast(cs));
-                discount = csvc.redeemOnOrder(tx.client, coupon_code, openid, total) catch |err| switch (err) {
-                    error.InvalidInput => return error.InvalidInput,
-                    else => return error.Unexpected,
-                };
-            }
-        }
-        const pay_amount = total - discount;
-
-        // 自提：pickup_store_id>0 → 生成核销码（6 位数字）。
-        const is_pickup = pickup_store_id > 0;
-        const pickup_type = if (is_pickup) "self" else "delivery";
-        const pickup_code = if (is_pickup) blk: {
-            pickup_code_owned = self.genPickupCode() catch "";
-            break :blk pickup_code_owned.?;
-        } else "";
-
-        const now_secs = self.now();
-        const order_id = blk: {
-            const total_amount_str = std.fmt.allocPrint(self.allocator, "{d}", .{total}) catch {
-                tx.rollback() catch {};
-                return error.Unexpected;
-            };
-            defer self.allocator.free(total_amount_str);
-            const pay_amount_str = std.fmt.allocPrint(self.allocator, "{d}", .{pay_amount}) catch {
-                tx.rollback() catch {};
-                return error.Unexpected;
-            };
-            defer self.allocator.free(pay_amount_str);
-            var row = crud.create(tx.client.shop_order, .{
-                .tenant_id = tenant_id,
-                .account_id = account_id,
-                .order_no = order_no,
-                .client_trade_no = client_trade_no,
-                .openid = openid,
-                .total_amount = total_amount_str,
-                .pay_amount = pay_amount_str,
-                .status = 0,
-                .address_json = address_json,
-                .express_company = "",
-                .express_no = "",
-                .paid_at = 0,
-                .pickup_type = pickup_type,
-                .pickup_code = pickup_code,
-                .store_id = if (is_pickup) pickup_store_id else 0,
-                .groupon_team_id = 0,
-                .created_at = now_secs,
-                .updated_at = now_secs,
-            }) catch {
-                tx.rollback() catch {};
-                return error.Unexpected;
-            };
-            defer tx.client.shop_order.deinitRow(&row);
-            break :blk row.id;
-        };
-
-        for (items) |it| {
-            const sku_opt = self.store.catalog.getSkuOn(tx.client, tenant_id, it.sku_id) catch return error.Unexpected;
-            const sku = sku_opt orelse return error.NotFound;
-            defer sku.free(self.allocator);
-            const p_opt = self.store.catalog.getProductOn(tx.client, tenant_id, it.product_id) catch return error.Unexpected;
-            const p = p_opt orelse return error.NotFound;
-            defer p.free(self.allocator);
-            const sku_price = std.fmt.parseInt(i64, sku.price, 10) catch return error.Unexpected;
-            const sku_price_str = std.fmt.allocPrint(self.allocator, "{d}", .{sku_price}) catch {
-                tx.rollback() catch {};
-                return error.Unexpected;
-            };
-            defer self.allocator.free(sku_price_str);
-            var op_row = crud.create(tx.client.shop_order_product, .{
-                .tenant_id = tenant_id,
-                .account_id = account_id,
-                .order_id = order_id,
-                .product_id = it.product_id,
-                .sku_id = it.sku_id,
-                .name = p.name,
-                .image = p.image,
-                .spec_json = sku.spec_json,
-                .price = sku_price_str,
-                .quantity = it.quantity,
-                .created_at = now_secs,
-                .updated_at = now_secs,
-            }) catch {
-                tx.rollback() catch {};
-                return error.Unexpected;
-            };
-            defer tx.client.shop_order_product.deinitRow(&op_row);
-        }
-
-        // 事务提交（原子）。提交后马上归还池连接，后续查询才借得到。
-        tx.commit() catch return error.Unexpected;
-        tx.deinit();
-        tx_closed = true;
-
-        // 余额支付：pay_type=balance → 扣买家钱包（openid → fan_id），成功即标记支付。
-        if (std.mem.eql(u8, pay_type, "balance")) {
-            if (self.payment_svc) |ps| {
-                if (self.fan_store) |fs| {
-                    const fan_opt = fs.getByOpenid(tenant_id, account_id, openid) catch return error.Unexpected;
-                    const fan = fan_opt orelse return error.NotFound;
-                    defer fan.free(self.allocator);
-                    const pay_mod = @import("../payment/service.zig");
-                    const psvc: *pay_mod.PaymentService = @ptrCast(@alignCast(ps));
-                    const ok = psvc.payWithBalance(tenant_id, account_id, fan.id, pay_amount) catch false;
-                    if (!ok) {
-                        // 条件取消：仅本次请求把 0→4 命中时才回滚库存，
-                        // 与用户手动取消并发时不会双倍返还。
-                        if (self.store.trade.cancelOrderOn(tenant_id, openid, order_id, self.now()) catch false) {
-                            // 事务已提交，显式回滚：订单已取消（本函数即将返回 InsufficientBalance），
-                            // 库存返还失败无可挽回，留痕供人工对账。
-                            self.store.trade.restoreOrderStock(order_id) catch |err| std.log.err("[shop] 余额支付失败回滚订单库存失败 order_id={d} err={s}", .{ order_id, @errorName(err) });
-                        }
-                        return error.InsufficientBalance;
-                    }
-                    // 钱包已扣款；标记支付失败会让订单停在待支付（钱已走、单未结），留痕。
-                    self.markPaid(tenant_id, account_id, order_id) catch |err| std.log.err("[shop] 余额支付成功后标记订单已支付失败 order_id={d} err={s}", .{ order_id, @errorName(err) });
-                }
-            }
-        }
-        return order_id;
-    }
-
-    pub fn getOrder(self: *ShopService, id: i64) ShopError!?ShopOrderRow {
-        return self.store.trade.getOrder(id) catch error.Unexpected;
-    }
-
-    pub fn listOrders(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64, pickup_type: []const u8) ShopError!OrderListResult {
-        return self.listOrdersBudget(page, page_size, tenant_id, account_id, openid, status, pickup_type, null);
-    }
-
-    /// listOrders 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
-    /// 查询超预算 → zent QueryTimeout/PoolWaitTimeout → RequestTimeout。
-    /// HTTP 入口（管理端订单列表/C 端我的订单）用本变体；智能客服等内部
-    /// 旁路读保持无界（原方法）。
-    pub fn listOrdersBudget(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8, status: i64, pickup_type: []const u8, budget_ms: ?i64) ShopError!OrderListResult {
-        return self.store.trade.listOrdersBudget(page, page_size, tenant_id, account_id, openid, status, pickup_type, budget_ms) catch |err| switch (err) {
-            error.PoolWaitTimeout, error.QueryTimeout => error.RequestTimeout,
-            else => error.Unexpected,
-        };
-    }
-
-    pub fn listOrderProducts(self: *ShopService, order_id: i64) ShopError![]ShopOrderProductRow {
-        return self.store.trade.listOrderProducts(order_id) catch error.Unexpected;
-    }
-
-    pub fn getOrderProduct(self: *ShopService, id: i64) ShopError!?ShopOrderProductRow {
-        return self.store.trade.getOrderProduct(id) catch error.Unexpected;
-    }
-
-    /// 支付成功回调（payment 模块调用）：状态 0→1 原子条件更新，只命中一次。
-    /// 事件驱动：有 bus → publish OrderPaidEvent（消费者处理分销/积分/通知）；
-    /// 无 bus → 同步回退（单测/最小部署兼容）。
-    /// 幂等：重复/并发回调 affected=0 时读回当前状态——已是 1 → 直接返回
-    /// （不重复分佣/积分）；其他状态 → 异常回调，返回错误。
-    pub fn markPaid(self: *ShopService, tenant_id: i64, account_id: i64, order_id: i64) ShopError!void {
-        if (!(self.store.trade.markPaidOn(tenant_id, order_id, self.now()) catch return error.Unexpected)) {
-            const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
-            const o = o_opt orelse return error.NotFound;
-            defer o.free(self.allocator);
-            if (o.status == 1) return; // 已支付：幂等返回，奖励只发一次
-            return error.OrderStateConflict; // 已取消/已完成等：非法回调
-        }
-        if (self.order_paid_bus) |bus| {
-            bus.publish(.{ .tenant_id = tenant_id, .account_id = account_id, .order_id = order_id });
-            return;
-        }
-        // 同步回退：分销 + 积分。
-        if (self.dist_svc) |ds| {
-            const o_opt = self.store.trade.getOrder(order_id) catch return;
-            const o = o_opt orelse return;
-            defer o.free(self.allocator);
-            const pay_amount = std.fmt.parseInt(i64, o.pay_amount, 10) catch return;
-            const dist_mod = @import("../distribution/service.zig");
-            const dsvc: *dist_mod.DistributionService = @ptrCast(@alignCast(ds));
-            // 买家已支付成功，分佣失败只影响上级佣金，不阻断订单；留痕供对账。
-            _ = dsvc.distribute(tenant_id, account_id, o.openid, pay_amount) catch |err| std.log.err("[shop] 支付成功同步分佣失败 openid={s} amount={d} err={s}", .{ o.openid, pay_amount, @errorName(err) });
-        }
-        // 会员积分累计：1 元 = 1 积分。
-        if (self.member_svc) |ms| {
-            const o_opt2 = self.store.trade.getOrder(order_id) catch return;
-            const o2 = o_opt2 orelse return;
-            defer o2.free(self.allocator);
-            const pay_amount2 = std.fmt.parseInt(i64, o2.pay_amount, 10) catch return;
-            const mc_mod = @import("../member_card/service.zig");
-            const msvc: *mc_mod.MemberCardService = @ptrCast(@alignCast(ms));
-            // 同上：积分漏记不阻断支付流程，留痕供对账。
-            _ = msvc.adjust(tenant_id, account_id, o2.openid, @divTrunc(pay_amount2, 100)) catch |err| std.log.err("[shop] 支付成功累计会员积分失败 openid={s} err={s}", .{ o2.openid, @errorName(err) });
-        }
-    }
-
-    /// 取消订单（仅待支付可取消，可取消状态集 = {0}，与原语义一致）。
-    /// 原子条件更新 WHERE(id + openid + tenant_id + status=0)：并发/重复取消
-    /// 只有一个调用方 affected=1，库存回滚恰好执行一次（防双回滚）。
-    /// affected=0 时读回当前状态区分：已是取消态(4) → 幂等成功；
-    /// 不存在/归属不符 → NotFound（IDOR 按不存在处理）；其他状态 → 冲突。
-    pub fn cancelOrder(self: *ShopService, tenant_id: i64, openid: []const u8, order_id: i64) ShopError!void {
-        if (self.store.trade.cancelOrderOn(tenant_id, openid, order_id, self.now()) catch return error.Unexpected) {
-            // 订单已取消且本函数返回成功；库存返还失败只影响后续可售库存，留痕对账。
-            self.store.trade.restoreOrderStock(order_id) catch |err| std.log.err("[shop] 取消订单回滚库存失败 order_id={d} err={s}", .{ order_id, @errorName(err) });
-            return;
-        }
-        const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
-        const o = o_opt orelse return error.NotFound;
-        defer o.free(self.allocator);
-        if (o.status == 4) return; // 已是取消态：幂等成功（不再回滚库存）
-        if (!std.mem.eql(u8, o.openid, openid)) return error.NotFound; // 他人订单：不泄露存在性
-        if (o.status == 0) return error.NotFound; // openid 匹配但未命中：租户不符，按不存在处理
-        return error.OrderStateConflict;
-    }
-
-    /// 确认收货（已发货 → 已完成）。
-    pub fn confirmOrder(self: *ShopService, order_id: i64) ShopError!void {
-        const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
-        const o = o_opt orelse return error.NotFound;
-        defer o.free(self.allocator);
-        if (o.status != 2) return error.OrderStateConflict;
-        _ = self.store.trade.updateOrderStatus(order_id, 3, self.now()) catch return error.Unexpected;
-    }
-
-    /// 管理端发货。
-    pub fn shipOrder(self: *ShopService, order_id: i64, company: []const u8, no: []const u8) ShopError!void {
-        const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
-        const o = o_opt orelse return error.NotFound;
-        defer o.free(self.allocator);
-        if (o.status != 1) return error.OrderStateConflict;
-        _ = self.store.trade.updateOrderExpress(order_id, company, no, self.now()) catch return error.Unexpected;
-        _ = self.store.trade.updateOrderStatus(order_id, 2, self.now()) catch return error.Unexpected;
-    }
-
-    // ── 退款 ──────────────────────────────────────────────
-
-    /// 申请退款（仅已支付/已发货可申请；一单一退）。
-    pub fn applyRefund(self: *ShopService, tenant_id: i64, account_id: i64, order_id: i64, openid: []const u8, reason: []const u8) ShopError!i64 {
-        const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
-        const o = o_opt orelse return error.NotFound;
-        defer o.free(self.allocator);
-        if (o.status == 0 or o.status == 4) return error.OrderStateConflict;
-        if (self.store.trade.getRefundByOrder(tenant_id, order_id) catch null) |existing| {
-            existing.free(self.allocator);
-            return error.Duplicate;
-        }
-        const pay_amount = std.fmt.parseInt(i64, o.pay_amount, 10) catch return error.Unexpected;
-        return self.store.trade.createRefund(tenant_id, account_id, order_id, openid, reason, pay_amount, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listRefunds(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, status: i64) ShopError!RefundListResult {
-        return self.store.trade.listRefunds(page, page_size, tenant_id, account_id, status) catch error.Unexpected;
-    }
-
-    pub fn listRefundsByOpenid(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, openid: []const u8) ShopError!RefundListResult {
-        return self.store.trade.listRefundsByOpenid(page, page_size, tenant_id, account_id, openid) catch error.Unexpected;
-    }
-
-    pub const OrderSummary = struct {
-        order_id: i64,
-        cover_image: []const u8,
-        item_count: i64,
-        summary: []const u8,
-
-        pub fn free(self: OrderSummary, allocator: std.mem.Allocator) void {
-            allocator.free(self.cover_image);
-            allocator.free(self.summary);
-        }
-    };
-
-    pub fn orderSummaries(self: *ShopService, order_ids: []const i64) ShopError![]OrderSummary {
-        var out = std.ArrayList(OrderSummary).empty;
-        errdefer {
-            for (out.items) |s| s.free(self.allocator);
-            out.deinit(self.allocator);
-        }
-        // 一条 IN 查询拉全部明细，内存里按 order_id 分组（原逐单查询在公开
-        // 接口上是 N+1：30 个 id = 30 条 SQL）。
-        const all = self.store.trade.listOrderProductsByIds(order_ids) catch return error.Unexpected;
-        defer {
-            for (all) |op| op.free(self.allocator);
-            if (all.len > 0) self.allocator.free(all);
-        }
-        for (order_ids) |oid| {
-            var first: ?ShopOrderProductRow = null;
-            var count: i64 = 0;
-            for (all) |op| {
-                if (op.order_id != oid) continue;
-                if (first == null) first = op;
-                count += 1;
-            }
-            const cover_image = if (first) |op|
-                (self.allocator.dupe(u8, op.image) catch return error.Unexpected)
-            else
-                (self.allocator.dupe(u8, "") catch return error.Unexpected);
-            errdefer self.allocator.free(cover_image);
-            const summary = if (count > 1)
-                std.fmt.allocPrint(self.allocator, "{s} 等{d}件", .{ first.?.name, count }) catch return error.Unexpected
-            else if (count == 1)
-                (self.allocator.dupe(u8, first.?.name) catch return error.Unexpected)
-            else
-                (self.allocator.dupe(u8, "") catch return error.Unexpected);
-            out.append(self.allocator, .{
-                .order_id = oid,
-                .cover_image = cover_image,
-                .item_count = count,
-                .summary = summary,
-            }) catch return error.Unexpected;
-        }
-        return out.toOwnedSlice(self.allocator) catch error.Unexpected;
-    }
-
-    pub fn getRefundByOrder(self: *ShopService, tenant_id: i64, order_id: i64) ShopError!?ShopRefundRow {
-        const row_opt = self.store.trade.getRefundByOrder(tenant_id, order_id) catch return error.Unexpected;
-        return row_opt;
-    }
-
-    /// 退款审核：同意 → 订单置为已取消（4）+ 回滚库存与销量。
-    /// refund 状态翻转（pending→终态，条件更新）与 订单状态/库存回滚 包在
-    /// 同一事务（beginTxFromDriver + *On 变体走 tx.client），三写要么全提交
-    /// 要么全回滚；重复审核 affected=0 → 幂等返回，绝不重复回滚库存。
-    /// HTTP 入口用 auditRefundBudget（带请求预算）。
-    pub fn auditRefund(self: *ShopService, order_id: i64, refund_id: i64, approve: bool) ShopError!void {
-        return self.auditRefundBudget(order_id, refund_id, approve, null);
-    }
-
-    /// auditRefund 的请求预算版（budget_ms = ctx.deadline_ms，null = 无界）：
-    /// 事务获取按剩余预算阻塞、超预算/已耗尽 → RequestTimeout。
-    pub fn auditRefundBudget(self: *ShopService, order_id: i64, refund_id: i64, approve: bool, budget_ms: ?i64) ShopError!void {
-        const target: i64 = if (approve) 1 else 2;
-        const now_secs = self.now();
-        if (db_mod.budgetSpent(budget_ms)) return error.RequestTimeout;
-        var exec_ctx = db_mod.execContext(budget_ms);
-        // shop 模块私有 graph 的事务：TxClient(persist.infos)，故 *On 变体
-        // 均为 `client: anytype`（root Client / TxClient 均可传入）。
-        var tx = zent.codegen.beginTxFromDriverCtx(persist.infos, self.store.client.driver, self.allocator, if (exec_ctx.deadline_ns != null) &exec_ctx else null) catch |err| switch (err) {
-            error.PoolWaitTimeout, error.QueryTimeout => return error.RequestTimeout,
-            else => return error.Unexpected,
-        };
-        var tx_closed = false;
-        // 未提交路径由 defer 兜底回滚；回滚/释放失败只吞错：各失败分支均已 return 错误，
-        // 幂等返回分支本就无需持久化，回滚失败无可挽回。
-        defer if (!tx_closed) {
-            tx.rollback() catch {};
-            tx.deinit();
-        };
-        // 条件更新：仅 pending(0)→终态 命中一次。
-        const flipped = self.store.trade.auditRefundOn(tx.client, refund_id, target, now_secs) catch return error.Unexpected;
-        if (!flipped) {
-            // 区分：退款单不存在 → NotFound；已终态 → 幂等返回（不重复回滚）。
-            const r_opt = self.store.trade.getRefundByIdOn(tx.client, refund_id) catch return error.Unexpected;
-            const r = r_opt orelse return error.NotFound;
-            defer r.free(self.allocator);
-            if (r.status != 0) return; // 已被审核过（重复提交/双击）：幂等返回
-            return error.Unexpected; // 兜底：既不命中又非终态（正常不可达）
-        }
-        if (approve) {
-            // 订单状态 + 库存回滚与 refund 翻转同事务提交。
-            _ = self.store.trade.updateOrderStatusOn(tx.client, order_id, 4, now_secs) catch return error.Unexpected;
-            // 事务随后仍会提交（退款审批已生效）；库存/销量回滚失败无可挽回，留痕对账。
-            self.store.trade.restoreOrderStockOn(tx.client, order_id) catch |err| std.log.err("[shop] 退款审核通过后回滚订单库存失败 order_id={d} err={s}", .{ order_id, @errorName(err) });
-        }
-        tx.commit() catch return error.Unexpected;
-        tx.deinit();
-        tx_closed = true;
-    }
-
-    // ── 评价 ──────────────────────────────────────────────
-
-    pub fn createComment(self: *ShopService, tenant_id: i64, account_id: i64, c: anytype) ShopError!i64 {
-        if (c.star < 1 or c.star > 5) return error.InvalidInput;
-        // 实名校验：评价人必须是该订单买家，且订单已完成（3）才可评。
-        const op_opt = self.store.trade.getOrderProduct(c.order_product_id) catch return error.Unexpected;
-        const op = op_opt orelse return error.NotFound;
-        defer op.free(self.allocator);
-        const o_opt = self.store.trade.getOrder(op.order_id) catch return error.Unexpected;
-        const o = o_opt orelse return error.NotFound;
-        defer o.free(self.allocator);
-        if (!std.mem.eql(u8, o.openid, c.openid)) return error.InvalidInput;
-        if (o.status != 3) return error.OrderStateConflict;
-        if (self.store.trade.getCommentByOrderProduct(c.order_product_id) catch return error.Unexpected) |existing| {
-            existing.free(self.allocator);
-            return error.Duplicate;
-        }
-        return self.store.trade.createComment(tenant_id, account_id, c, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listCommentedOrderProductIds(self: *ShopService, order_id: i64) ShopError![]i64 {
-        const ops = self.store.trade.listOrderProducts(order_id) catch return error.Unexpected;
-        defer {
-            for (ops) |op| op.free(self.allocator);
-            if (ops.len > 0) self.allocator.free(ops);
-        }
-        var ids = std.ArrayList(i64).empty;
-        errdefer ids.deinit(self.allocator);
-        for (ops) |op| {
-            if (self.store.trade.getCommentByOrderProduct(op.id) catch return error.Unexpected) |existing| {
-                existing.free(self.allocator);
-                ids.append(self.allocator, op.id) catch return error.Unexpected;
-            }
-        }
-        return ids.toOwnedSlice(self.allocator) catch error.Unexpected;
-    }
-
-    pub fn listComments(self: *ShopService, product_id: i64) ShopError![]ShopCommentRow {
-        return self.store.trade.listCommentsByProduct(product_id) catch error.Unexpected;
-    }
-
-    // ── 收藏 ──────────────────────────────────────────────
-
-    pub fn favorite(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, product_id: i64) ShopError!void {
-        const p_opt = self.store.catalog.getProduct(product_id) catch return error.Unexpected;
-        const p = p_opt orelse return error.NotFound;
-        p.free(self.allocator);
-        self.store.trade.favorite(tenant_id, account_id, openid, product_id, self.now()) catch return error.Unexpected;
-    }
-
-    pub fn isFavorite(self: *ShopService, tenant_id: i64, openid: []const u8, product_id: i64) ShopError!bool {
-        return self.store.trade.isFavorite(tenant_id, openid, product_id) catch error.Unexpected;
-    }
-
-    pub fn unfavorite(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.trade.unfavorite(id) catch return error.Unexpected;
-    }
-
-    pub fn listFavorites(self: *ShopService, tenant_id: i64, openid: []const u8) ShopError![]ShopFavoriteRow {
-        return self.store.trade.listFavorites(tenant_id, openid) catch error.Unexpected;
-    }
-
-    // ── 订单统计（管理端） ───────────────────────────────
-
-    pub const OrderStats = struct {
-        pending_pay: i64,
-        pending_ship: i64,
-        completed: i64,
-        total_sales: i64,
-    };
-
-    pub const FanOrderOverview = struct {
-        pending_pay: i64,
-        pending_ship: i64,
-        shipped: i64,
-        completed: i64,
-        order_timeout_secs: i64,
-    };
-
-    pub fn fanOrderOverview(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, order_timeout_secs: i64) ShopError!FanOrderOverview {
-        return .{
-            .pending_pay = self.store.trade.countOrdersByStatusOpenid(tenant_id, account_id, openid, 0) catch return error.Unexpected,
-            .pending_ship = self.store.trade.countOrdersByStatusOpenid(tenant_id, account_id, openid, 1) catch return error.Unexpected,
-            .shipped = self.store.trade.countOrdersByStatusOpenid(tenant_id, account_id, openid, 2) catch return error.Unexpected,
-            .completed = self.store.trade.countOrdersByStatusOpenid(tenant_id, account_id, openid, 3) catch return error.Unexpected,
-            .order_timeout_secs = order_timeout_secs,
-        };
-    }
-
-    pub fn orderStats(self: *ShopService, tenant_id: i64, account_id: i64) ShopError!OrderStats {
-        return .{
-            .pending_pay = self.store.trade.countOrdersByStatus(tenant_id, account_id, 0) catch return error.Unexpected,
-            .pending_ship = self.store.trade.countOrdersByStatus(tenant_id, account_id, 1) catch return error.Unexpected,
-            .completed = self.store.trade.countOrdersByStatus(tenant_id, account_id, 3) catch return error.Unexpected,
-            .total_sales = self.store.trade.sumPaidAmount(tenant_id, account_id) catch return error.Unexpected,
-        };
-    }
-
-    // ── 储值卡 ───────────────────────────────────────────
-
-    pub fn createBalancePlan(self: *ShopService, tenant_id: i64, account_id: i64, name: []const u8, amount: i64, bonus: i64) ShopError!i64 {
-        if (std.mem.trim(u8, name, " \t").len == 0 or amount <= 0 or bonus < 0) return error.InvalidInput;
-        return self.store.marketing.createBalancePlan(tenant_id, account_id, name, amount, bonus, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listBalancePlans(self: *ShopService, tenant_id: i64, account_id: i64) ShopError![]ShopBalancePlanRow {
-        return self.store.marketing.listBalancePlans(tenant_id, account_id) catch error.Unexpected;
-    }
-
-    pub fn deleteBalancePlan(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.marketing.deleteBalancePlan(id) catch return error.Unexpected;
-    }
-
-    /// 充值：mock 即时入账（amount + bonus 进钱包）；真实走 payment v3。
-    pub fn rechargePlan(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, plan_id: i64) ShopError!void {
-        const plan_opt = self.store.marketing.getBalancePlan(plan_id) catch return error.Unexpected;
-        const plan = plan_opt orelse return error.NotFound;
-        defer plan.free(self.allocator);
-        if (self.payment_svc) |ps| {
-            if (self.fan_store) |fs| {
-                const fan_opt = fs.getByOpenid(tenant_id, account_id, openid) catch return error.Unexpected;
-                const fan = fan_opt orelse return error.NotFound;
-                defer fan.free(self.allocator);
-                const pay_mod = @import("../payment/service.zig");
-                const psvc: *pay_mod.PaymentService = @ptrCast(@alignCast(ps));
-                const now_secs = self.now();
-                const amount = std.fmt.parseInt(i64, plan.amount, 10) catch return error.Unexpected;
-                const bonus = std.fmt.parseInt(i64, plan.bonus, 10) catch return error.Unexpected;
-                _ = psvc.store.creditWallet(tenant_id, account_id, fan.id, amount + bonus, now_secs) catch return error.Unexpected;
-            }
-        }
-    }
-
-    // ── 订单超时自动取消（生产运维） ─────────────────────
-
-    /// 自动取消超时未支付订单并回滚库存。返回取消数量。
-    pub fn autoCancelExpired(self: *ShopService, tenant_id: i64, account_id: i64, timeout_secs: i64) ShopError!usize {
-        const before = self.now() - timeout_secs;
-        const expired = self.store.trade.listExpiredPending(tenant_id, account_id, before) catch return error.Unexpected;
-        defer {
-            for (expired) |o| o.free(self.allocator);
-            if (expired.len > 0) self.allocator.free(expired);
-        }
-        var count: usize = 0;
-        for (expired) |o| {
-            // 条件取消：与用户手动取消/另一轮扫单并发时只有一个命中，
-            // 库存回滚恰好一次（防双倍返还）。
-            if (self.store.trade.cancelOrderOn(tenant_id, o.openid, o.id, self.now()) catch continue) {
-                // 订单已取消（本函数返回成功）；库存返还失败会让可售库存偏低，留痕对账。
-                self.store.trade.restoreOrderStock(o.id) catch |err| std.log.err("[shop] 超时取消订单回滚库存失败 order_id={d} err={s}", .{ o.id, @errorName(err) });
-                count += 1;
-            }
-        }
-        return count;
-    }
-
-    // ── AI 智能助手（订单上下文感知） ───────────────────
-
-    /// 智能客服：关键词规则解析订单上下文（不依赖 LLM）；返回引导文本。
-    pub fn assistant(self: *ShopService, allocator: std.mem.Allocator, tenant_id: i64, account_id: i64, openid: []const u8, question: []const u8) ShopError![]const u8 {
-        var buf = std.ArrayList(u8).empty;
-        errdefer buf.deinit(allocator);
-        const q = std.mem.trim(u8, question, " \t\n");
-
-        // 订单状态
-        if (std.mem.indexOf(u8, q, "订单") != null or std.mem.indexOf(u8, q, "order") != null) {
-            var orders = self.store.trade.listOrders(1, 3, tenant_id, account_id, openid, -1, "") catch return error.Unexpected;
-            defer orders.free(self.allocator);
-            if (orders.items.len == 0) {
-                buf.appendSlice(allocator, "您还没有订单，快去商城逛逛吧～") catch return error.Unexpected;
-            } else {
-                buf.appendSlice(allocator, "最近订单：\n") catch return error.Unexpected;
-                for (orders.items) |o| {
-                    buf.appendSlice(allocator, o.order_no) catch return error.Unexpected;
-                    buf.appendSlice(allocator, " · ") catch return error.Unexpected;
-                    buf.appendSlice(allocator, switch (o.status) {
-                        0 => "待支付",
-                        1 => "已支付",
-                        2 => "已发货",
-                        3 => "已完成",
-                        else => "已取消",
-                    }) catch return error.Unexpected;
-                    buf.appendSlice(allocator, " · ") catch return error.Unexpected;
-                    const pay = std.fmt.parseInt(i64, o.pay_amount, 10) catch 0;
-                    const fen = @mod(pay, 100);
-                    const amt = if (fen < 10)
-                        (std.fmt.allocPrint(allocator, "{d}.0{d} 元", .{ @divTrunc(pay, 100), fen }) catch "?")
-                    else
-                        (std.fmt.allocPrint(allocator, "{d}.{d} 元", .{ @divTrunc(pay, 100), fen }) catch "?");
-                    defer allocator.free(amt);
-                    buf.appendSlice(allocator, amt) catch return error.Unexpected;
-                    buf.appendSlice(allocator, "\n") catch return error.Unexpected;
-                }
-            }
-            return buf.toOwnedSlice(allocator) catch return error.Unexpected;
-        }
-
-        // 物流
-        if (std.mem.indexOf(u8, q, "物流") != null or std.mem.indexOf(u8, q, "快递") != null) {
-            var orders = self.store.trade.listOrders(1, 1, tenant_id, account_id, openid, 2, "") catch return error.Unexpected;
-            defer orders.free(self.allocator);
-            if (orders.items.len == 0) {
-                buf.appendSlice(allocator, "您没有已发货的订单") catch return error.Unexpected;
-            } else {
-                const o = &orders.items[0];
-                buf.appendSlice(allocator, "最新物流：") catch return error.Unexpected;
-                buf.appendSlice(allocator, o.express_company) catch return error.Unexpected;
-                buf.appendSlice(allocator, " 单号 ") catch return error.Unexpected;
-                buf.appendSlice(allocator, o.express_no) catch return error.Unexpected;
-            }
-            return buf.toOwnedSlice(allocator) catch return error.Unexpected;
-        }
-
-        // 待支付
-        if (std.mem.indexOf(u8, q, "支付") != null or std.mem.indexOf(u8, q, "付款") != null) {
-            const pending = self.store.trade.countOrdersByStatus(tenant_id, account_id, 0) catch 0;
-            const paid = self.store.trade.countOrdersByStatus(tenant_id, account_id, 1) catch 0;
-            const stat = std.fmt.allocPrint(allocator, "待支付 {d} 单，已支付 {d} 单", .{ pending, paid }) catch return error.Unexpected;
-            defer allocator.free(stat);
-            return self.allocator.dupe(u8, stat) catch error.Unexpected;
-        }
-
-        // 收藏
-        if (std.mem.indexOf(u8, q, "收藏") != null) {
-            const favs = self.store.trade.listFavorites(tenant_id, openid) catch &.{};
-            defer {
-                for (favs) |f| f.free(self.allocator);
-                if (favs.len > 0) self.allocator.free(favs);
-            }
-            const c = std.fmt.allocPrint(allocator, "您收藏了 {d} 件商品", .{favs.len}) catch "?";
-            defer allocator.free(c);
-            return self.allocator.dupe(u8, c) catch error.Unexpected;
-        }
-
-        // 默认引导
-        return self.allocator.dupe(u8, "我可以帮您查询订单、物流、支付状态和收藏。试试问我「我的订单」「物流到哪了」") catch error.Unexpected;
-    }
-
-    // ── Webhook ───────────────────────────────────────────
-
-    pub fn createWebhook(self: *ShopService, tenant_id: i64, account_id: i64, url: []const u8, events: []const u8) ShopError!i64 {
-        if (std.mem.trim(u8, url, " \t").len == 0 or std.mem.indexOf(u8, url, "http") == null) return error.InvalidInput;
-        return self.store.content.createWebhook(tenant_id, account_id, url, events, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listWebhooks(self: *ShopService, tenant_id: i64, account_id: i64) ShopError![]ShopWebhookRow {
-        return self.store.content.listWebhooks(tenant_id, account_id) catch error.Unexpected;
-    }
-
-    pub fn deleteWebhook(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.content.deleteWebhook(id) catch return error.Unexpected;
-    }
-
-    /// 推送订单事件到配置的 webhook URL（事件驱动开放出口）。
-    /// 投递改走持久任务队列（webhook.deliver，见 src/jobs.zig）：此处只
-    /// 入队，POST 与退避重试由 Dispatcher worker 异步完成，不再在事件
-    /// 监听里逐个同步 POST 外部 URL。入队失败只记日志（不影响支付主流程）。
-    pub fn dispatchWebhooks(self: *ShopService, event: []const u8, tenant_id: i64, account_id: i64, order_id: i64) void {
-        const ts = self.task_svc orelse return;
-        const hooks = self.store.content.listWebhooks(tenant_id, account_id) catch return;
-        defer {
-            for (hooks) |h| h.free(self.allocator);
-            if (hooks.len > 0) self.allocator.free(hooks);
-        }
-        for (hooks) |h| {
-            if (std.mem.indexOf(u8, h.events, event) == null) continue;
-            const body = std.fmt.allocPrint(self.allocator, "{{\"event\":\"{s}\",\"order_id\":{d},\"account_id\":{d}}}", .{ event, order_id, account_id }) catch continue;
-            defer self.allocator.free(body);
-            // 任务参数 JSON 序列化（与 auth/api.zig jsonPayload 同惯例）：
-            // payload 本身是 JSON 文本，std.json.fmt 负责转义内嵌引号。
-            const task_payload = std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(.{
-                .endpoint = h.url,
-                .event = event,
-                .payload = body,
-            }, .{})}) catch continue;
-            defer self.allocator.free(task_payload);
-            _ = ts.enqueueNow("webhook.deliver", task_payload, tenant_id) catch |err| {
-                std.log.warn("[shop] webhook 投递任务入队失败 url={s} err={s}", .{ h.url, @errorName(err) });
-            };
-        }
-    }
-
-    // ── 文章 ─────────────────────────────────────────────
-
-    pub fn createArticle(self: *ShopService, tenant_id: i64, account_id: i64, title: []const u8, content: []const u8) ShopError!i64 {
-        if (std.mem.trim(u8, title, " \t").len == 0) return error.InvalidInput;
-        return self.store.content.createArticle(tenant_id, account_id, title, content, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listArticles(self: *ShopService, page: usize, page_size: usize, tenant_id: i64, account_id: i64, on_sale: bool) ShopError!ArticleListResult {
-        return self.store.content.listArticles(page, page_size, tenant_id, account_id, on_sale) catch error.Unexpected;
-    }
-
-    pub fn getArticle(self: *ShopService, id: i64) ShopError!?ShopArticleRow {
-        return self.store.content.getArticle(id) catch error.Unexpected;
-    }
-
-    pub fn deleteArticle(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.content.deleteArticle(id) catch return error.Unexpected;
-    }
-
-    // ── 邀请有礼 ─────────────────────────────────────────
-
-    pub fn createInviteGift(self: *ShopService, tenant_id: i64, account_id: i64, target_count: i64, reward_type: []const u8, reward_value: i64) ShopError!i64 {
-        if (target_count <= 0 or reward_value <= 0) return error.InvalidInput;
-        if (!std.mem.eql(u8, reward_type, "points") and !std.mem.eql(u8, reward_type, "coupon")) return error.InvalidInput;
-        return self.store.marketing.createInviteGift(tenant_id, account_id, target_count, reward_type, reward_value, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listInviteGifts(self: *ShopService, tenant_id: i64, account_id: i64) ShopError![]ShopInviteGiftRow {
-        return self.store.marketing.listInviteGifts(tenant_id, account_id) catch error.Unexpected;
-    }
-
-    pub fn deleteInviteGift(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.marketing.deleteInviteGift(id) catch return error.Unexpected;
-    }
-
-    /// 绑定邀请关系：新粉丝带邀请人 openid → 记录（幂等）；邀请人达标 → 发奖励。
-    pub fn bindInvite(self: *ShopService, tenant_id: i64, account_id: i64, inviter_openid: []const u8, invitee_openid: []const u8) ShopError!void {
-        if (std.mem.eql(u8, inviter_openid, invitee_openid)) return error.InvalidInput;
-        if (!(self.store.marketing.bindInvite(tenant_id, account_id, inviter_openid, invitee_openid, self.now()) catch return error.Unexpected)) return; // 已绑定
-        // 达标判定：任一配置满足即发奖（按 target_count 匹配）。
-        const gifts = self.store.marketing.listInviteGifts(tenant_id, account_id) catch return;
-        defer {
-            for (gifts) |g| g.free(self.allocator);
-            if (gifts.len > 0) self.allocator.free(gifts);
-        }
-        const invited = self.store.marketing.countInvites(tenant_id, inviter_openid) catch return;
-        for (gifts) |g| {
-            if (g.target_count == invited) {
-                // 邀请关系已绑定（本函数返回成功）；奖励发放失败只影响邀请人收益，留痕对账。
-                self.grantInviteReward(tenant_id, account_id, inviter_openid, g) catch |err| std.log.err("[shop] 邀请达标奖励发放失败 openid={s} reward_type={s} err={s}", .{ inviter_openid, g.reward_type, @errorName(err) });
-            }
-        }
-    }
-
-    /// 发放奖励：points → 会员积分；coupon → 领券。
-    fn grantInviteReward(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, g: ShopInviteGiftRow) !void {
-        if (std.mem.eql(u8, g.reward_type, "points")) {
-            if (self.member_svc) |ms| {
-                const mc_mod = @import("../member_card/service.zig");
-                const msvc: *mc_mod.MemberCardService = @ptrCast(@alignCast(ms));
-                // 奖励积分入账失败则邀请人少得积分（无其它可观测渠道），留痕对账。
-                _ = msvc.adjust(tenant_id, account_id, openid, g.reward_value) catch |err| std.log.err("[shop] 邀请奖励积分入账失败 openid={s} points={d} err={s}", .{ openid, g.reward_value, @errorName(err) });
-            }
-        } else if (std.mem.eql(u8, g.reward_type, "coupon")) {
-            if (self.coupon_svc) |cs| {
-                const csvc: *coupon_service.CouponService = @ptrCast(@alignCast(cs));
-                // 同上：发券失败则邀请人拿不到券，留痕对账。
-                _ = csvc.claimCoupon(self.allocator, tenant_id, account_id, openid, g.reward_value) catch |err| std.log.err("[shop] 邀请奖励发券失败 openid={s} coupon_id={d} err={s}", .{ openid, g.reward_value, @errorName(err) });
-            }
-        }
-    }
-
-    // ── 拼团 ─────────────────────────────────────────────
-
-    pub fn createGroupon(self: *ShopService, tenant_id: i64, account_id: i64, product_id: i64, group_price: i64, group_size: i64, start_at: i64, end_at: i64) ShopError!i64 {
-        if (group_price <= 0 or group_size < 2) return error.InvalidInput;
-        const p_opt = self.store.catalog.getProduct(product_id) catch return error.Unexpected;
-        const p = p_opt orelse return error.NotFound;
-        p.free(self.allocator);
-        return self.store.marketing.createGroupon(tenant_id, account_id, product_id, group_price, group_size, start_at, end_at, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listGroupons(self: *ShopService, tenant_id: i64, account_id: i64) ShopError![]ShopGrouponRow {
-        return self.store.marketing.listGroupons(tenant_id, account_id) catch error.Unexpected;
-    }
-
-    /// 团价下单（内部）：校验商品 → 扣 SKU 库存 → 团价订单 + 明细。
-    fn grouponOrder(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, activity: ShopGrouponRow, sku_id: i64, team_id: i64) ShopError!i64 {
-        const addr_opt = self.store.trade.getAddress(tenant_id, address_id) catch return error.Unexpected;
-        const addr = addr_opt orelse return error.InvalidInput;
-        defer addr.free(self.allocator);
-        const address_json = std.json.Stringify.valueAlloc(self.allocator, .{
-            .name = addr.name,
-            .mobile = addr.mobile,
-            .region = addr.region,
-            .detail = addr.detail,
-        }, .{}) catch return error.Unexpected;
-        defer self.allocator.free(address_json);
-
-        const sku_opt = self.store.catalog.getSku(sku_id) catch return error.Unexpected;
-        const sku = sku_opt orelse return error.NotFound;
-        defer sku.free(self.allocator);
-        if (!(self.store.catalog.consumeSkuStock(self.allocator, sku_id, 1) catch return error.Unexpected)) return error.OutOfStock;
-
-        const order_no = self.genOrderNo() catch return error.Unexpected;
-        defer self.allocator.free(order_no);
-        const now_secs = self.now();
-        const group_price = std.fmt.parseInt(i64, activity.group_price, 10) catch return error.Unexpected;
-        const order_id = self.store.trade.createOrder(tenant_id, account_id, order_no, "", openid, group_price, group_price, address_json, "delivery", "", 0, team_id, now_secs) catch return error.Unexpected;
-
-        const p_opt = self.store.catalog.getProduct(activity.product_id) catch return error.Unexpected;
-        const p = p_opt orelse return error.NotFound;
-        defer p.free(self.allocator);
-        _ = self.store.trade.createOrderProduct(tenant_id, account_id, order_id, .{
-            .product_id = activity.product_id,
-            .sku_id = sku_id,
-            .name = p.name,
-            .image = p.image,
-            .spec_json = sku.spec_json,
-            .price = group_price,
-            .quantity = 1,
-        }, now_secs) catch return error.Unexpected;
-        // 销量为派生统计，累加失败不影响已建订单，但仍留痕供对账。
-        self.store.catalog.addProductSales(activity.product_id, 1) catch |err| std.log.err("[shop] 拼团下单累计商品销量失败 product_id={d} err={s}", .{ activity.product_id, @errorName(err) });
-        return order_id;
-    }
-
-    /// 开团：leader 以团价下单 + 建团（current=1）。
-    pub fn openGroupon(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, activity_id: i64, sku_id: i64) ShopError!i64 {
-        const a_opt = self.store.marketing.getGroupon(tenant_id, activity_id) catch return error.Unexpected;
-        const a = a_opt orelse return error.NotFound;
-        defer a.free(self.allocator);
-        if (a.status != 1) return error.InvalidInput;
-        const team_id = self.store.marketing.createTeam(tenant_id, account_id, activity_id, openid, self.now()) catch return error.Unexpected;
-        _ = self.grouponOrder(tenant_id, account_id, openid, address_id, a, sku_id, team_id) catch |err| {
-            return err;
-        };
-        return team_id;
-    }
-
-    /// 参团：团价下单 + current+1；成团 → 团内订单标记支付（mock）。
-    pub fn joinGroupon(self: *ShopService, tenant_id: i64, account_id: i64, openid: []const u8, address_id: i64, team_id: i64, sku_id: i64) ShopError!i64 {
-        const t_opt = self.store.marketing.getTeam(tenant_id, team_id) catch return error.Unexpected;
-        const t = t_opt orelse return error.NotFound;
-        defer t.free(self.allocator);
-        if (t.status != 0) return error.InvalidInput; // 已结束
-        const a_opt = self.store.marketing.getGroupon(tenant_id, t.activity_id) catch return error.Unexpected;
-        const a = a_opt orelse return error.NotFound;
-        defer a.free(self.allocator);
-        // 满员守卫：marketing.joinTeam 的 increment 无 current<group_size 上限条件，
-        // 超团只能靠调用方在 join 前拦截。这里重读团（t 是进入接口时的快照，期间
-        // 其他参团者可能已把 current 顶满），满员按"已结束"同一语义拒绝——必须先
-        // 于 grouponOrder 拦截，否则先建单/扣库存再报错会留下悬空待支付订单。
-        // 遗留竞态：重读与 joinTeam 的 increment 之间仍有窗口，严格有序的并发请求
-        // 仍可能把 current 顶超 group_size；彻底修法是给 joinTeam 的 increment 加
-        // "current + 1 <= group_size" 条件（marketing_store 不在本次改动范围）。
-        const fresh_opt = self.store.marketing.getTeam(tenant_id, team_id) catch return error.Unexpected;
-        const fresh = fresh_opt orelse return error.NotFound;
-        defer fresh.free(self.allocator);
-        if (fresh.status != 0 or fresh.current >= a.group_size) return error.InvalidInput; // 已满员/已结束
-        const order_id = self.grouponOrder(tenant_id, account_id, openid, address_id, a, sku_id, team_id) catch |err| {
-            return err;
-        };
-        // joinTeam 返回 false 混合了两种不可区分的情形：increment 失败（团行消失/
-        // DB 错误，此时订单已建但人数未计入，该成员单可能永远无法成团——遗留风险）
-        // 与"未成团"；返回 true 仅表示"本次 increment 后已满员"，触发成团批量支付。
-        if (self.store.marketing.joinTeam(self.allocator, tenant_id, team_id, a.group_size) catch false) {
-            // 成团：团内全部订单 mock 支付 → 触发分销/积分。
-            const orders = self.store.marketing.listOrdersByTeam(team_id) catch &.{};
-            defer {
-                for (orders) |o| o.free(self.allocator);
-                if (orders.len > 0) self.allocator.free(orders);
-            }
-            for (orders) |o| {
-                // 成团即代表团内订单已支付；标记失败会让订单停在待支付（且不触发分佣/积分），留痕。
-                self.markPaid(tenant_id, account_id, o.id) catch |err| std.log.err("[shop] 成团后标记订单已支付失败 order_id={d} err={s}", .{ o.id, @errorName(err) });
-            }
-        }
-        return order_id;
-    }
-
-    // ── 门店自提 ──────────────────────────────────────────
-
-    pub fn createOutlet(self: *ShopService, tenant_id: i64, account_id: i64, name: []const u8, address: []const u8, mobile: []const u8) ShopError!i64 {
-        if (std.mem.trim(u8, name, " \t").len == 0) return error.InvalidInput;
-        return self.store.content.createOutlet(tenant_id, account_id, name, address, mobile, self.now()) catch error.Unexpected;
-    }
-
-    pub fn listOutlets(self: *ShopService, tenant_id: i64, account_id: i64) ShopError![]persist.ShopOutletRow {
-        return self.store.content.listOutlets(tenant_id, account_id) catch error.Unexpected;
-    }
-
-    pub fn deleteOutlet(self: *ShopService, id: i64) ShopError!void {
-        _ = self.store.content.deleteOutlet(id) catch return error.Unexpected;
-    }
-
-    /// 自提核销：校验自提码 + 已支付（1）→ 状态置已完成（3）。
-    /// 核销翻转走 租户 + 状态 + 自提 + 码 的原子条件更新，并发重复核销只命中一次。
-    /// 注意：核销由门店管理员发起（非买家本人），故不加 openid 归属条件；
-    /// 取货码为 6 位数字（空间仅 1e6），理论上可被遍历尝试。
-    /// TODO(security): 对核销接口加 per-openid / per-IP 限流与连续失败锁定
-    ///   （复用 middleware/rate_limit），当前仅靠管理端权限（shop:write）兜底。
-    pub fn pickupOrder(self: *ShopService, tenant_id: i64, order_id: i64, code: []const u8) ShopError!void {
-        const o_opt = self.store.trade.getOrder(order_id) catch return error.Unexpected;
-        const o = o_opt orelse return error.NotFound;
-        defer o.free(self.allocator);
-        if (o.status != 1) return error.OrderStateConflict;
-        if (!std.mem.eql(u8, o.pickup_type, "self")) return error.OrderStateConflict;
-        if (o.pickup_code.len == 0 or !std.mem.eql(u8, o.pickup_code, code)) return error.InvalidInput;
-        // 原子核销：tenant + 已支付 + 自提 + 码一致才翻转；未命中即并发已核销。
-        if (!(self.store.trade.pickupOrderOn(tenant_id, order_id, code, self.now()) catch return error.Unexpected)) return error.OrderStateConflict;
-    }
+    // ── 方法按子域分文件（正文见 service/*.zig），此处按原名桥接 ──
+    pub const createCategory = parts_catalog.createCategory;
+    pub const listCategories = parts_catalog.listCategories;
+    pub const deleteCategory = parts_catalog.deleteCategory;
+    pub const createProduct = parts_catalog.createProduct;
+    pub const getProduct = parts_catalog.getProduct;
+    pub const updateProduct = parts_catalog.updateProduct;
+    pub const deleteProduct = parts_catalog.deleteProduct;
+    pub const listProducts = parts_catalog.listProducts;
+    pub const listSkus = parts_catalog.listSkus;
+    pub const getSku = parts_catalog.getSku;
+    pub const addCart = parts_trade.addCart;
+    pub const listCarts = parts_trade.listCarts;
+    pub const updateCart = parts_trade.updateCart;
+    pub const deleteCart = parts_trade.deleteCart;
+    pub const createAddress = parts_trade.createAddress;
+    pub const listAddresses = parts_trade.listAddresses;
+    pub const deleteAddress = parts_trade.deleteAddress;
+    pub const setAddressDefault = parts_trade.setAddressDefault;
+    pub const updateAddress = parts_trade.updateAddress;
+    pub const genPickupCode = parts_trade.genPickupCode;
+    pub const genOrderNo = parts_trade.genOrderNo;
+    pub const createOrder = parts_trade.createOrder;
+    pub const createOrderBudget = parts_trade.createOrderBudget;
+    pub const getOrder = parts_trade.getOrder;
+    pub const listOrders = parts_trade.listOrders;
+    pub const listOrdersBudget = parts_trade.listOrdersBudget;
+    pub const listOrderProducts = parts_trade.listOrderProducts;
+    pub const getOrderProduct = parts_trade.getOrderProduct;
+    pub const markPaid = parts_trade.markPaid;
+    pub const cancelOrder = parts_trade.cancelOrder;
+    pub const confirmOrder = parts_trade.confirmOrder;
+    pub const shipOrder = parts_trade.shipOrder;
+    pub const applyRefund = parts_trade.applyRefund;
+    pub const listRefunds = parts_trade.listRefunds;
+    pub const listRefundsByOpenid = parts_trade.listRefundsByOpenid;
+    pub const orderSummaries = parts_trade.orderSummaries;
+    pub const getRefundByOrder = parts_trade.getRefundByOrder;
+    pub const auditRefund = parts_trade.auditRefund;
+    pub const auditRefundBudget = parts_trade.auditRefundBudget;
+    pub const createComment = parts_trade.createComment;
+    pub const listCommentedOrderProductIds = parts_trade.listCommentedOrderProductIds;
+    pub const listComments = parts_trade.listComments;
+    pub const favorite = parts_trade.favorite;
+    pub const isFavorite = parts_trade.isFavorite;
+    pub const unfavorite = parts_trade.unfavorite;
+    pub const listFavorites = parts_trade.listFavorites;
+    pub const fanOrderOverview = parts_trade.fanOrderOverview;
+    pub const orderStats = parts_trade.orderStats;
+    pub const autoCancelExpired = parts_trade.autoCancelExpired;
+    pub const createBalancePlan = parts_marketing.createBalancePlan;
+    pub const listBalancePlans = parts_marketing.listBalancePlans;
+    pub const deleteBalancePlan = parts_marketing.deleteBalancePlan;
+    pub const rechargePlan = parts_marketing.rechargePlan;
+    pub const createInviteGift = parts_marketing.createInviteGift;
+    pub const listInviteGifts = parts_marketing.listInviteGifts;
+    pub const deleteInviteGift = parts_marketing.deleteInviteGift;
+    pub const bindInvite = parts_marketing.bindInvite;
+    pub const grantInviteReward = parts_marketing.grantInviteReward;
+    pub const createGroupon = parts_marketing.createGroupon;
+    pub const listGroupons = parts_marketing.listGroupons;
+    pub const grouponOrder = parts_marketing.grouponOrder;
+    pub const openGroupon = parts_marketing.openGroupon;
+    pub const joinGroupon = parts_marketing.joinGroupon;
+    pub const assistant = parts_content.assistant;
+    pub const createWebhook = parts_content.createWebhook;
+    pub const listWebhooks = parts_content.listWebhooks;
+    pub const deleteWebhook = parts_content.deleteWebhook;
+    pub const dispatchWebhooks = parts_content.dispatchWebhooks;
+    pub const createArticle = parts_content.createArticle;
+    pub const listArticles = parts_content.listArticles;
+    pub const getArticle = parts_content.getArticle;
+    pub const deleteArticle = parts_content.deleteArticle;
+    pub const createOutlet = parts_content.createOutlet;
+    pub const listOutlets = parts_content.listOutlets;
+    pub const deleteOutlet = parts_content.deleteOutlet;
+    pub const pickupOrder = parts_content.pickupOrder;
 };

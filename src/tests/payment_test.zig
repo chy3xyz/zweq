@@ -286,3 +286,109 @@ test "payment: v3 refund + transfer request build (no network)" {
     try std.testing.expectError(error.InvalidPayArg, payment_svc.transferV3(allocator, cfg, "o_openid", 0, "B3003", "1000", "活动名称", "佣金", "佣金"));
     try std.testing.expectError(error.InvalidPayArg, payment_svc.transferV3(allocator, cfg, "o_openid", 200, "B3003", "1000", "活动名称", "佣金", ""));
 }
+
+// ── NotifyVerifier 一体化（验签+解密 fail-closed）────────────────────
+
+const v3_api_key = "12345678901234567890123456789012";
+/// 与 zwechat platform_cert 测试自签证书匹配的序列号（buildCertificatesResponse 用）。
+const v3_test_serial = "5157F09EFDC096DE15EBE81A47057A7232F1B8E1";
+
+const CertRespCtx = struct {
+    body: []const u8,
+    calls: usize = 0,
+};
+
+fn certRespTransport(ctx: *anyopaque, allocator: std.mem.Allocator, uri: []const u8, method: std.http.Method, payload: []const u8, content_type: ?[]const u8) anyerror![]u8 {
+    _ = uri;
+    _ = method;
+    _ = payload;
+    _ = content_type;
+    const c: *CertRespCtx = @ptrCast(@alignCast(ctx));
+    c.calls += 1;
+    return allocator.dupe(u8, c.body);
+}
+
+/// 用 zwechat 测试平台证书的私钥给回调签名（待签名串三行，行尾 \n 含最后一行）。
+fn signNotifyBody(allocator: std.mem.Allocator, ts: []const u8, nonce: []const u8, body: []const u8) ![]u8 {
+    const content = try std.fmt.allocPrint(allocator, "{s}\n{s}\n{s}\n", .{ ts, nonce, body });
+    defer allocator.free(content);
+    const raw = try zwechat.util.rsa.rsaSign(allocator, content, zwechat.pay.v3.platform_cert.test_private_key_pkcs1);
+    defer allocator.free(raw);
+    const enc = std.base64.standard.Encoder;
+    const out = try allocator.alloc(u8, enc.calcSize(raw.len));
+    _ = enc.encode(out, raw);
+    return out;
+}
+
+/// 构造加密回调资源：base64(AES-256-GCM(plain, key, nonce, aad) || tag16)。
+fn buildNotifyBody(allocator: std.mem.Allocator, plain: []const u8) ![]u8 {
+    const Aes256Gcm = std.crypto.aead.aes_gcm.Aes256Gcm;
+    const nonce: [12]u8 = "0123456789AB".*;
+    const aad = "transaction";
+    const ct = try allocator.alloc(u8, plain.len);
+    defer allocator.free(ct);
+    var tag: [16]u8 = undefined;
+    Aes256Gcm.encrypt(ct, &tag, plain, aad, nonce, v3_api_key[0..32].*);
+    const combined = try allocator.alloc(u8, plain.len + 16);
+    defer allocator.free(combined);
+    @memcpy(combined[0..plain.len], ct);
+    @memcpy(combined[plain.len..], &tag);
+    const enc = std.base64.standard.Encoder;
+    const b64 = try allocator.alloc(u8, enc.calcSize(combined.len));
+    defer allocator.free(b64);
+    _ = enc.encode(b64, combined);
+    return std.fmt.allocPrint(allocator, "{{\"id\":\"EV-1\",\"resource\":{{\"ciphertext\":\"{s}\",\"associated_data\":\"{s}\",\"nonce\":\"{s}\"}}}}", .{ b64, aad, nonce });
+}
+
+test "payment: v3 notify verifier — 签名回调验签+解密成功，篡改/未知序列 fail-closed，证书缓存生效" {
+    const allocator = std.testing.allocator;
+    var payment_store = payment.persistence.PaymentStore.init(allocator, undefined);
+    var payment_svc = payment.service.PaymentService.init(allocator, std.testing.io, &payment_store);
+    defer payment_svc.deinitV3Verifier();
+
+    const plain_json = "{\"out_trade_no\":\"vk-1\",\"trade_state\":\"SUCCESS\"}";
+    const body = try buildNotifyBody(allocator, plain_json);
+    defer allocator.free(body);
+    const ts = try std.fmt.allocPrint(allocator, "{d}", .{zigmodu.time.wallClockSeconds(std.testing.io)});
+    defer allocator.free(ts);
+    const sig = try signNotifyBody(allocator, ts, "n1", body);
+    defer allocator.free(sig);
+
+    const cert_resp = try zwechat.pay.v3.platform_cert.buildCertificatesResponse(allocator, v3_api_key, v3_test_serial);
+    defer allocator.free(cert_resp);
+    var resp_ctx = CertRespCtx{ .body = cert_resp };
+    const cfg = zwechat.pay.v3.Config{
+        .mch_id = "mch-1",
+        .api_v3_key = v3_api_key,
+        .serial_no = "merchant-serial",
+        .private_key_pem = test_rsa_priv,
+    };
+
+    // ① 正路径：平台证书自动拉取 → 验签通过 → 解密出原始明文。
+    const headers = zwechat.pay.v3.notify.NotifyHeaders{ .signature = sig, .timestamp = ts, .nonce = "n1", .serial = v3_test_serial };
+    {
+        while (payment_svc.v3_guard.swap(true, .acquire)) {}
+        defer payment_svc.v3_guard.store(false, .release);
+        try payment_svc.ensureV3VerifierLocked(cfg);
+        payment_svc.v3_verifier.?.setTransport(certRespTransport, &resp_ctx);
+    }
+    const plain = try payment_svc.verifyAndDecryptV3Notify(allocator, cfg, headers, body);
+    defer allocator.free(plain);
+    try std.testing.expectEqualStrings(plain_json, plain);
+    try std.testing.expectEqual(@as(usize, 1), resp_ctx.calls);
+
+    // ② 缓存生效：同一 verifier 第二次回调不再打 /v3/certificates。
+    const plain2 = try payment_svc.verifyAndDecryptV3Notify(allocator, cfg, headers, body);
+    defer allocator.free(plain2);
+    try std.testing.expectEqual(@as(usize, 1), resp_ctx.calls);
+
+    // ③ 篡改 body（签名不再匹配）→ fail-closed。
+    const tampered = try std.fmt.allocPrint(allocator, "{s} ", .{body});
+    defer allocator.free(tampered);
+    try std.testing.expectError(error.SignatureInvalid, payment_svc.verifyAndDecryptV3Notify(allocator, cfg, headers, tampered));
+
+    // ④ 未知序列号（证书列表里没有）→ fail-closed。
+    var h_unknown = headers;
+    h_unknown.serial = "DEADBEEF00000000000000000000000000000000";
+    try std.testing.expectError(error.SerialNotFound, payment_svc.verifyAndDecryptV3Notify(allocator, cfg, h_unknown, body));
+}

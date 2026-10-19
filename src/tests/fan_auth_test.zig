@@ -68,8 +68,11 @@ test "fan 声明式鉴权：.jwt 401 / .optional 公开 / RBAC 不拦 fan / 限�
     var fan_registry = zigmodu.RateLimiterRegistry.initWithCapacity(allocator, 10, 1, mw_rate.registry_max_keys);
     defer fan_registry.deinit();
     // 与 main.zig fan_econ_rules 同形；这里只挂一条并把阈值压到 2 便于触发。
+    // refill_rate=0：registry 后端是令牌桶（burst=max，每秒回充 refill_rate），
+    // 默认回充下三条连发请求若恰好跨过 1 秒边界会回填一枚令牌，第 3 发本应
+    // 429 却放行——正是本测试偶发失败的原因。置 0 后无回充，断言确定。
     const test_rules = [_]mw_rate.OpenidRule{
-        .{ .name = "points-redeem", .path = "api/v1/app/points/redeem", .max = 2 },
+        .{ .name = "points-redeem", .path = "api/v1/app/points/redeem", .max = 2, .refill_rate = 0 },
     };
     var fan_openid_limiter = mw_rate.PerOpenidLimiter{
         .backend = .{ .registry = &fan_registry },

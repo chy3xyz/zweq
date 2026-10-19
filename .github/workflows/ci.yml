@@ -70,6 +70,55 @@ jobs:
           ZWEQ_TEST_PG_CONNINFO: host=localhost port=5432 dbname=zweq_test user=zweq password=testpass
         run: zig build test --summary all
 
+  pg-wire:
+    # PostgreSQL-wire 兼容（HeliosDB Nano，in-memory、每次全新实例）：对不带
+    # 完整 PG 目录的 wire 兼容服务器跑全量单测（含 40+ 表迁移 + CRUD 冒烟 +
+    # 二次打开幂等），锁住 zent 的目录降级路径（索引按名+唯一性匹配并告警、
+    # 扩展检查跳过、每语句 savepoint）不被依赖升级悄悄破坏。参照 zent 上游
+    # 同名 job；服务器必须每次全新——Nano 的 SERIAL 序列跨 DROP TABLE 存活，
+    # 复用实例会答出不同的 id。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig 0.17.0
+        # mlugg/setup-zig 的 mirror 服务 404、mirror:false 拼官方 URL 报 Invalid URL（连续三轮 CI 实证），
+        # 弃用该 action，改为与 Dockerfile 完全同构的官方源直下。
+        run: |
+          curl -fsSLo /tmp/zig.tar.xz https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+          mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+          echo /opt/zig >> "$GITHUB_PATH"
+
+      - name: Start HeliosDB Nano
+        run: |
+          set -euo pipefail
+          REL=https://github.com/HeliosDatabase/HeliosDB-Nano/releases/download/v4.41.1
+          ASSET=heliosdb-nano-v4.41.1-x86_64-unknown-linux-gnu.tar.gz
+          mkdir -p /tmp/helios
+          ( cd /tmp
+            curl -fsSLo "$ASSET" "$REL/$ASSET"
+            curl -fsSLo SHA256SUMS "$REL/SHA256SUMS"
+            grep " $ASSET$" SHA256SUMS > helios.one
+            sha256sum -c helios.one
+            tar xzf "$ASSET" -C /tmp/helios
+          )
+          /tmp/helios/heliosdb-nano start --memory --port 55432 --listen 127.0.0.1 >/tmp/helios/nano.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if (echo >/dev/tcp/127.0.0.1/55432) 2>/dev/null; then
+              echo "HeliosDB Nano is listening on 55432"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "HeliosDB Nano did not start:" >&2
+          cat /tmp/helios/nano.log >&2
+          exit 1
+
+      - name: Unit tests against HeliosDB (migration + smoke)
+        env:
+          ZWEQ_TEST_PG_CONNINFO: host=127.0.0.1 port=55432 dbname=postgres user=postgres
+        run: zig build test --summary all
+
   e2e:
     # 起真实服务器 + 真 sqlite 文件库跑两套 e2e，停机后扫日志断言「无泄漏、无 panic」。
     # 单测原理上覆盖不到这一层：请求 arena 与 store 分配器在测试里同源，分配器不匹配
@@ -147,10 +196,8 @@ jobs:
         run: npm ci
 
       - name: npm audit (high severity and above)
-        # 现存 1 个 high 漏洞已登记在案：nanoid <3.3.18（GHSA-2v37-7h3g-55p8，
-        # custom generators can loop indefinitely when size is zero），fix available via npm audit fix。
-        # 消除后请删除本注释与 continue-on-error，让该步骤恢复硬门禁。
-        continue-on-error: true
+        # 2026-10-19 npm audit fix 后 0 漏洞（seroval/source-map-js/nanoid 等已升），
+        # 恢复硬门禁；再报漏洞说明有新增依赖引入，应当场处理而非静默放行。
         run: npm audit --audit-level=high
 
       - name: Typecheck

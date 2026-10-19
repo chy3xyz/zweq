@@ -123,7 +123,7 @@ test "ai: notify.send approval pending → approve executes, double-resolve reje
     defer svc.deinit();
 
     _ = try user_store.createUser("Alice", "a@x.com", "hash", false, false, 1, 100);
-    const approval_id = try ai_store.createApproval(1, 7, "zweq.notify.send", "{\"user_id\":1,\"title\":\"hi\",\"body\":\"hello\",\"kind\":\"info\"}", 100);
+    const approval_id = try ai_store.createApproval(1, 7, "zweq_notify_send", "{\"user_id\":1,\"title\":\"hi\",\"body\":\"hello\",\"kind\":\"info\"}", 100);
     try std.testing.expectEqual(@as(i64, 0), try notify_svc.unreadCount(1));
 
     // 批准 → 实际发送通知。
@@ -186,7 +186,7 @@ test "ai: run quota counts within rolling window + health workflow" {
     try std.testing.expectEqualStrings("task_stats", result.steps.items[0].name);
     try std.testing.expectEqualStrings("tenant_list", result.steps.items[1].name);
 
-    const approval_id = try ai_store.createApproval(1, 7, "zweq.notify.send", "{\"user_id\":1,\"title\":\"t\",\"body\":\"b\",\"kind\":\"info\"}", 100);
+    const approval_id = try ai_store.createApproval(1, 7, "zweq_notify_send", "{\"user_id\":1,\"title\":\"t\",\"body\":\"b\",\"kind\":\"info\"}", 100);
     _ = try user_store.createUser("Boss", "boss@x.com", "hash", false, true, 1, 100);
     _ = try svc.approve(allocator, approval_id, 2, true);
 

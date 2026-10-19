@@ -271,7 +271,10 @@ pub fn ShopApi(comptime Service: type, comptime UserService: type) type {
             try g.get("/shop/admin/webhooks", webhookList, @ptrCast(@alignCast(self)));
             try g.delete("/shop/admin/webhooks/{id}", webhookDelete, @ptrCast(@alignCast(self)));
             try g.delete("/shop/admin/outlets/{id}", outletDelete, @ptrCast(@alignCast(self)));
-            try g.post("/shop/admin/orders/{id}/pickup", orderPickup, @ptrCast(@alignCast(self)));
+            // 核销码仅 1e6 空间：服务层按订单失败锁定（PickupGuard）之外，
+            // 路由层再套 per-IP 限流双保险。只包核销一条，不影响其余 admin 路由。
+            var g_pickup = try g.use(mw_rate.perIpRateLimit(self.limiter));
+            try g_pickup.post("/shop/admin/orders/{id}/pickup", orderPickup, @ptrCast(@alignCast(self)));
         }
 
         pub fn setAuditActor(ctx: *http.Context, self: *Self) !void {

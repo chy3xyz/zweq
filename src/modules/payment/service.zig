@@ -110,6 +110,12 @@ pub const PaymentService = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     store: *persist.PaymentStore,
+    /// v3 回调验签+解密一体化实例（NotifyVerifier），按配置惰性创建并驻留——
+    /// 平台证书缓存跨回调复用，避免每次回调都打 /v3/certificates。
+    v3_verifier: ?zwechat.pay.v3.notify.NotifyVerifier = null,
+    /// NotifyVerifier 非线程安全（证书缓存 refresh 整体替换）→ 自旋锁串行化。
+    /// 临界区含一次可能的证书拉取（网络），正确性优先于并发度：回调本身低频。
+    v3_guard: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, store: *persist.PaymentStore) PaymentService {
         return .{ .allocator = allocator, .io = io, .store = store };
@@ -517,6 +523,10 @@ pub const PaymentService = struct {
     /// out_trade_no + trade_state, and complete the recharge (idempotent).
     /// Returns true when an order was processed, false when the notify is
     /// malformed/irrelevant.
+    ///
+    /// 注意：本入口只解密不验签——解密只证明发送方持有 APIv3 密钥，不构成
+    /// 来源认证。生产回调请走 `verifyAndDecryptV3Notify`（验签+解密一体化）；
+    /// 本入口保留给「仅配置 APIv3 密钥、无商户证书材料」的最小部署与既有测试。
     pub fn handleV3Notify(self: *PaymentService, allocator: std.mem.Allocator, api_v3_key: []const u8, body: []const u8) !bool {
         if (api_v3_key.len == 0) return false;
         var parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch return false;
@@ -528,7 +538,12 @@ pub const PaymentService = struct {
 
         const plain = zwechat.pay.v3.decryptNotifyResource(allocator, api_v3_key, ciphertext, aad, nonce) catch return false;
         defer allocator.free(plain);
+        return self.processV3Plaintext(allocator, plain);
+    }
 
+    /// 解密后的业务明文 → 幂等入账。`verifyAndDecryptV3Notify` 与
+    /// `handleV3Notify` 共用的后半段（trade_state / out_trade_no → complete）。
+    pub fn processV3Plaintext(self: *PaymentService, allocator: std.mem.Allocator, plain: []const u8) !bool {
         var inner = std.json.parseFromSlice(std.json.Value, allocator, plain, .{}) catch return false;
         defer inner.deinit();
         const trade_state = objString(inner.value, "trade_state") orelse return false;
@@ -540,6 +555,54 @@ pub const PaymentService = struct {
         const row = row_opt orelse return false;
         defer row.free(self.allocator);
         return self.completeRecharge(row.tenant_id, out_trade_no) catch false;
+    }
+
+    /// 验签 + 解密一体化（zwechat `NotifyVerifier`，推荐回调入口）。
+    /// 平台证书按 Wechatpay-Serial 自动拉取 /v3/certificates（缓存 + 轮换重拉）；
+    /// 时间戳窗口防重放（±300s）；`PUB_KEY_ID_` 前缀走公钥模式。
+    /// 任一环节失败即 error（**fail-closed**，调用方应回 4xx/5xx 让微信重发）。
+    /// 返回 owned 明文（调用方 free）。
+    pub fn verifyAndDecryptV3Notify(
+        self: *PaymentService,
+        allocator: std.mem.Allocator,
+        cfg: zwechat.pay.v3.Config,
+        headers: zwechat.pay.v3.notify.NotifyHeaders,
+        body: []const u8,
+    ) ![]u8 {
+        while (self.v3_guard.swap(true, .acquire)) {}
+        defer self.v3_guard.store(false, .release);
+        try self.ensureV3VerifierLocked(cfg);
+
+        const v = &self.v3_verifier.?;
+        const verified = try v.verifyAndDecrypt(allocator, headers, body);
+        // 只释放解析树；明文所有权转移给调用方（VerifiedNotify.deinit 会连
+        // 明文一起释放，故不调用它）。
+        defer verified.body.deinit();
+        return verified.plaintext;
+    }
+
+    /// 惰性创建/按配置重建 verifier（须持 v3_guard）。测试先调用它再向
+    /// `v3_verifier.?` 注入 mock transport，即可无网络跑通证书拉取路径。
+    pub fn ensureV3VerifierLocked(self: *PaymentService, cfg: zwechat.pay.v3.Config) !void {
+        const needs_rebuild = if (self.v3_verifier) |*v|
+            !std.mem.eql(u8, v.cfg.api_v3_key, cfg.api_v3_key) or
+                !std.mem.eql(u8, v.cfg.mch_id, cfg.mch_id) or
+                !std.mem.eql(u8, v.cfg.serial_no, cfg.serial_no) or
+                !std.mem.eql(u8, v.cfg.private_key_pem, cfg.private_key_pem)
+        else
+            true;
+        if (needs_rebuild) {
+            if (self.v3_verifier) |*old| old.deinit();
+            self.v3_verifier = zwechat.pay.v3.notify.NotifyVerifier.init(self.allocator, cfg);
+        }
+    }
+
+    /// 释放驻留的 verifier（优雅停机/测试泄漏门禁用；不调用则随进程生命周期）。
+    pub fn deinitV3Verifier(self: *PaymentService) void {
+        if (self.v3_verifier) |*v| {
+            v.deinit();
+            self.v3_verifier = null;
+        }
     }
 };
 

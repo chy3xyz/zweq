@@ -283,7 +283,14 @@ pub const AiService = struct {
                 break;
             }
         }
-        const key = try allocator.dupe(u8, keys_arr[0].string);
+        // Provider 的 Authorization 头需要完整的 "Bearer <key>"（OpenAI 兼容约定）。
+        // 后台录入的通常是裸 key（sk-...），这里统一补前缀；已带前缀的不重复。
+        const raw_key = keys_arr[0].string;
+        if (raw_key.len == 0) return error.EmptyApiKeys;
+        const key = if (std.mem.startsWith(u8, raw_key, "Bearer "))
+            try allocator.dupe(u8, raw_key)
+        else
+            try std.fmt.allocPrint(allocator, "Bearer {s}", .{raw_key});
         errdefer allocator.free(key);
         return .{
             .row = row,
@@ -298,7 +305,7 @@ pub const AiService = struct {
     fn registerSkills(self: *AiService) !void {
         const tools = [_]ai.Tool{
             .{
-                .name = "zweq.user.search",
+                .name = "zweq_user_search",
                 .description = "按关键词搜索平台用户,返回 ID/姓名/邮箱/角色/租户",
                 .parameters = &.{
                     .{ .name = "keyword", .type = .string, .description = "姓名或邮箱关键词", .required = true },
@@ -307,14 +314,14 @@ pub const AiService = struct {
                 .handler = skillUserSearch,
             },
             .{
-                .name = "zweq.task.stats",
+                .name = "zweq_task_stats",
                 .description = "获取后台任务队列统计(pending/claimed/done/failed/canceled)",
                 .parameters = &.{},
                 .required_permission = PERM_ADMIN,
                 .handler = skillTaskStats,
             },
             .{
-                .name = "zweq.audit.search",
+                .name = "zweq_audit_search",
                 .description = "按操作类型/关键词检索审计日志(最近 limit 条)",
                 .parameters = &.{
                     .{ .name = "action", .type = .string, .description = "操作类型前缀,如 user.", .required = false },
@@ -325,14 +332,14 @@ pub const AiService = struct {
                 .handler = skillAuditSearch,
             },
             .{
-                .name = "zweq.tenant.list",
+                .name = "zweq_tenant_list",
                 .description = "列出全部租户(ID/名称/状态)",
                 .parameters = &.{},
                 .required_permission = PERM_ADMIN,
                 .handler = skillTenantList,
             },
             .{
-                .name = "zweq.notify.send",
+                .name = "zweq_notify_send",
                 .description = "向指定用户发送站内通知(需管理员审批)",
                 .parameters = &.{
                     .{ .name = "user_id", .type = .number, .description = "目标用户 ID", .required = true },
@@ -462,7 +469,7 @@ pub const AiService = struct {
         const session_id = ctx.run_id orelse "0";
         const sid = std.fmt.parseInt(i64, session_id, 10) catch 0;
         const now_sec = @divTrunc(zigmodu.time.monotonicNowMilliseconds(), 1000);
-        const approval_id = try refs.ai_store.createApproval(sid, ctx.user_id orelse 0, "zweq.notify.send", args_json, now_sec);
+        const approval_id = try refs.ai_store.createApproval(sid, ctx.user_id orelse 0, "zweq_notify_send", args_json, now_sec);
 
         var obj = std.json.ObjectMap{};
         try obj.put(ctx.allocator, try ctx.allocator.dupe(u8, "status"), .{ .string = try ctx.allocator.dupe(u8, "pending_approval") });
@@ -544,7 +551,7 @@ pub const AiService = struct {
         var agent = ai.Agent{
             .provider = &provider,
             .registry = &self.registry,
-            .allowlist = &.{ "zweq.user.search", "zweq.task.stats", "zweq.audit.search", "zweq.tenant.list", "zweq.notify.send" },
+            .allowlist = &.{ "zweq_user_search", "zweq_task_stats", "zweq_audit_search", "zweq_tenant_list", "zweq_notify_send" },
             .tool_timeout_ms = self.cfg.tool_timeout_ms,
             .budget = &budget,
             .metrics = start_metrics,
@@ -557,6 +564,7 @@ pub const AiService = struct {
             skill_ctx: *ai.SkillContext,
             max_steps: usize,
             result: ?ai.AgentResult = null,
+            err: ?anyerror = null,
         };
         var run_ctx = RunCtx{
             .agent = &agent,
@@ -568,7 +576,12 @@ pub const AiService = struct {
         const br = self.breaker.callWithContext(&run_ctx, struct {
             fn op(c: ?*anyopaque) anyerror!void {
                 const r: *RunCtx = @ptrCast(@alignCast(c.?));
-                r.result = r.agent.run(r.allocator, r.prompt, r.skill_ctx, r.max_steps) catch return;
+                r.result = r.agent.run(r.allocator, r.prompt, r.skill_ctx, r.max_steps) catch |e| {
+                    // 不能吞掉：否则 breaker 看到成功、result 为空，最终只剩 AiRunFailed，
+                    // 真实的 401/超时/解析错误全部丢失。
+                    r.err = e;
+                    return;
+                };
             }
         }.op);
         var result: ai.AgentResult = undefined;
@@ -585,7 +598,19 @@ pub const AiService = struct {
                 };
                 return e;
             },
-            .success => result = run_ctx.result orelse return error.AiRunFailed,
+            .success => {
+                if (run_ctx.err) |e| {
+                    // 超时是微信被动回复等短窗口链路的预期分支（测试会断言优雅回退），
+                    // 用 warn 留痕；其余错误才是真正的 error。
+                    if (e == error.Timeout) {
+                        std.log.warn("[ai] agent run timeout session={d} user={d}", .{ session_id, user_id });
+                    } else {
+                        std.log.err("[ai] agent run failed session={d} user={d}: {s}", .{ session_id, user_id, @errorName(e) });
+                    }
+                    return e;
+                }
+                result = run_ctx.result orelse return error.AiRunFailed;
+            },
         }
         defer result.deinit(allocator);
 
@@ -599,13 +624,66 @@ pub const AiService = struct {
         return .{ .answer = answer, .reasoning = reasoning, .budget_exhausted = result.budget_exhausted };
     }
 
+    /// C 端纯聊天：不经过 Agent / 工具，直接走 Provider 的非流式 chat。
+    ///
+    /// 两个原因：
+    /// 1. 后台技能名会作为 tools 发给 Provider；C 端没有平台权限，不应触发管理工具。
+    /// 2. 部分 Provider 的 SSE 在 HTTPS 流式路径下解析不稳定，非流式更稳。
+    pub fn simpleChat(
+        self: *AiService,
+        allocator: std.mem.Allocator,
+        tenant_id: i64,
+        content: []const u8,
+    ) !ChatOutcome {
+        const now = zigmodu.time.wallClockSeconds(self.io);
+        const used = try self.store.runCountForUser(0, now - 24 * 3600);
+        if (used >= self.cfg.daily_run_limit) return error.QuotaExceeded;
+        if (!self.bulkhead.tryAcquire()) return error.AiBusy;
+        defer self.bulkhead.release();
+
+        const resolved = (try self.resolveProvider(allocator)) orelse return error.NoAiProvider;
+        defer {
+            resolved.row.free(self.store.allocator);
+            allocator.free(resolved.keys_json);
+            allocator.free(resolved.key);
+        }
+
+        var provider = ai.AiProvider{
+            .allocator = allocator,
+            .http = &self.http,
+            .endpoint = resolved.row.endpoint,
+            .api_key = resolved.key,
+            .model = resolved.model,
+        };
+
+        const messages = [_]ai.AiProvider.ChatMsg{
+            .{ .role = "system", .content = "你是 ZWEQ 商城的智能购物助手。请用中文简洁回答（不超过300字），必要时引导用户去商品、订单、签到、领券或会员中心页面。" },
+            .{ .role = "user", .content = content },
+        };
+        var resp = provider.chat(&messages) catch |err| {
+            std.log.err("[ai] simple chat provider failed: {s}", .{@errorName(err)});
+            return err;
+        };
+        defer provider.freeResponse(&resp);
+
+        _ = self.store.createRun(0, 0, tenant_id, "chat", content, resp.model, @intCast(resp.prompt_tokens), @intCast(resp.completion_tokens), 0, 0, 0, "ok", "", now) catch |err| {
+            std.log.err("[ai] simple chat run record failed: {s}", .{@errorName(err)});
+        };
+
+        const answer = try allocator.dupe(u8, resp.content);
+        errdefer allocator.free(answer);
+        const reasoning = try allocator.dupe(u8, resp.reasoning_content);
+        errdefer allocator.free(reasoning);
+        return .{ .answer = answer, .reasoning = reasoning, .budget_exhausted = false };
+    }
+
     // ── Workflow ───────────────────────────────────────────────────────────
 
     /// 平台健康工作流:任务统计 + 租户列表两个只读技能编排(无 LLM 步骤)。
     pub fn runHealthWorkflow(self: *AiService, allocator: std.mem.Allocator, user_id: i64, tenant_id: i64) !ai.workflow.WorkflowResult {
         var workflow = ai.workflow.Workflow.init(&self.registry, &.{
-            .{ .name = "task_stats", .kind = .{ .skill = .{ .name = "zweq.task.stats", .args = .{ .object = .{} } } } },
-            .{ .name = "tenant_list", .kind = .{ .skill = .{ .name = "zweq.tenant.list", .args = .{ .object = .{} } } } },
+            .{ .name = "task_stats", .kind = .{ .skill = .{ .name = "zweq_task_stats", .args = .{ .object = .{} } } } },
+            .{ .name = "tenant_list", .kind = .{ .skill = .{ .name = "zweq_tenant_list", .args = .{ .object = .{} } } } },
         });
         var skill_ctx = ai.SkillContext{
             .allocator = allocator,
@@ -664,7 +742,7 @@ pub const AiService = struct {
         return self.store.runCountForUser(user_id, now - 24 * 3600);
     }
 
-    /// Approve a pending approval. For `zweq.notify.send` this performs
+    /// Approve a pending approval. For `zweq_notify_send` this performs
     /// the actual notification. Returns false when already resolved.
     pub fn approve(self: *AiService, allocator: std.mem.Allocator, id: i64, approved_by: i64, do_approve: bool) !bool {
         const row_opt = try self.store.getApproval(id);
@@ -686,7 +764,7 @@ pub const AiService = struct {
             std.log.err("[audit] write failed for action {s}: {s}", .{ "ai.approval", @errorName(err) });
         };
 
-        if (do_approve and std.mem.eql(u8, row.skill_name, "zweq.notify.send")) {
+        if (do_approve and std.mem.eql(u8, row.skill_name, "zweq_notify_send")) {
             const parsed = try std.json.parseFromSlice(std.json.Value, allocator, row.args, .{});
             defer parsed.deinit();
             const o = parsed.value.object;

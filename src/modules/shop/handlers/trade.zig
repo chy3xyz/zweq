@@ -789,9 +789,11 @@ pub fn Mixin(comptime ApiT: type) type {
                     error.OrderStateConflict => "订单状态不可核销",
                     error.InvalidInput => "核销码不正确",
                     error.NotFound => "订单不存在",
+                    error.PickupLocked => "核销失败次数过多，请 15 分钟后再试",
                     else => @errorName(err),
                 };
-                try ctx.sendErrorResponse(400, 400, msg);
+                const status: u16 = if (err == error.PickupLocked) 429 else 400;
+                try ctx.sendErrorResponse(status, status, msg);
                 return;
             };
             self.audit.log(admin_id, ctx.getAttr("audit_actor") orelse "", "shop.order.pickup", "shop_order", id, "自提核销", zigmodu.http.RequestUtil.getRealIp(ctx), true, ApiT.tenantScope(ctx, self));

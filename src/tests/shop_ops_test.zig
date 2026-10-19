@@ -113,6 +113,72 @@ test "shop: outlet CRUD + self-pickup verification code" {
     try svc.deleteOutlet(outlet_id);
 }
 
+test "shop: pickup brute-force guard — 5 fails lock the order, success resets" {
+    const allocator = std.testing.allocator;
+    // ── PickupGuard 单元行为（合成时钟，不依赖墙钟）──
+    var g: shop.service.PickupGuard = .{};
+    try std.testing.expectEqual(shop.service.PickupGuard.Decision.allowed, g.allow(7, 1000));
+    var i: u32 = 0;
+    while (i < shop.service.PickupGuard.max_fails) : (i += 1) g.fail(7, 1000);
+    // 冷却窗内锁定；窗口一过即放行，且计数已清零（再满 5 次才会再锁）。
+    try std.testing.expectEqual(shop.service.PickupGuard.Decision.locked, g.allow(7, 1000 + shop.service.PickupGuard.lockout_secs - 1));
+    try std.testing.expectEqual(shop.service.PickupGuard.Decision.allowed, g.allow(7, 1000 + shop.service.PickupGuard.lockout_secs));
+    i = 0;
+    while (i < shop.service.PickupGuard.max_fails - 1) : (i += 1) g.fail(7, 2000);
+    try std.testing.expectEqual(shop.service.PickupGuard.Decision.allowed, g.allow(7, 2000));
+    g.reset(7);
+    try std.testing.expectEqual(shop.service.PickupGuard.Decision.allowed, g.allow(7, 2000));
+
+    // ── 服务级集成：连错 5 次后，正确码同样被拒（PickupLocked）──
+    var env = try openMemory(allocator);
+    defer env.deinit();
+    var store = shop.persistence.ShopStore.init(allocator, env.client);
+    var svc = shop.service.ShopService.init(allocator, std.testing.io, &store);
+
+    const outlet_id = try svc.createOutlet(1, 9, "福田店", "深南大道 2 号", "0755-5678");
+    const pid = try svc.createProduct(1, 9, .{
+        .category_id = 0,
+        .name = "防暴力商品",
+        .image = "",
+        .images = "[]",
+        .content = "",
+        .price = 1000,
+        .original_price = 0,
+        .stock = 3,
+        .status = 1,
+        .skus = &.{},
+    });
+    const skus = try svc.listSkus(pid);
+    defer {
+        for (skus) |s| s.free(allocator);
+        if (skus.len > 0) allocator.free(skus);
+    }
+    const addr_id = try svc.createAddress(1, 9, .{
+        .openid = "o_guard",
+        .name = "G",
+        .mobile = "13800000001",
+        .region = "SZ",
+        .detail = "2",
+        .is_default = 1,
+    });
+    const order_id = try svc.createOrder(1, 9, "o_guard", addr_id, &.{
+        .{ .product_id = pid, .sku_id = skus[0].id, .quantity = 1 },
+    }, "", "", "", outlet_id, "");
+    var o = (try svc.getOrder(order_id)).?;
+    defer o.free(allocator);
+    try svc.markPaid(1, 9, order_id);
+
+    var n: u32 = 0;
+    while (n < shop.service.PickupGuard.max_fails) : (n += 1) {
+        try std.testing.expectError(error.InvalidInput, svc.pickupOrder(1, order_id, "000000"));
+    }
+    // 阈值已达：连正确码也进冷却，且订单未被核销。
+    try std.testing.expectError(error.PickupLocked, svc.pickupOrder(1, order_id, o.pickup_code));
+    var o_locked = (try svc.getOrder(order_id)).?;
+    defer o_locked.free(allocator);
+    try std.testing.expectEqual(@as(i64, 1), o_locked.status);
+}
+
 test "shop: balance plan recharge (Bonus) lifecycle" {
     const allocator = std.testing.allocator;
     var env = try openMemory(allocator);
