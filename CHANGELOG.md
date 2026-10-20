@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI 三连根因（曾致 6 legs 全红多轮）**：① `mlugg/setup-zig` 自带 mirror 服务对任何版本 404（dev.1970 与 0.17.0 两轮实证），`mirror: false` 又曝出该 action 对 0.17.0 拼官方 URL 报 `Invalid URL`——彻底弃用，CI 改为与 Dockerfile 完全同构的 ziglang.org 官方源直下（curl + tar + GITHUB_PATH）；② 根 `.gitignore` 的 `package-lock.json` 规则（无 `/` 锚定）误杀 `web/package-lock.json`，导致它从未入库——frontend 的 npm cache 与 Dockerfile 的 `COPY` 双双找不到文件，ignore 规则改锚定根目录、lockfile 入库；③ `createDir("uploads/market")` 在父目录不存在时 Linux 返回 `ENOENT`、被 `else => error.Unexpected` 吞掉——CI 干净 checkout 没有 gitignore 掉的 `uploads/`，3 个 cloud 测试全挂而本地因目录恰好存在而绿，`storeArtifact`/`file.ensureDir`/zweq-cloud `LocalArtifactStorage` 三处同款统一改 `createDirPath`（mkdir -p 语义），并已在本机挪走 `uploads/` 复现验证 126/126。
 
 ### Changed
+- **依赖升级：zigmodu v0.39.20 → v0.40.0**（zent 维持 v0.97.0、zwechat 维持 v0.9.0；主站 + `zweq-cloud` 同步）。0.40.0 删除 `http.RouteGroup` 与 `Server.group()`，运行时注册改到 `Router.scope()` 的同名方法；进 catalog 的路由仍走 `routes` + `mount`。
+  - 删掉各模块的 `registerRoutes` / `registerPublicRoutes` / `registerAdminRoutes`（与已有 `routes` 表重复，且类型已不存在）。
+  - 微信回调拆成 `MessageApi.Wx`，在 `/wx` scope 上 `mount`（带全局限流），进 catalog 且 `.auth = .public`。
+  - `zweq-cloud` 授权码与市场：公开路由挂 `routes`，管理端挂 `Admin` 并套原 Bearer scope。
+  - 测试里的一次性探针（限流、whoami）改 `scope.get`；业务路由改 `mount`。脚手架 `tools/gen_module.py` 改为生成 `routes` 并 `v1_scope.mount`。
+  - `Scoped` 运行时方法不进 catalog——需要权限门 / OpenAPI 的路由继续走 `routes`，没有改用 `scope.get`。
+- **依赖升级：zent v0.96.0 → v0.97.0 + zigmodu v0.39.18 → v0.39.20**（zwechat 维持 v0.9.0；主站 + `zweq-cloud` 同步）。核对结论：
+  - **zent 0.97 零行为变化**（CHANGELOG 仅 Changed；`docs/UPGRADING.md` 无 0.97 节）。包图收成 DAG（`src/base/`、`src/migrate.zig`+`src/migrate/`、`src/services/`），导出路径不变（`zent.sql_schema` / `zent.crud` / `zent.sql_driver` 等仍可用）。新别名 `zent.base` / `zent.services` / `zent.migrate` 未采用。comptime 预算收进 `base/budget.zig`（`graph(tables) = flat + tables × 20_000`），本仓无手写 `@setEvalBranchQuota`，升级即得。
+  - **zigmodu 0.39.19**：新增 `ai.rag`、`ai.ops` 别名、Memory、并行 tool_calls、embedding、声明式 DI、per-user 配额、`ModuleContext.state`——均未采用。`RouteGroup` 标 legacy，API 与行为不变，现有挂载不迁移。MCP `tools/list` 默认按会话权限过滤——本仓不跑 MCP server，不适用。HTTP 类型与 `Module` 契约内迁（`api/Module.zig` 仍是 shim），破坏性：否。唯一破坏性是 `Workflow.approval_flow` / `Pipeline.risk` 改 `ports` 接口；全仓无 `approval_flow` / `ApprovalFlow`，不适用。
+  - **zigmodu 0.39.20**：自身示例 pin 到 zent 0.97（上游标明破坏性：否）+ soak/h2 写路径内部优化。无消费方适配点。
+  - 验证：清 `.zig-cache` 后主站 build + lint-size/fmt/alloc/deps + **128/128 测试**；`zweq-cloud` build + **4/4 测试**。零代码改动。
 - **shop/service.zig 按子域拆分（1339 行 → 宿主 322 行 + 4 片段）**：`service/{catalog,trade,marketing,content}.zig` 共 76 个方法逐字搬运（目录 10 / 交易 39——含 226 行的 createOrderBudget、营销 14 / 内容与门店 13），嵌套聚合类型（OrderSummary/OrderStats/FanOrderOverview）提升到文件级。宿主保留字段/init/now 与按原名桥接的 `pub const` 别名——上层 `svc.xxx(...)` 调用面零变化。适配点：片段内函数级 `@import("../payment/…")` 相对路径再升一级；私有方法与 `now()` 转 pub 供跨文件解析。
 - **依赖升级：zent v0.91.0 → v0.96.0 + zigmodu v0.39.11 → v0.39.18**（zwechat 维持 v0.9.0；主站 + `zweq-cloud` 同步）。核对结论（UPGRADING §13.5–§13.10，0.92–0.96 消费者视图）：
   - **升级即得**：PG `field.Bytes` 二进制读写双向修复（此前文本转义腐蚀 payload）、`zent.walltime.nowSecs` 公共墙钟、`Row.textDup/blobDup` 所有权拷贝、`sql_dialect_expr` 三助手。`field.Other/Vector`、pgvector 距离算子族为纯新增声明，未采用。

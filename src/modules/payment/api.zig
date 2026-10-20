@@ -229,21 +229,6 @@ pub fn PaymentApi(comptime Service: type, comptime UserService: type) type {
             return cfg;
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.post("/pay/recharge", recharge, @ptrCast(@alignCast(self)));
-            try g.post("/pay/recharge/{order_no}/complete", complete, @ptrCast(@alignCast(self)));
-            try g.get("/pay/wallet", wallet, @ptrCast(@alignCast(self)));
-            try g.get("/pay/orders", orders, @ptrCast(@alignCast(self)));
-            try g.post("/pay/withdraws", withdraw, @ptrCast(@alignCast(self)));
-            try g.get("/pay/withdraws", withdraws, @ptrCast(@alignCast(self)));
-            try g.post("/pay/refund", refundV2, @ptrCast(@alignCast(self)));
-            try g.post("/pay/transfer", transferV2, @ptrCast(@alignCast(self)));
-            try g.post("/pay/refund/v3", refundV3, @ptrCast(@alignCast(self)));
-            try g.post("/pay/transfer/v3", transferV3, @ptrCast(@alignCast(self)));
-        }
-
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;

@@ -101,23 +101,6 @@ pub fn RuleApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            g = try g.use(mw.adminGuard(self.user_svc.store));
-            try g.get("/rules", listRules, @ptrCast(@alignCast(self)));
-            try g.post("/rules", createRule, @ptrCast(@alignCast(self)));
-            try g.get("/rules/{id}", getRule, @ptrCast(@alignCast(self)));
-            try g.put("/rules/{id}", updateRule, @ptrCast(@alignCast(self)));
-            try g.delete("/rules/{id}", deleteRule, @ptrCast(@alignCast(self)));
-            try g.get("/rules/{id}/keywords", listKeywords, @ptrCast(@alignCast(self)));
-            try g.post("/rules/{id}/keywords", addKeyword, @ptrCast(@alignCast(self)));
-            try g.delete("/rules/{id}/keywords/{kid}", removeKeyword, @ptrCast(@alignCast(self)));
-            try g.get("/rules/{id}/replies", listReplies, @ptrCast(@alignCast(self)));
-            try g.post("/rules/{id}/replies", addReply, @ptrCast(@alignCast(self)));
-            try g.delete("/rules/{id}/replies/{rid}", removeReply, @ptrCast(@alignCast(self)));
-        }
-
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;

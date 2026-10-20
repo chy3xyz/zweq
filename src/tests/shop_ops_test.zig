@@ -803,8 +803,12 @@ test "shop: order pay-params mock mode (no v3 config)" {
     // 走 HTTP：GET pay-params（无 v3 配置 → mock 模式）。
     var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
     defer server.deinit();
-    var g = server.group("/api/v1");
-    try shop_api.registerPublicRoutes(&g);
+    var app_state: void = {};
+    var router = zigmodu.http.Router(void).init(std.testing.io, allocator, &server, &app_state);
+    defer router.deinit();
+    var v1 = router.scope("/api/v1");
+    var limited = try v1.use(mw_rate.perIpRateLimit(&shop_limiter));
+    try limited.mount(@TypeOf(shop_api), &shop_api);
     const pay_url = try std.fmt.allocPrint(allocator, "/api/v1/shop/orders/{d}/pay-params", .{oid});
     defer allocator.free(pay_url);
     var res = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, pay_url, .{});
@@ -871,8 +875,12 @@ test "shop: mock pay-complete with C-token ownership" {
     // 无 C-token → 401。
     var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
     defer server.deinit();
-    var g = server.group("/api/v1");
-    try shop_api.registerPublicRoutes(&g);
+    var app_state: void = {};
+    var router = zigmodu.http.Router(void).init(std.testing.io, allocator, &server, &app_state);
+    defer router.deinit();
+    var v1 = router.scope("/api/v1");
+    var limited = try v1.use(mw_rate.perIpRateLimit(&shop_limiter));
+    try limited.mount(@TypeOf(shop_api), &shop_api);
     const url1 = try std.fmt.allocPrint(allocator, "/api/v1/shop/orders/{d}/pay-complete", .{oid});
     defer allocator.free(url1);
     var res1 = try zigmodu.http.Testkit.dispatchOpts(&server, .POST, url1, .{});

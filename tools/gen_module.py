@@ -251,16 +251,18 @@ pub fn @Name@Api(comptime Service: type, comptime UserService: type) type {
         audit: *audit_svc.AuditService,
         default_tenant_id: i64,
 
+        pub const module_name = "@name@";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "@name@/records", .handler = http.wrapHandler(Self, list), .meta = .{ .permission = "@name@:read" } },
+            .{ .method = .POST, .path = "@name@/records", .handler = http.wrapHandler(Self, create), .meta = .{ .permission = "@name@:write" } },
+            .{ .method = .DELETE, .path = "@name@/records/{id}", .handler = http.wrapHandler(Self, delete), .meta = .{ .permission = "@name@:write" } },
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
-        }
-
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/@name@/records", list, @ptrCast(@alignCast(self)));
-            try g.post("/@name@/records", create, @ptrCast(@alignCast(self)));
-            try g.delete("/@name@/records/{id}", delete, @ptrCast(@alignCast(self)));
         }
 
         fn requireAdmin(ctx: *http.Context, self: *Self) !?i64 {
@@ -457,8 +459,8 @@ def wire_main(name: str, Name: str):
                '    var checkin_api = checkin.api.CheckinApi(@TypeOf(checkin_svc), @TypeOf(user_svc)).init(&checkin_svc, &user_svc, &audit_svc, default_tenant_id);',
                f'\n    var {name}_api = {name}.api.{Name}Api(@TypeOf({name}_svc), @TypeOf(user_svc)).init(&{name}_svc, &user_svc, &audit_svc, default_tenant_id);')
     patch_once(p,
-               '    try checkin_api.registerRoutes(&v1);',
-               f'\n    try {name}_api.registerRoutes(&v1);')
+               '    try v1_scope.mount(checkin.api.CheckinApi(@TypeOf(checkin_svc), @TypeOf(user_svc)), &checkin_api);',
+               f'\n    try v1_scope.mount({name}.api.{Name}Api(@TypeOf({name}_svc), @TypeOf(user_svc)), &{name}_api);')
 
 
 def wire_tests(name: str):

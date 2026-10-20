@@ -58,13 +58,6 @@ pub fn LuckyDrawApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/lucky-draw/records", list, @ptrCast(@alignCast(self)));
-            try g.post("/lucky-draw/draw", draw, @ptrCast(@alignCast(self)));
-        }
-
         /// Sets the `audit_actor` context attribute from the authenticated user.
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = ctx.userIdInt(i64) orelse return;

@@ -122,7 +122,7 @@ pub fn tokenVersionGuard(sec: *zigmodu.security.AppSecurity, user_store: *user_p
 }
 
 /// 挂载在 `jwtAuthWithSecurity` 之后:要求当前用户具有 `admin` 角色。
-/// 用于保持 `registerRoutes` 兼容层与 ComptimeRouter 的 `.permission = "admin"` 行为一致。
+/// 显式要求当前用户具有 `admin` 角色。生产路由的权限走 catalog 的 `.permission`。
 pub fn adminGuard(user_store: *user_persist.UserStore) http.Middleware {
     const S = struct {
         var stored_store: *user_persist.UserStore = undefined;

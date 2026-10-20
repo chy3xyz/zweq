@@ -218,19 +218,6 @@ pub fn FanAppApi(
             };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            try group.get("/app/fan/profile", fanProfile, @ptrCast(@alignCast(self)));
-            try group.get("/app/points/products", listPointsProducts, @ptrCast(@alignCast(self)));
-            try group.post("/app/points/redeem", redeemPoints, @ptrCast(@alignCast(self)));
-            try group.get("/app/points/orders", listPointsOrders, @ptrCast(@alignCast(self)));
-            try group.get("/app/coupons", listCoupons, @ptrCast(@alignCast(self)));
-            try group.post("/app/coupons/{id}/claim", claimCoupon, @ptrCast(@alignCast(self)));
-            try group.get("/app/my-coupons", myCoupons, @ptrCast(@alignCast(self)));
-            try group.get("/app/lucky-draw/records", listDrawRecords, @ptrCast(@alignCast(self)));
-            try group.get("/app/lucky-draw/config", luckyDrawConfig, @ptrCast(@alignCast(self)));
-            try group.post("/app/lucky-draw/draw", draw, @ptrCast(@alignCast(self)));
-        }
-
         fn tenantScope(ctx: *http.Context, self: *Self) i64 {
             _ = ctx;
             return self.default_tenant_id;

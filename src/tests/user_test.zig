@@ -217,10 +217,13 @@ test "session revocation: token_version bump invalidates old JWTs" {
 
     var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
     defer server.deinit();
-    var g = server.group("/api/v1");
-    var guarded = try g.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&sec.module));
+    var app_state: void = {};
+    var router = zigmodu.http.Router(void).init(std.testing.io, allocator, &server, &app_state);
+    defer router.deinit();
+    var v1 = router.scope("/api/v1");
+    var guarded = try v1.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&sec.module));
     guarded = try guarded.use(@import("../middleware/auth.zig").tokenVersionGuard(&sec, &store));
-    try guarded.get("/whoami", Whoami.h, null);
+    try guarded.get("whoami", Whoami.h, null);
 
     var uid_buf: [32]u8 = undefined;
     const token = try sec.module.generateTokenWithTenantAndVersion(try std.fmt.bufPrint(&uid_buf, "{d}", .{uid}), &.{}, "1", 0);

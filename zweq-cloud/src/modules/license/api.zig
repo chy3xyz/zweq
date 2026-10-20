@@ -36,18 +36,28 @@ pub fn LicenseApi(comptime Service: type) type {
         svc: *Service,
         admin_token: []const u8,
 
+        pub const module_name = "license";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        /// 站点校验，公开。管理端三条走 `Admin`，挂在 bearer scope 上。
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .POST, .path = "cloud/licenses/verify", .handler = http.wrapHandler(Self, verify), .meta = .{ .auth = .public } },
+        };
+
+        pub const Admin = struct {
+            pub const module_name = "license";
+            pub const nest: []const []const u8 = &.{};
+            pub const State = Self;
+            pub const routes: []const http.RouteSpec(Self) = &.{
+                .{ .method = .POST, .path = "cloud/licenses", .handler = http.wrapHandler(Self, generate), .meta = .{ .auth = .public } },
+                .{ .method = .GET, .path = "cloud/licenses", .handler = http.wrapHandler(Self, list), .meta = .{ .auth = .public } },
+                .{ .method = .POST, .path = "cloud/licenses/revoke", .handler = http.wrapHandler(Self, revoke), .meta = .{ .auth = .public } },
+            };
+        };
+
         pub fn init(svc: *Service, admin_token: []const u8) Self {
             return .{ .svc = svc, .admin_token = admin_token };
-        }
-
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            // 管理接口（Bearer token）。
-            var admin = try group.use(http_mw.bearerAuth(self.admin_token));
-            try admin.post("/cloud/licenses", generate, @ptrCast(@alignCast(self)));
-            try admin.get("/cloud/licenses", list, @ptrCast(@alignCast(self)));
-            try admin.post("/cloud/licenses/revoke", revoke, @ptrCast(@alignCast(self)));
-            // 站点端校验（公开，无鉴权——授权码本身是凭据）。
-            try group.post("/cloud/licenses/verify", verify, @ptrCast(@alignCast(self)));
         }
 
         fn generate(ctx: *http.Context) !void {

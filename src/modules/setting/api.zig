@@ -51,16 +51,6 @@ pub fn SettingApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/settings", list, @ptrCast(@alignCast(self)));
-            try g.get("/settings/{key}", get, @ptrCast(@alignCast(self)));
-            var admin_g = try g.use(mw.adminGuard(self.user_svc.store));
-            try admin_g.put("/settings/{key}", set, @ptrCast(@alignCast(self)));
-            try admin_g.delete("/settings/{key}", delete, @ptrCast(@alignCast(self)));
-        }
-
         /// Authenticated user id (any role).
         fn requireAuth(ctx: *http.Context) !?i64 {
             const uid = ctx.userIdInt(i64) orelse {

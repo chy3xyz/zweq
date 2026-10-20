@@ -86,20 +86,6 @@ pub fn ModuleApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/modules", list, @ptrCast(@alignCast(self)));
-            try g.post("/modules", register, @ptrCast(@alignCast(self)));
-            try g.put("/modules/{id}", update, @ptrCast(@alignCast(self)));
-            try g.get("/accounts/{id}/modules", listBindings, @ptrCast(@alignCast(self)));
-            try g.put("/accounts/{id}/modules", bind, @ptrCast(@alignCast(self)));
-            try g.delete("/accounts/{id}/modules/{module}", unbind, @ptrCast(@alignCast(self)));
-            try g.get("/accounts/{id}/modules/{module}/config", getConfig, @ptrCast(@alignCast(self)));
-            try g.put("/accounts/{id}/modules/{module}/config", setConfig, @ptrCast(@alignCast(self)));
-            try g.get("/admin/nav", adminNav, @ptrCast(@alignCast(self)));
-        }
-
         fn adminNav(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             try setAuditActor(ctx, self);

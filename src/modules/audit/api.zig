@@ -92,14 +92,6 @@ pub fn AuditApi(comptime AuditServiceT: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            g = try g.use(mw.adminGuard(self.user_svc.store));
-            try g.get("/audit-logs", listLogs, @ptrCast(@alignCast(self)));
-            try g.get("/audit-logs/export", exportLogs, @ptrCast(@alignCast(self)));
-        }
-
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;

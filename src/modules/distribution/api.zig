@@ -96,16 +96,6 @@ pub fn DistributionApi(comptime Service: type, comptime UserService: type) type 
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/distributions", list, @ptrCast(@alignCast(self)));
-            try g.get("/distributions/commissions", commissions, @ptrCast(@alignCast(self)));
-            try g.post("/distributions/join", join, @ptrCast(@alignCast(self)));
-            try g.post("/distributions/distribute", distribute, @ptrCast(@alignCast(self)));
-            try g.post("/distributions/withdraw", withdraw, @ptrCast(@alignCast(self)));
-        }
-
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;

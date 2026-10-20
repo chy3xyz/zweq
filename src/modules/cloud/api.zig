@@ -112,24 +112,6 @@ pub fn CloudApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.post("/cloud/licenses", generateLicense, @ptrCast(@alignCast(self)));
-            try g.get("/cloud/licenses", listLicenses, @ptrCast(@alignCast(self)));
-            try g.post("/cloud/licenses/{id}/revoke", revokeLicense, @ptrCast(@alignCast(self)));
-            try g.post("/cloud/licenses/verify", verifyLicense, @ptrCast(@alignCast(self)));
-            try g.get("/cloud/market", listMarket, @ptrCast(@alignCast(self)));
-            try g.post("/cloud/market", publishPackage, @ptrCast(@alignCast(self)));
-            try g.post("/cloud/market/{name}/install", installPackage, @ptrCast(@alignCast(self)));
-            // 远端云服务（zweq-cloud）对接。
-            try g.post("/cloud/remote/verify", remoteVerify, @ptrCast(@alignCast(self)));
-            try g.post("/cloud/remote/sync-market", remoteSyncMarket, @ptrCast(@alignCast(self)));
-            // 动态表运行时访问（manifest 声明的表）。
-            try g.get("/cloud/tables", listDynamicTables, @ptrCast(@alignCast(self)));
-            try g.get("/cloud/tables/{table}/rows", queryDynamicTable, @ptrCast(@alignCast(self)));
-        }
-
         /// Sets the `audit_actor` context attribute from the authenticated user.
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = ctx.userIdInt(i64) orelse return;

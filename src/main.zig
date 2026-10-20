@@ -732,6 +732,11 @@ pub fn main(init: std.process.Init) !void {
     try v1_scope.mount(ai.api.AiApi(@TypeOf(ai_svc), @TypeOf(user_svc)), &ai_api);
     try v1_scope.mount(system.api.SystemApi(@TypeOf(cache), @TypeOf(task_svc)), &system_api);
 
+    // 微信服务器回调：公开路由，签名校验在 service 内。全局限流防洪水。
+    var wx_scope = router.scope("/wx");
+    var wx_limited = try wx_scope.use(zigmodu.http.rateLimitMiddleware(&wx_limiter));
+    try wx_limited.mount(message.api.MessageApi(@TypeOf(wechat_svc), @TypeOf(user_svc)).Wx, &message_api);
+
     slot.set(try router.finish());
 
     // OpenAPI/Swagger/Scalar docs: READ-ONLY public routes generated from the
@@ -931,11 +936,6 @@ pub fn main(init: std.process.Init) !void {
             }
         }.handle,
     });
-
-    // WeChat server callback (public, signature-verified inside the service).
-    var wx = server.group("/wx");
-    var wx_limited = try wx.use(zigmodu.http.rateLimitMiddleware(&wx_limiter));
-    try message_api.registerPublicRoutes(&wx_limited);
 
     // Static hosting: serve the built SPA from web/dist (single binary full stack).
     // A server-level middleware short-circuits routing for non-API GET paths.

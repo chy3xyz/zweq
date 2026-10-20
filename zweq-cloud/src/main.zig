@@ -139,11 +139,22 @@ pub fn main(init: std.process.Init) !void {
     defer server.deinit();
     try server.addMiddleware(PanicHook.recordRequestContext());
 
-    var v1 = server.group("/api/v1");
-    var license_api = license.api.LicenseApi(@TypeOf(license_svc)).init(&license_svc, cfg.admin_token);
-    try license_api.registerRoutes(&v1);
-    var market_api = market.api.MarketApi(@TypeOf(market_svc)).init(&market_svc, cfg.admin_token);
-    try market_api.registerRoutes(&v1);
+    var app_state: void = {};
+    var router = zigmodu.http.Router(void).init(io, allocator, &server, &app_state);
+    defer router.deinit();
+    var v1 = router.scope("/api/v1");
+    const LicApi = license.api.LicenseApi(@TypeOf(license_svc));
+    var license_api = LicApi.init(&license_svc, cfg.admin_token);
+    var lic_admin = try v1.use(license.api.http_mw.bearerAuth(cfg.admin_token));
+    try lic_admin.mount(LicApi.Admin, &license_api);
+    try v1.mount(LicApi, &license_api);
+    const MktApi = market.api.MarketApi(@TypeOf(market_svc));
+    var market_api = MktApi.init(&market_svc, cfg.admin_token);
+    var mkt_admin = try v1.use(license.api.http_mw.bearerAuth(cfg.admin_token));
+    try mkt_admin.mount(MktApi.Admin, &market_api);
+    try v1.mount(MktApi, &market_api);
+    var catalog = try router.finish();
+    defer catalog.deinit();
 
     // health
     try server.addRoute(.{

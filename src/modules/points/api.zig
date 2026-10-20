@@ -73,19 +73,6 @@ pub fn PointsApi(comptime Service: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/points/products", listProducts, @ptrCast(@alignCast(self)));
-            try g.post("/points/products", createProduct, @ptrCast(@alignCast(self)));
-            try g.get("/points/products/{id}", getProduct, @ptrCast(@alignCast(self)));
-            try g.put("/points/products/{id}", updateProduct, @ptrCast(@alignCast(self)));
-            try g.delete("/points/products/{id}", deleteProduct, @ptrCast(@alignCast(self)));
-            try g.post("/points/redeem", redeem, @ptrCast(@alignCast(self)));
-            try g.post("/points/adjust", adjust, @ptrCast(@alignCast(self)));
-            try g.get("/points/orders", listOrders, @ptrCast(@alignCast(self)));
-        }
-
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.user_svc.getUserById(uid) catch return;

@@ -69,13 +69,6 @@ pub fn SystemApi(comptime CacheT: type, comptime TaskSvcT: type) type {
             };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.users_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.users_svc.sec, self.users_svc.store));
-            try g.get("/system/info", info, @ptrCast(@alignCast(self)));
-            try g.get("/system/dashboard", dashboard, @ptrCast(@alignCast(self)));
-        }
-
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {
             const uid = ctx.userIdInt(i64) orelse return;
             const row_opt = self.users_svc.getUserById(uid) catch return;

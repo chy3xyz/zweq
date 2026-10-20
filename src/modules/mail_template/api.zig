@@ -46,14 +46,6 @@ pub fn MailTemplateApi(comptime TemplateServiceT: type, comptime UserService: ty
             return .{ .svc = svc, .user_svc = users };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            g = try g.use(mw.adminGuard(self.user_svc.store));
-            try g.get("/email-templates", listTemplates, @ptrCast(@alignCast(self)));
-            try g.put("/email-templates/{code}", upsertTemplate, @ptrCast(@alignCast(self)));
-        }
-
         fn listTemplates(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
 

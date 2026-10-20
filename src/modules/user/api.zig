@@ -108,18 +108,6 @@ pub fn UserApi(comptime Service: type) type {
             return .{ .svc = svc, .default_tenant_id = default_tenant_id, .audit = audit };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.svc.sec, self.svc.store));
-            try g.get("/users", listUsers, @ptrCast(@alignCast(self)));
-            try g.get("/users/export", exportUsers, @ptrCast(@alignCast(self)));
-            try g.get("/users/{id}", getUser, @ptrCast(@alignCast(self)));
-            try g.post("/users", createUser, @ptrCast(@alignCast(self)));
-            try g.put("/users/{id}", updateUser, @ptrCast(@alignCast(self)));
-            try g.delete("/users/{id}", deleteUser, @ptrCast(@alignCast(self)));
-            try g.post("/users/{id}/revoke-sessions", revokeSessions, @ptrCast(@alignCast(self)));
-        }
-
         /// Sets the `audit_actor` context attribute from the authenticated user.
         /// Call after the route-level permission gate has verified admin access.
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {

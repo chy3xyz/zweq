@@ -96,25 +96,19 @@ pub fn MessageApi(comptime Service: type, comptime UserService: type) type {
             .{ .method = .POST, .path = "miniprogram/login", .handler = http.wrapHandler(Self, miniLogin), .meta = .{ .auth = .public } },
         };
 
+        /// 微信服务器回调。挂在 `/wx` scope 上，与管理端 `routes` 分开，避免 admin 路由被挂到回调前缀。
+        pub const Wx = struct {
+            pub const module_name = "wx";
+            pub const nest: []const []const u8 = &.{};
+            pub const State = Self;
+            pub const routes: []const http.RouteSpec(Self) = &.{
+                .{ .method = .GET, .path = "{token}", .handler = http.wrapHandler(Self, handle), .meta = .{ .auth = .public } },
+                .{ .method = .POST, .path = "{token}", .handler = http.wrapHandler(Self, handle), .meta = .{ .auth = .public } },
+            };
+        };
+
         pub fn init(svc: *Service, users: *UserService, audit: *audit_svc.AuditService, default_tenant_id: i64) Self {
             return .{ .svc = svc, .user_svc = users, .audit = audit, .default_tenant_id = default_tenant_id };
-        }
-
-        /// WeChat push endpoint — public, signature-verified inside the service.
-        pub fn registerPublicRoutes(self: *Self, group: *http.RouteGroup) !void {
-            try group.get("/{token}", handle, @ptrCast(@alignCast(self)));
-            try group.post("/{token}", handle, @ptrCast(@alignCast(self)));
-        }
-
-        /// Admin message-log view (JWT).
-        pub fn registerAdminRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/message-logs", listLogs, @ptrCast(@alignCast(self)));
-            try g.post("/messages/customer-text", sendCustomerText, @ptrCast(@alignCast(self)));
-            try g.post("/messages/template", sendTemplate, @ptrCast(@alignCast(self)));
-            try g.post("/messages/broadcast", sendBroadcast, @ptrCast(@alignCast(self)));
-            try g.post("/statistics/datacube", getDatacube, @ptrCast(@alignCast(self)));
         }
 
         fn setAuditActor(ctx: *http.Context, self: *Self) !void {

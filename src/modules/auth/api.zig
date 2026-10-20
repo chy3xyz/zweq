@@ -144,25 +144,6 @@ pub fn AuthApi(comptime Service: type) type {
             };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            // Public routes are per-IP rate-limited to blunt credential
-            // stuffing / reset-token brute force without starving other users.
-            var limited = try group.use(mw_rate.perIpRateLimit(self.limiter));
-            try limited.post("/auth/register", register, @ptrCast(@alignCast(self)));
-            try limited.post("/auth/login", login, @ptrCast(@alignCast(self)));
-            try limited.post("/auth/logout", logout, @ptrCast(@alignCast(self)));
-            try limited.post("/auth/forgot-password", forgotPassword, @ptrCast(@alignCast(self)));
-            try limited.post("/auth/reset-password", resetPassword, @ptrCast(@alignCast(self)));
-            try limited.post("/auth/verify-email", verifyEmail, @ptrCast(@alignCast(self)));
-
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.svc.sec, self.svc.store));
-            try g.get("/auth/me", me, @ptrCast(@alignCast(self)));
-            try g.post("/auth/send-verification", sendVerification, @ptrCast(@alignCast(self)));
-            try g.put("/auth/profile", updateProfile, @ptrCast(@alignCast(self)));
-            try g.put("/auth/password", changePassword, @ptrCast(@alignCast(self)));
-        }
-
         fn register(ctx: *http.Context) !void {
             const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return error.UnexpectedError));
             const req = ctx.bindJson(RegisterReq) catch {

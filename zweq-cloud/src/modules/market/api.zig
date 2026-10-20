@@ -39,17 +39,28 @@ pub fn MarketApi(comptime Service: type) type {
         svc: *Service,
         admin_token: []const u8,
 
+        pub const module_name = "market";
+        pub const nest: []const []const u8 = &.{};
+        pub const State = Self;
+
+        /// 站点列表与下载，公开。发布/拉取走 `Admin`，挂在 bearer scope 上。
+        pub const routes: []const http.RouteSpec(Self) = &.{
+            .{ .method = .GET, .path = "cloud/market", .handler = http.wrapHandler(Self, list), .meta = .{ .auth = .public } },
+            .{ .method = .GET, .path = "cloud/market/{name}/download", .handler = http.wrapHandler(Self, download), .meta = .{ .auth = .public } },
+        };
+
+        pub const Admin = struct {
+            pub const module_name = "market";
+            pub const nest: []const []const u8 = &.{};
+            pub const State = Self;
+            pub const routes: []const http.RouteSpec(Self) = &.{
+                .{ .method = .POST, .path = "cloud/market", .handler = http.wrapHandler(Self, publish), .meta = .{ .auth = .public } },
+                .{ .method = .POST, .path = "cloud/market/fetch", .handler = http.wrapHandler(Self, fetchArtifact), .meta = .{ .auth = .public } },
+            };
+        };
+
         pub fn init(svc: *Service, admin_token: []const u8) Self {
             return .{ .svc = svc, .admin_token = admin_token };
-        }
-
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var admin = try group.use(bearerAuth(self.admin_token));
-            try admin.post("/cloud/market", publish, @ptrCast(@alignCast(self)));
-            try admin.post("/cloud/market/fetch", fetchArtifact, @ptrCast(@alignCast(self)));
-            // 站点端公开：列表 + 下载产物。
-            try group.get("/cloud/market", list, @ptrCast(@alignCast(self)));
-            try group.get("/cloud/market/{name}/download", download, @ptrCast(@alignCast(self)));
         }
 
         fn publish(ctx: *http.Context) !void {

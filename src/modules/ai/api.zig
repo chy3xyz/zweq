@@ -174,30 +174,6 @@ pub fn AiApi(comptime AiSvcT: type, comptime UserService: type) type {
             return .{ .svc = svc, .user_svc = users };
         }
 
-        pub fn registerRoutes(self: *Self, group: *http.RouteGroup) !void {
-            var g = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            g = try g.use(mw.tokenVersionGuard(self.user_svc.sec, self.user_svc.store));
-            try g.get("/ai/sessions", listSessions, @ptrCast(@alignCast(self)));
-            try g.post("/ai/sessions", createSession, @ptrCast(@alignCast(self)));
-            try g.get("/ai/sessions/{id}/messages", listMessages, @ptrCast(@alignCast(self)));
-            try g.post("/ai/sessions/{id}/chat", chat, @ptrCast(@alignCast(self)));
-            try g.delete("/ai/sessions/{id}", deleteSession, @ptrCast(@alignCast(self)));
-
-            var a = try group.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&self.user_svc.sec.module));
-            try a.get("/ai/providers", listProviders, @ptrCast(@alignCast(self)));
-            try a.post("/ai/providers", createProvider, @ptrCast(@alignCast(self)));
-            try a.put("/ai/providers/{id}", updateProvider, @ptrCast(@alignCast(self)));
-            try a.delete("/ai/providers/{id}", deleteProvider, @ptrCast(@alignCast(self)));
-            try a.post("/ai/providers/{id}/check", checkProvider, @ptrCast(@alignCast(self)));
-            try a.get("/ai/approvals", listApprovals, @ptrCast(@alignCast(self)));
-            try a.post("/ai/approvals/{id}/approve", approveApproval, @ptrCast(@alignCast(self)));
-            try a.post("/ai/approvals/{id}/reject", rejectApproval, @ptrCast(@alignCast(self)));
-            try a.get("/ai/runs", listRuns, @ptrCast(@alignCast(self)));
-            try a.post("/ai/workflow/run", runWorkflow, @ptrCast(@alignCast(self)));
-            try a.get("/ai/metrics", metrics, @ptrCast(@alignCast(self)));
-            try a.get("/ai/skills", skills, @ptrCast(@alignCast(self)));
-        }
-
         fn authUid(ctx: *http.Context) ?i64 {
             return ctx.userIdInt(i64);
         }

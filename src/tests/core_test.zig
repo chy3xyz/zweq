@@ -313,8 +313,12 @@ test "HTTP dispatch: public auth flow (register -> me) via Testkit" {
 
     var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
     defer server.deinit();
-    var g = server.group("/api/v1");
-    try auth_api.registerRoutes(&g);
+    var app_state: void = {};
+    var router = zigmodu.http.Router(void).init(std.testing.io, allocator, &server, &app_state);
+    defer router.deinit();
+    var v1 = router.scope("/api/v1");
+    var limited = try v1.use(mw_rate.perIpRateLimit(&auth_limiter));
+    try limited.mount(@TypeOf(auth_api), &auth_api);
 
     var resp = try zigmodu.http.Testkit.dispatch(&server, .POST, "/api/v1/auth/register", "{\"name\":\"Tester\",\"email\":\"t@example.com\",\"password\":\"password123\"}");
     defer resp.deinit(allocator);
@@ -359,9 +363,12 @@ test "rate limit: per-IP isolation via realIp + perIpRateLimit" {
     var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
     defer server.deinit();
     try server.addMiddleware(real_ip.realIp());
-    var g = server.group("/api/v1");
-    var limited = try g.use(mw_rate.perIpRateLimit(&limiter));
-    try limited.get("/probe", Probe.h, null);
+    var app_state: void = {};
+    var router = zigmodu.http.Router(void).init(std.testing.io, allocator, &server, &app_state);
+    defer router.deinit();
+    var v1 = router.scope("/api/v1");
+    var limited = try v1.use(mw_rate.perIpRateLimit(&limiter));
+    try limited.get("probe", Probe.h, null);
 
     // IP A：前 2 次通过，第 3 次触发 429。
     var r1 = try zigmodu.http.Testkit.dispatchOpts(&server, .GET, "/api/v1/probe", .{ .headers = &.{.{ "X-Real-IP", "1.1.1.1" }} });
@@ -429,11 +436,17 @@ test "admin-only endpoints reject missing/non-admin tokens" {
 
     var server = zigmodu.http.Server.init(std.testing.io, allocator, 0);
     defer server.deinit();
-    var g = server.group("/api/v1");
+    var app_state: void = {};
+    var router = zigmodu.http.Router(void).init(std.testing.io, allocator, &server, &app_state);
+    defer router.deinit();
+    var v1 = router.scope("/api/v1");
+    var guarded = try v1.use(zigmodu.http.http_middleware.jwtAuthWithSecurity(&sec.module));
+    guarded = try guarded.use(mw_auth.tokenVersionGuard(&sec, &store));
+    guarded = try guarded.use(mw_auth.adminGuard(&store));
     var audit_api = audit.api.AuditApi(@TypeOf(audit_svc), @TypeOf(svc)).init(&audit_svc, &svc);
-    try audit_api.registerRoutes(&g);
+    try guarded.mount(@TypeOf(audit_api), &audit_api);
     var mt_api = mail_template.api.MailTemplateApi(@TypeOf(tsvc), @TypeOf(svc)).init(&tsvc, &svc);
-    try mt_api.registerRoutes(&g);
+    try guarded.mount(@TypeOf(mt_api), &mt_api);
 
     // 无 token → 401。
     var anon = try zigmodu.http.Testkit.dispatch(&server, .GET, "/api/v1/audit-logs", null);
